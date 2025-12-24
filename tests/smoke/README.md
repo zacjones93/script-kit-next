@@ -17,6 +17,14 @@ These are **not Rust tests** - they are TypeScript fixture scripts that verify t
 | `hello-world.ts` | Basic sanity check | SDK preload, div(), md(), clean exit |
 | `hello-world-args.ts` | Interactive prompts | arg() with simple/structured choices, multi-step flow |
 
+### Multi-Monitor Testing
+
+| File | Purpose | Tests |
+|------|---------|-------|
+| `scripts/test-monitor-positioning.ts` | Multi-monitor window positioning | Window appears on mouse cursor's monitor |
+
+See [Multi-Monitor Test](#multi-monitor-positioning-test) section below for detailed usage.
+
 ## Quick Start
 
 ### Option 1: Test from Project Directory (Development)
@@ -179,6 +187,75 @@ await div(md(`# Result: ${result}`));
 
 // Always log completion
 console.error('[SMOKE] test-name.ts completed!');
+```
+
+## Multi-Monitor Positioning Test
+
+The `scripts/test-monitor-positioning.ts` script tests that windows appear on the correct monitor (the one where the mouse cursor is located).
+
+### Why This Test Exists
+
+macOS has a complex coordinate system:
+- Primary display has origin at (0, 0) at bottom-left
+- Secondary displays have their own origin offsets
+- Y coordinates increase upward (opposite of most UI frameworks)
+
+The Script Kit app needs to:
+1. Detect the global mouse cursor position
+2. Find which display contains that position
+3. Create the window centered on that display
+
+### How to Run the Test
+
+1. **Setup**: Ensure you have multiple monitors connected
+2. **Build the app**: `cargo build`
+3. **Move your mouse** to a specific monitor
+4. **Activate Script Kit** with the global hotkey (Ctrl+Cmd+O)
+5. **Run the test script** from the script list (search for "Multi-Monitor")
+6. **Answer the prompt** about which monitor the window appeared on
+
+### Expected Logs
+
+When the test runs, check the terminal for `[POSITION]` logs:
+
+```
+[POSITION] ╔════════════════════════════════════════════════════════════╗
+[POSITION] ║  CALCULATING WINDOW POSITION FOR MOUSE DISPLAY             ║
+[POSITION] ╚════════════════════════════════════════════════════════════╝
+[POSITION] Available displays: 2
+[POSITION]   Display 0: origin=(0, 0) size=1920x1080 [bounds: x=0..1920, y=0..1080]
+[POSITION]   Display 1: origin=(1920, 0) size=2560x1440 [bounds: x=1920..4480, y=0..1440]
+[POSITION] Mouse cursor at (2500, 720)
+[POSITION]   -> Mouse is on display 1
+[POSITION] Selected display: origin=(1920, 0) size=2560x1440
+[POSITION] Final window bounds: origin=(2685, 360) size=750x500
+```
+
+### Debugging Failed Tests
+
+If the window appears on the wrong monitor:
+
+1. **Check coordinate systems**: The logs show both mouse position and display bounds
+2. **Verify display detection**: "Mouse is on display N" should match your expectation
+3. **Check coordinate conversion**: macOS Y=0 is at bottom, we flip to top-left origin
+
+Common issues:
+- **Display origin mismatch**: Secondary displays may report incorrect origins from GPUI (we use NSScreen directly to work around this)
+- **Retina scaling**: High-DPI displays may have coordinate scaling issues
+- **Vertical monitor arrangement**: Y-coordinate ranges may overlap unexpectedly
+
+### Test Script Output
+
+The test script logs to stderr with `[TEST]` prefix:
+
+```
+[TEST] ════════════════════════════════════════════════════════
+[TEST] MULTI-MONITOR POSITIONING TEST
+[TEST] ════════════════════════════════════════════════════════
+[TEST] Step 1: Displaying initial prompt...
+[TEST] User selected: monitor-2
+[TEST] Result: PASS
+[TEST] ════════════════════════════════════════════════════════
 ```
 
 ## CI Integration (Future)

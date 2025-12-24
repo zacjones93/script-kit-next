@@ -30,6 +30,31 @@ impl Default for BackgroundOpacity {
     }
 }
 
+/// Vibrancy/blur effect settings for the window background
+/// This creates the native macOS translucent effect like Spotlight/Raycast
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VibrancySettings {
+    /// Whether vibrancy is enabled (default: true)
+    pub enabled: bool,
+    /// Vibrancy material type: "hud", "popover", "menu", "sidebar", "content"
+    /// - "hud": Dark, high contrast (like HUD windows)
+    /// - "popover": Light blur, used in popovers
+    /// - "menu": Similar to system menus
+    /// - "sidebar": Sidebar-style blur
+    /// - "content": Content background blur
+    /// Default: "popover" for a subtle, native feel
+    pub material: String,
+}
+
+impl Default for VibrancySettings {
+    fn default() -> Self {
+        VibrancySettings {
+            enabled: true,
+            material: "popover".to_string(),
+        }
+    }
+}
+
 /// Drop shadow configuration for the window
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DropShadow {
@@ -161,6 +186,9 @@ pub struct Theme {
     /// Drop shadow configuration
     #[serde(default)]
     pub drop_shadow: Option<DropShadow>,
+    /// Vibrancy/blur effect settings
+    #[serde(default)]
+    pub vibrancy: Option<VibrancySettings>,
 }
 
 impl CursorStyle {
@@ -293,6 +321,7 @@ impl Default for Theme {
             focus_aware: None,
             opacity: Some(BackgroundOpacity::default()),
             drop_shadow: Some(DropShadow::default()),
+            vibrancy: Some(VibrancySettings::default()),
         }
     }
 }
@@ -370,6 +399,17 @@ impl Theme {
     /// Returns the configured shadow or sensible defaults
     pub fn get_drop_shadow(&self) -> DropShadow {
         self.drop_shadow.clone().unwrap_or_default()
+    }
+    
+    /// Get vibrancy/blur effect settings
+    /// Returns the configured vibrancy or sensible defaults
+    pub fn get_vibrancy(&self) -> VibrancySettings {
+        self.vibrancy.clone().unwrap_or_default()
+    }
+    
+    /// Check if vibrancy effect should be enabled
+    pub fn is_vibrancy_enabled(&self) -> bool {
+        self.get_vibrancy().enabled
     }
 }
 
@@ -454,6 +494,7 @@ pub fn load_theme() -> Theme {
             colors: color_scheme,
             opacity: Some(BackgroundOpacity::default()),
             drop_shadow: Some(DropShadow::default()),
+            vibrancy: Some(VibrancySettings::default()),
         };
         log_theme_config(&theme);
         return theme;
@@ -474,6 +515,7 @@ pub fn load_theme() -> Theme {
                 focus_aware: None,
                 opacity: Some(BackgroundOpacity::default()),
                 drop_shadow: Some(DropShadow::default()),
+                vibrancy: Some(VibrancySettings::default()),
             };
             log_theme_config(&theme);
             theme
@@ -499,6 +541,7 @@ pub fn load_theme() -> Theme {
                         focus_aware: None,
                         opacity: Some(BackgroundOpacity::default()),
                         drop_shadow: Some(DropShadow::default()),
+                        vibrancy: Some(VibrancySettings::default()),
                     };
                     log_theme_config(&theme);
                     theme
@@ -512,10 +555,13 @@ pub fn load_theme() -> Theme {
 fn log_theme_config(theme: &Theme) {
     let opacity = theme.get_opacity();
     let shadow = theme.get_drop_shadow();
+    let vibrancy = theme.get_vibrancy();
     eprintln!("Theme opacity: main={:.2}, title_bar={:.2}, search_box={:.2}, log_panel={:.2}",
         opacity.main, opacity.title_bar, opacity.search_box, opacity.log_panel);
     eprintln!("Theme shadow: enabled={}, blur={:.1}, spread={:.1}, offset=({:.1}, {:.1}), opacity={:.2}",
         shadow.enabled, shadow.blur_radius, shadow.spread_radius, shadow.offset_x, shadow.offset_y, shadow.opacity);
+    eprintln!("Theme vibrancy: enabled={}, material={}",
+        vibrancy.enabled, vibrancy.material);
 }
 
 #[cfg(test)]
@@ -576,6 +622,7 @@ mod tests {
             focus_aware: None,
             opacity: Some(BackgroundOpacity::default()),
             drop_shadow: Some(DropShadow::default()),
+            vibrancy: Some(VibrancySettings::default()),
         };
         let json = serde_json::to_string(&theme).unwrap();
         let deserialized: Theme = serde_json::from_str(&json).unwrap();
@@ -603,6 +650,13 @@ mod tests {
         assert_eq!(shadow.offset_y, 8.0);
         assert_eq!(shadow.color, 0x000000);
         assert_eq!(shadow.opacity, 0.25);
+    }
+    
+    #[test]
+    fn test_vibrancy_defaults() {
+        let vibrancy = VibrancySettings::default();
+        assert!(vibrancy.enabled);
+        assert_eq!(vibrancy.material, "popover");
     }
 
     #[test]

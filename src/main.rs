@@ -94,51 +94,82 @@ fn get_macos_displays() -> Vec<DisplayBounds> {
 /// PRIMARY screen, and Y increases upward. The primary screen's origin is always (0,0)
 /// at its bottom-left corner. Secondary displays have their own position in this space.
 /// 
-/// For input (x, y) in top-left origin coordinates (common in most UI frameworks):
-/// - We need to convert to bottom-left origin for macOS
-/// - The conversion uses the PRIMARY screen height as the reference
-fn move_key_window_to(x: f64, y: f64, width: f64, height: f64) {
+
+
+/// Move the application's first window to new bounds, regardless of keyWindow status.
+/// This is the reliable way to move the window because we don't depend on keyWindow
+/// being set (which has timing issues with macOS window activation).
+fn move_first_window_to(x: f64, y: f64, width: f64, height: f64) {
     unsafe {
         let app: id = NSApp();
-        let window: id = msg_send![app, keyWindow];
-        if window != nil {
-            // Get the PRIMARY screen's height for coordinate conversion
-            // macOS global coordinates: Y=0 at bottom of primary screen, Y increases upward
-            let screens: id = msg_send![class!(NSScreen), screens];
-            let main_screen: id = msg_send![screens, firstObject];
-            let main_screen_frame: NSRect = msg_send![main_screen, frame];
-            let primary_screen_height = main_screen_frame.size.height;
+        
+        // Get all windows and find our main window directly
+        let windows: id = msg_send![app, windows];
+        let count: usize = msg_send![windows, count];
+        
+        logging::log("POSITION", &format!("move_first_window_to: app has {} windows", count));
+        
+        if count > 0 {
+            // Get the first window (our main window)
+            let window: id = msg_send![windows, objectAtIndex:0usize];
             
-            // Convert from top-left origin (y down) to bottom-left origin (y up)
-            // In macOS coordinates: window_bottom_y = primary_screen_height - top_left_y - height
-            let flipped_y = primary_screen_height - y - height;
-            
-            logging::log("POSITION", &format!(
-                "Moving window: input=({:.0}, {:.0}) size={:.0}x{:.0} | primary_height={:.0} | flipped_y={:.0}",
-                x, y, width, height, primary_screen_height, flipped_y
-            ));
-            
-            let new_frame = NSRect::new(
-                NSPoint::new(x, flipped_y),
-                NSSize::new(width, height),
-            );
-            
-            let _: () = msg_send![window, setFrame:new_frame display:true animate:false];
-            logging::log("POSITION", &format!("Window setFrame completed: origin=({:.0}, {:.0})", x, flipped_y));
+            if window != nil {
+                // Get the PRIMARY screen's height for coordinate conversion
+                let screens: id = msg_send![class!(NSScreen), screens];
+                let main_screen: id = msg_send![screens, firstObject];
+                let main_screen_frame: NSRect = msg_send![main_screen, frame];
+                let primary_screen_height = main_screen_frame.size.height;
+                
+                // Log current window position before move
+                let current_frame: NSRect = msg_send![window, frame];
+                logging::log("POSITION", &format!(
+                    "Current window frame: origin=({:.0}, {:.0}) size={:.0}x{:.0}",
+                    current_frame.origin.x, current_frame.origin.y,
+                    current_frame.size.width, current_frame.size.height
+                ));
+                
+                // Convert from top-left origin (y down) to bottom-left origin (y up)
+                let flipped_y = primary_screen_height - y - height;
+                
+                logging::log("POSITION", &format!(
+                    "Moving window: target=({:.0}, {:.0}) flipped_y={:.0}",
+                    x, y, flipped_y
+                ));
+                
+                let new_frame = NSRect::new(
+                    NSPoint::new(x, flipped_y),
+                    NSSize::new(width, height),
+                );
+                
+                // Move the window
+                let _: () = msg_send![window, setFrame:new_frame display:true animate:false];
+                
+                // Also bring to front and make key
+                let _: () = msg_send![window, makeKeyAndOrderFront:nil];
+                
+                // Verify the move worked
+                let after_frame: NSRect = msg_send![window, frame];
+                logging::log("POSITION", &format!(
+                    "Window moved: actual=({:.0}, {:.0}) size={:.0}x{:.0}",
+                    after_frame.origin.x, after_frame.origin.y,
+                    after_frame.size.width, after_frame.size.height
+                ));
+            } else {
+                logging::log("POSITION", "ERROR: First window is nil!");
+            }
         } else {
-            logging::log("POSITION", "No key window to move");
+            logging::log("POSITION", "ERROR: No windows found!");
         }
     }
 }
 
-/// Move a specific NSWindow to new bounds
-#[allow(dead_code)]
-fn move_window_to_bounds(bounds: &Bounds<Pixels>) {
+/// Move the first window to new bounds (wrapper for Bounds<Pixels>)
+fn move_first_window_to_bounds(bounds: &Bounds<Pixels>) {
     let x: f64 = bounds.origin.x.into();
     let y: f64 = bounds.origin.y.into();
     let width: f64 = bounds.size.width.into();
     let height: f64 = bounds.size.height.into();
-    move_key_window_to(x, y, width, height);
+    move_first_window_to(x, y, width, height);
 }
 
 /// Calculate window bounds positioned at eye-line height on the display containing the mouse cursor.
@@ -156,13 +187,20 @@ fn calculate_eye_line_bounds_on_mouse_display(
     // GPUI's cx.displays() returns incorrect origins for secondary displays
     let displays = get_macos_displays();
     
-    logging::log("POSITION", &format!("=== Calculating window position ({} displays available) ===", displays.len()));
+    logging::log("POSITION", "");
+    logging::log("POSITION", "╔════════════════════════════════════════════════════════════╗");
+    logging::log("POSITION", "║  CALCULATING WINDOW POSITION FOR MOUSE DISPLAY             ║");
+    logging::log("POSITION", "╚════════════════════════════════════════════════════════════╝");
+    logging::log("POSITION", &format!("Available displays: {}", displays.len()));
     
     // Log all available displays for debugging
     for (idx, display) in displays.iter().enumerate() {
+        let right = display.origin_x + display.width;
+        let bottom = display.origin_y + display.height;
         logging::log("POSITION", &format!(
-            "  Display {}: origin=({:.0}, {:.0}) size={:.0}x{:.0}",
-            idx, display.origin_x, display.origin_y, display.width, display.height
+            "  Display {}: origin=({:.0}, {:.0}) size={:.0}x{:.0} [bounds: x={:.0}..{:.0}, y={:.0}..{:.0}]",
+            idx, display.origin_x, display.origin_y, display.width, display.height,
+            display.origin_x, right, display.origin_y, bottom
         ));
     }
     
@@ -342,19 +380,26 @@ impl HotkeyPoller {
                                 f64::from(new_bounds.size.height)
                             ));
                             
-                            // Step 2: MOVE window FIRST (before activation)
-                            // This ensures the window appears on the correct display
-                            move_window_to_bounds(&new_bounds);
+                            // Step 2: FIRST activate the app (makes window visible)
+                            // We MUST activate first because move_key_window_to() uses NSApp().keyWindow
+                            // and hidden windows are NOT the key window
+                            // Step 2: Move window FIRST (before activation)
+                            // We use move_first_window_to_bounds which doesn't depend on keyWindow
+                            // This ensures the window is in the right position before it becomes visible
+                            move_first_window_to_bounds(&new_bounds);
+                            logging::log("HOTKEY", "Window repositioned to mouse display");
                             
-                            // Step 3: THEN activate the window
-                            // Activation after move prevents macOS from repositioning the window
+                            // Step 3: NOW activate the app (makes window visible at new position)
+                            cx.activate(true);
+                            logging::log("HOTKEY", "App activated (window now visible)");
+                            
+                            // Step 4: Activate the specific window and focus it
                             let _ = window_clone.update(cx, |view: &mut ScriptListApp, win: &mut Window, cx: &mut Context<ScriptListApp>| {
                                 win.activate_window();
                                 let focus_handle = view.focus_handle(cx);
                                 win.focus(&focus_handle, cx);
-                                logging::log("HOTKEY", "Window activated and focused (after move)");
+                                logging::log("HOTKEY", "Window activated and focused");
                             });
-                            cx.activate(true);
                             
                             logging::log("HOTKEY", "Window shown - hotkey handling complete");
                         });
@@ -437,7 +482,7 @@ impl ScriptListApp {
             prompt_receiver: None,
             response_sender: None,
             scroll_offset: 0,
-            viewport_height: 10,  // ~10 items visible at a time (estimate based on 50px per item, ~500px viewport)
+            viewport_height: 9,  // ~9 items visible at a time (allows margin for footer)
         }
     }
     
@@ -1544,18 +1589,21 @@ impl ScriptListApp {
                     .bg(rgba((theme.colors.ui.border << 8) | 0x60))
             )
             // Main content area - 60/40 split: List on left, Preview on right
+            // Uses min_h(px(0.)) to prevent flex children from overflowing
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .flex_1()
+                    .min_h(px(0.))  // Critical: allows flex container to shrink properly
                     .w_full()
                     .overflow_hidden()
                     // Left side: Script list (60% width)
                     .child(
                         div()
                             .w(px(450.))  // 60% of 750px window = 450px
-                            .h_full()
+                            .flex_1()     // Take available vertical space
+                            .min_h(px(0.))  // Allow shrinking
                             .flex()
                             .flex_col()
                             .py(px(4.))
@@ -1566,7 +1614,7 @@ impl ScriptListApp {
                     .child(
                         div()
                             .flex_1()
-                            .h_full()
+                            .min_h(px(0.))  // Allow shrinking
                             .child(self.render_preview_panel(cx))
                     ),
             );
@@ -2074,10 +2122,19 @@ fn configure_as_floating_panel() {
             // This makes the window appear on all spaces/desktops
             let collection_behavior: u64 = 1;
             let _: () = msg_send![window, setCollectionBehavior:collection_behavior];
+            
+            // CRITICAL: Disable macOS window state restoration
+            // This prevents macOS from remembering and restoring the window position
+            // when the app is relaunched or the window is shown again
+            let _: () = msg_send![window, setRestorable:false];
+            
+            // Also disable the window's autosave frame name which can cause position caching
+            let empty_string: id = msg_send![class!(NSString), string];
+            let _: () = msg_send![window, setFrameAutosaveName:empty_string];
 
             logging::log(
                 "PANEL",
-                "Configured window as floating panel (NSFloatingWindowLevel)",
+                "Configured window as floating panel (level=3, restorable=false, no autosave)",
             );
         } else {
             logging::log("PANEL", "Warning: No key window found to configure as panel");
