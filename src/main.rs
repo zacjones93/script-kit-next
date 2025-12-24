@@ -22,10 +22,12 @@ mod protocol;
 mod prompts;
 mod config;
 mod panel;
+mod actions;
 
 use std::sync::{Arc, Mutex, mpsc};
 use protocol::{Message, Choice};
 use prompts::{ArgPrompt, DivPrompt};
+use actions::ActionsDialog;
 
 /// Channel for sending prompt messages from script thread to UI
 type PromptChannel = (mpsc::Sender<PromptMessage>, mpsc::Receiver<PromptMessage>);
@@ -153,6 +155,8 @@ static HOTKEY_TRIGGER_COUNT: AtomicU64 = AtomicU64::new(0);
 enum AppView {
     /// Showing the script list
     ScriptList,
+    /// Showing the actions dialog (mini searchable popup)
+    ActionsDialog,
     /// Showing an arg prompt from a script
     ArgPrompt {
         id: String,
@@ -222,6 +226,7 @@ impl HotkeyPoller {
 
 struct ScriptListApp {
     scripts: Vec<scripts::Script>,
+    scriptlets: Vec<scripts::Scriptlet>,
     selected_index: usize,
     filter_text: String,
     last_output: Option<SharedString>,
@@ -244,14 +249,17 @@ struct ScriptListApp {
 impl ScriptListApp {
     fn new(cx: &mut Context<Self>) -> Self {
         let scripts = scripts::read_scripts();
+        let scriptlets = scripts::read_scriptlets();
         let theme = theme::load_theme();
         let config = config::load_config();
         logging::log("APP", &format!("Loaded {} scripts from ~/.kenv/scripts", scripts.len()));
+        logging::log("APP", &format!("Loaded {} scriptlets from ~/.kenv/scriptlets/scriptlets.md", scriptlets.len()));
         logging::log("APP", "Loaded theme with system appearance detection");
         logging::log("APP", &format!("Loaded config: hotkey={:?}+{}, bun_path={:?}", 
             config.hotkey.modifiers, config.hotkey.key, config.bun_path));
         ScriptListApp {
             scripts,
+            scriptlets,
             selected_index: 0,
             filter_text: String::new(),
             last_output: None,
@@ -300,9 +308,15 @@ impl ScriptListApp {
     
     fn refresh_scripts(&mut self, cx: &mut Context<Self>) {
         self.scripts = scripts::read_scripts();
+        self.scriptlets = scripts::read_scriptlets();
         self.selected_index = 0;
-        logging::log("APP", &format!("Scripts refreshed: {} scripts loaded", self.scripts.len()));
+        logging::log("APP", &format!("Scripts refreshed: {} scripts, {} scriptlets loaded", self.scripts.len(), self.scriptlets.len()));
         cx.notify();
+    }
+
+    /// Get unified filtered results combining scripts and scriptlets
+    fn filtered_results(&self) -> Vec<scripts::SearchResult> {
+        scripts::fuzzy_search_unified(&self.scripts, &self.scriptlets, &self.filter_text)
     }
 
     fn filtered_scripts(&self) -> Vec<scripts::Script> {
@@ -325,7 +339,7 @@ impl ScriptListApp {
     }
 
     fn move_selection_down(&mut self, cx: &mut Context<Self>) {
-        let filtered_len = self.filtered_scripts().len();
+        let filtered_len = self.filtered_results().len();
         if self.selected_index < filtered_len.saturating_sub(1) {
             self.selected_index += 1;
             cx.notify();
@@ -333,12 +347,18 @@ impl ScriptListApp {
     }
 
     fn execute_selected(&mut self, cx: &mut Context<Self>) {
-        let filtered = self.filtered_scripts();
-        if let Some(script) = filtered.get(self.selected_index).cloned() {
-            logging::log("EXEC", &format!("Executing script: {}", script.name));
-            // Use interactive execution for all scripts - they'll work for both
-            // interactive (arg/div) and non-interactive scripts
-            self.execute_interactive(&script, cx);
+        let filtered = self.filtered_results();
+        if let Some(result) = filtered.get(self.selected_index).cloned() {
+            match result {
+                scripts::SearchResult::Script(script_match) => {
+                    logging::log("EXEC", &format!("Executing script: {}", script_match.script.name));
+                    self.execute_interactive(&script_match.script, cx);
+                }
+                scripts::SearchResult::Scriptlet(scriptlet_match) => {
+                    logging::log("EXEC", &format!("Executing scriptlet: {}", scriptlet_match.scriptlet.name));
+                    self.execute_scriptlet(&scriptlet_match.scriptlet, cx);
+                }
+            }
         }
     }
 
@@ -361,8 +381,72 @@ impl ScriptListApp {
         cx.notify();
     }
     
-    fn open_actions(&mut self, _cx: &mut Context<Self>) {
+    fn open_actions(&mut self, cx: &mut Context<Self>) {
         logging::log("UI", "Actions menu opened (Cmd+K)");
+        self.current_view = AppView::ActionsDialog;
+        cx.notify();
+    }
+    
+    /// Handle action selection from the actions dialog
+    fn handle_action(&mut self, action_id: String, cx: &mut Context<Self>) {
+        logging::log("UI", &format!("Action selected: {}", action_id));
+        
+        // Close the dialog and return to script list
+        self.current_view = AppView::ScriptList;
+        
+        match action_id.as_str() {
+            "create_script" => {
+                logging::log("UI", "Create script action - opening dialog");
+                // TODO: Implement create script dialog
+                self.last_output = Some(SharedString::from("Create script action (TODO)"));
+            }
+            "edit_script" => {
+                logging::log("UI", "Edit script action");
+                let filtered = self.filtered_scripts();
+                if let Some(script) = filtered.get(self.selected_index) {
+                    self.edit_script(&script.path);
+                } else {
+                    self.last_output = Some(SharedString::from("No script selected"));
+                }
+            }
+            "reload_scripts" => {
+                logging::log("UI", "Reload scripts action");
+                self.refresh_scripts(cx);
+                self.last_output = Some(SharedString::from("Scripts reloaded"));
+            }
+            "settings" => {
+                logging::log("UI", "Settings action");
+                self.last_output = Some(SharedString::from("Settings (TODO)"));
+            }
+            "quit" => {
+                logging::log("UI", "Quit action");
+                cx.quit();
+            }
+            "__cancel__" => {
+                logging::log("UI", "Actions dialog cancelled");
+            }
+            _ => {
+                logging::log("UI", &format!("Unknown action: {}", action_id));
+            }
+        }
+        
+        cx.notify();
+    }
+    
+    /// Edit a script in $EDITOR
+    fn edit_script(&mut self, path: &std::path::Path) {
+        logging::log("UI", &format!("Opening script in editor: {}", path.display()));
+        
+        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+        let path_str = path.to_string_lossy().to_string();
+        
+        std::thread::spawn(move || {
+            use std::process::Command;
+            let _ = Command::new(&editor)
+                .arg(&path_str)
+                .spawn();
+            logging::log("UI", &format!("Editor spawned: {}", editor));
+        });
     }
     
     /// Execute a script interactively (for scripts that use arg/div prompts)
@@ -475,6 +559,15 @@ impl ScriptListApp {
         }
     }
     
+    /// Execute a scriptlet (simple code snippet from .md file)
+    fn execute_scriptlet(&mut self, scriptlet: &scripts::Scriptlet, _cx: &mut Context<Self>) {
+        logging::log("EXEC", &format!("Executing scriptlet: {}", scriptlet.name));
+        
+        // For now, just log it - scriptlets are passive code snippets
+        // Future implementation could copy to clipboard, execute, or display
+        self.last_output = Some(SharedString::from(format!("Scriptlet: {}", scriptlet.name)));
+    }
+    
     /// Handle a prompt message from the script
     fn handle_prompt_message(&mut self, msg: PromptMessage, cx: &mut Context<Self>) {
         match msg {
@@ -496,11 +589,11 @@ impl ScriptListApp {
                 *self.script_session.lock().unwrap() = None;
                 cx.notify();
             }
-        }
-    }
-    
-    /// Submit a response to the current prompt
-    fn submit_prompt_response(&mut self, id: String, value: Option<String>, _cx: &mut Context<Self>) {
+         }
+      }
+      
+      /// Submit a response to the current prompt
+     fn submit_prompt_response(&mut self, id: String, value: Option<String>, _cx: &mut Context<Self>) {
         logging::log("UI", &format!("Submitting response for {}: {:?}", id, value));
         
         let response = Message::Submit { id, value };
@@ -561,6 +654,7 @@ impl Render for ScriptListApp {
         let current_view = self.current_view.clone();
         match current_view {
             AppView::ScriptList => self.render_script_list(cx),
+            AppView::ActionsDialog => self.render_actions_dialog(cx),
             AppView::ArgPrompt { id, placeholder, choices } => self.render_arg_prompt(id, placeholder, choices, cx),
             AppView::DivPrompt { id, html, tailwind } => self.render_div_prompt(id, html, tailwind, cx),
         }
