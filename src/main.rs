@@ -222,7 +222,7 @@ impl Render for ScriptListApp {
         };
         let filter_is_empty = self.filter_text.is_empty();
 
-        let handle_key = cx.listener(move |this: &mut Self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>| {
+        let handle_key = cx.listener(move |this: &mut Self, event: &gpui::KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
             let key_str = event.keystroke.key.to_lowercase();
             let has_cmd = event.keystroke.modifiers.platform;
             
@@ -244,12 +244,12 @@ impl Render for ScriptListApp {
                 "down" | "arrowdown" => this.move_selection_down(cx),
                 "enter" => this.execute_selected(cx),
                 "escape" => {
-                    // If filter has text, clear it. Otherwise minimize window.
+                    // If filter has text, clear it. Otherwise hide the app.
                     if !this.filter_text.is_empty() {
                         this.update_filter(None, false, true, cx);
                     } else {
-                        logging::log("APP", "Escape pressed - minimizing window");
-                        window.minimize_window();
+                        logging::log("APP", "Escape pressed - hiding app");
+                        cx.hide();
                     }
                 }
                 "backspace" => this.update_filter(None, true, false, cx),
@@ -412,6 +412,6 @@ fn main() {
         
         cx.activate(true);
         
-        logging::log("APP", "Application ready - Escape to hide, Cmd+L for logs");
+        logging::log("APP", "Application ready - Esc to hide, Cmd+L for logs");
     });
 }
