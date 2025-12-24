@@ -1211,8 +1211,8 @@ impl ScriptListApp {
     }
 }
 
-fn start_hotkey_listener() {
-    std::thread::spawn(|| {
+fn start_hotkey_listener(config: config::Config) {
+    std::thread::spawn(move || {
         let manager = match GlobalHotKeyManager::new() {
             Ok(m) => m,
             Err(e) => {
@@ -1221,15 +1221,82 @@ fn start_hotkey_listener() {
             }
         };
         
-        let hotkey = HotKey::new(Some(Modifiers::META), Code::Semicolon);
+        // Convert config hotkey to global_hotkey::Code
+        let code = match config.hotkey.key.as_str() {
+            "Semicolon" => Code::Semicolon,
+            "KeyK" => Code::KeyK,
+            "KeyP" => Code::KeyP,
+            "Space" => Code::Space,
+            "Enter" => Code::Enter,
+            "Digit0" => Code::Digit0,
+            "Digit1" => Code::Digit1,
+            "Digit2" => Code::Digit2,
+            "Digit3" => Code::Digit3,
+            "Digit4" => Code::Digit4,
+            "Digit5" => Code::Digit5,
+            "Digit6" => Code::Digit6,
+            "Digit7" => Code::Digit7,
+            "Digit8" => Code::Digit8,
+            "Digit9" => Code::Digit9,
+            "KeyA" => Code::KeyA,
+            "KeyB" => Code::KeyB,
+            "KeyC" => Code::KeyC,
+            "KeyD" => Code::KeyD,
+            "KeyE" => Code::KeyE,
+            "KeyF" => Code::KeyF,
+            "KeyG" => Code::KeyG,
+            "KeyH" => Code::KeyH,
+            "KeyI" => Code::KeyI,
+            "KeyJ" => Code::KeyJ,
+            "KeyL" => Code::KeyL,
+            "KeyM" => Code::KeyM,
+            "KeyN" => Code::KeyN,
+            "KeyO" => Code::KeyO,
+            "KeyQ" => Code::KeyQ,
+            "KeyR" => Code::KeyR,
+            "KeyS" => Code::KeyS,
+            "KeyT" => Code::KeyT,
+            "KeyU" => Code::KeyU,
+            "KeyV" => Code::KeyV,
+            "KeyW" => Code::KeyW,
+            "KeyX" => Code::KeyX,
+            "KeyY" => Code::KeyY,
+            "KeyZ" => Code::KeyZ,
+            other => {
+                logging::log("HOTKEY", &format!("Unknown key code: {}. Falling back to Semicolon", other));
+                Code::Semicolon
+            }
+        };
+        
+        // Convert modifiers from config strings to Modifiers flags
+        let mut modifiers = Modifiers::empty();
+        for modifier in &config.hotkey.modifiers {
+            match modifier.as_str() {
+                "meta" => modifiers |= Modifiers::META,
+                "ctrl" => modifiers |= Modifiers::CONTROL,
+                "alt" => modifiers |= Modifiers::ALT,
+                "shift" => modifiers |= Modifiers::SHIFT,
+                other => {
+                    logging::log("HOTKEY", &format!("Unknown modifier: {}", other));
+                }
+            }
+        }
+        
+        let hotkey = HotKey::new(Some(modifiers), code);
         let hotkey_id = hotkey.id();
         
+        let hotkey_display = format!(
+            "{}{}",
+            config.hotkey.modifiers.join("+"),
+            if config.hotkey.modifiers.is_empty() { String::new() } else { "+".to_string() }
+        ) + &config.hotkey.key;
+        
         if let Err(e) = manager.register(hotkey) {
-            logging::log("HOTKEY", &format!("Failed to register Cmd+;: {}", e));
+            logging::log("HOTKEY", &format!("Failed to register {}: {}", hotkey_display, e));
             return;
         }
         
-        logging::log("HOTKEY", &format!("Registered global hotkey Cmd+; (id: {})", hotkey_id));
+        logging::log("HOTKEY", &format!("Registered global hotkey {} (id: {})", hotkey_display, hotkey_id));
         
         let receiver = GlobalHotKeyEvent::receiver();
         
@@ -1238,7 +1305,7 @@ fn start_hotkey_listener() {
                 if event.id == hotkey_id {
                     let count = HOTKEY_TRIGGER_COUNT.fetch_add(1, Ordering::SeqCst);
                     HOTKEY_TRIGGERED.store(true, Ordering::SeqCst);
-                    logging::log("HOTKEY", &format!("Cmd+; pressed (trigger #{})", count + 1));
+                    logging::log("HOTKEY", &format!("{} pressed (trigger #{})", hotkey_display, count + 1));
                 }
             }
         }
@@ -1288,7 +1355,12 @@ fn start_hotkey_poller(cx: &mut App, window: WindowHandle<ScriptListApp>) {
 fn main() {
     logging::init();
     
-    start_hotkey_listener();
+    // Load config early so we can use it for hotkey registration
+    let loaded_config = config::load_config();
+    logging::log("APP", &format!("Loaded config: hotkey={:?}+{}, bun_path={:?}", 
+        loaded_config.hotkey.modifiers, loaded_config.hotkey.key, loaded_config.bun_path));
+    
+    start_hotkey_listener(loaded_config);
     
     let (mut appearance_watcher, appearance_rx) = watcher::AppearanceWatcher::new();
     if let Err(e) = appearance_watcher.start() {
