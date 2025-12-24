@@ -1,10 +1,12 @@
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Render,
+    div, prelude::*, px, point, rgb, size, App, Application, Bounds, Context, Render,
     Window, WindowBounds, WindowOptions, SharedString, FocusHandle, Focusable,
     WindowHandle, Timer,
 };
 use global_hotkey::{GlobalHotKeyManager, GlobalHotKeyEvent, hotkey::{HotKey, Modifiers, Code}};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core_graphics::event::CGEvent;
+use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
 mod scripts;
 mod executor;
@@ -423,6 +425,77 @@ impl Render for ScriptListApp {
     }
 }
 
+/// Get the global mouse cursor position on macOS.
+/// 
+/// Returns the (x, y) coordinates of the mouse cursor in screen coordinates.
+/// Returns None if the position cannot be determined.
+fn get_global_mouse_position() -> Option<(f64, f64)> {
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState).ok()?;
+    let event = CGEvent::new(source).ok()?;
+    let point = event.location();
+    Some((point.x, point.y))
+}
+
+/// Calculate eye-line positioned bounds for a window on the display with the mouse cursor.
+/// 
+/// Positions the window:
+/// - Horizontally centered on the display containing the mouse cursor
+/// - At eye-line height (upper 1/3 of the screen, not centered vertically)
+fn calculate_eye_line_bounds(window_size: gpui::Size<gpui::Pixels>, cx: &App) -> Bounds<gpui::Pixels> {
+    // First, try to get the mouse position
+    let mouse_position = get_global_mouse_position();
+    
+    // Find the display containing the mouse cursor
+    let mut target_display: Option<_> = None;
+    if let Some((mouse_x, mouse_y)) = mouse_position {
+        logging::log("WINDOW", &format!("Mouse position: ({:.1}, {:.1})", mouse_x, mouse_y));
+        
+        // Search through all displays to find the one containing the mouse
+        for display in cx.displays() {
+            let bounds = display.bounds();
+            let contains_mouse = mouse_x >= bounds.origin.x.0 &&
+                mouse_x < bounds.origin.x.0 + bounds.size.width.0 &&
+                mouse_y >= bounds.origin.y.0 &&
+                mouse_y < bounds.origin.y.0 + bounds.size.height.0;
+            
+            if contains_mouse {
+                target_display = Some(display);
+                break;
+            }
+        }
+    }
+    
+    if target_display.is_none() {
+        logging::log("WINDOW", "Could not find display with mouse position, using primary display");
+    }
+    
+    // Use the display with the mouse, or fall back to primary display
+    let display = target_display.or_else(|| cx.primary_display());
+    
+    if let Some(display) = display {
+        let display_bounds = display.bounds();
+        
+        logging::log("WINDOW", &format!("Opening window on display at origin ({:.1}, {:.1}), size ({:.1}x{:.1})",
+            display_bounds.origin.x.0, display_bounds.origin.y.0,
+            display_bounds.size.width.0, display_bounds.size.height.0));
+        
+        // Eye-line: position at upper 1/3 of the screen
+        let eye_line_y = display_bounds.origin.y + display_bounds.size.height / 3.0;
+        
+        // Center horizontally on the display
+        let center_x = display_bounds.center().x - window_size.width / 2.0;
+        
+        Bounds {
+            origin: point(center_x, eye_line_y),
+            size: window_size,
+        }
+    } else {
+        // Fallback to centered if no displays available
+        logging::log("WINDOW", "No displays found, using centered bounds");
+        Bounds::centered(None, window_size, cx)
+    }
+}
+
 fn start_hotkey_listener() {
     std::thread::spawn(|| {
         // Create hotkey manager in the background thread
@@ -478,11 +551,14 @@ fn main() {
     
     Application::new().run(move |cx: &mut App| {
         logging::log("APP", "GPUI Application starting");
-        let bounds = Bounds::centered(None, size(px(500.), px(700.0)), cx);
+        let window_size = size(px(750.), px(500.0));
+        let bounds = calculate_eye_line_bounds(window_size, cx);
         
         let window: WindowHandle<ScriptListApp> = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                is_movable: true,
+                titlebar: None,
                 ..Default::default()
             },
             |_, cx| {
