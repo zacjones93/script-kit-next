@@ -40,6 +40,76 @@ export interface FileInfo {
 }
 
 // =============================================================================
+// Chat Types (TIER 4A)
+// =============================================================================
+
+export interface ChatMessage {
+  text: string;
+  position: 'left' | 'right';
+}
+
+export interface ChatOptions {
+  onInit?: () => Promise<void>;
+  onSubmit?: (input: string) => Promise<void>;
+}
+
+export interface ChatController {
+  addMessage(msg: ChatMessage): void;
+  setInput(text: string): void;
+  submit(): void;
+}
+
+// =============================================================================
+// Widget/Term/Media Types (TIER 4B)
+// =============================================================================
+
+export interface WidgetOptions {
+  transparent?: boolean;
+  draggable?: boolean;
+  hasShadow?: boolean;
+  alwaysOnTop?: boolean;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+}
+
+export interface WidgetEvent {
+  targetId: string;
+  type: string;
+  dataset: Record<string, string>;
+}
+
+export interface WidgetInputEvent {
+  targetId: string;
+  value: string;
+  dataset: Record<string, string>;
+}
+
+export interface WidgetController {
+  setState(state: Record<string, unknown>): void;
+  onClick(handler: (event: WidgetEvent) => void): void;
+  onInput(handler: (event: WidgetInputEvent) => void): void;
+  onClose(handler: () => void): void;
+  onMoved(handler: (pos: { x: number; y: number }) => void): void;
+  onResized(handler: (size: { width: number; height: number }) => void): void;
+  close(): void;
+}
+
+export interface ColorInfo {
+  sRGBHex: string;
+  rgb: string;
+  rgba: string;
+  hsl: string;
+  hsla: string;
+  cmyk: string;
+}
+
+export interface FindOptions {
+  onlyin?: string;
+}
+
+// =============================================================================
 // System API Types
 // =============================================================================
 
@@ -229,6 +299,72 @@ interface SubmitMessage {
   type: 'submit';
   id: string;
   value: string | null;
+}
+
+interface ChatMessageType {
+  type: 'chat';
+  id: string;
+}
+
+interface ChatActionMessage {
+  type: 'chatAction';
+  id: string;
+  action: 'addMessage' | 'setInput' | 'submit';
+  data?: ChatMessage | string;
+}
+
+// =============================================================================
+// TIER 4B: Widget/Term/Media Message Types
+// =============================================================================
+
+interface WidgetMessage {
+  type: 'widget';
+  id: string;
+  html: string;
+  options?: WidgetOptions;
+}
+
+interface WidgetActionMessage {
+  type: 'widgetAction';
+  id: string;
+  action: 'setState' | 'close';
+  state?: Record<string, unknown>;
+}
+
+interface TermMessage {
+  type: 'term';
+  id: string;
+  command?: string;
+}
+
+interface WebcamMessage {
+  type: 'webcam';
+  id: string;
+}
+
+interface MicMessage {
+  type: 'mic';
+  id: string;
+}
+
+interface EyeDropperMessage {
+  type: 'eyeDropper';
+  id: string;
+}
+
+interface FindMessage {
+  type: 'find';
+  id: string;
+  placeholder: string;
+  onlyin?: string;
+}
+
+// Widget event message (from GPUI to script)
+interface WidgetEventMessage {
+  type: 'widgetEvent';
+  id: string;
+  event: 'click' | 'input' | 'close' | 'moved' | 'resized';
+  data?: WidgetEvent | WidgetInputEvent | { x: number; y: number } | { width: number; height: number };
 }
 
 // =============================================================================
@@ -440,6 +576,72 @@ declare global {
    * Mouse API object
    */
   const mouse: MouseAPI;
+  
+  // =============================================================================
+  // TIER 4A: Chat Prompt
+  // =============================================================================
+  
+  /**
+   * Chat function interface with attached controller methods
+   */
+  interface ChatFunction {
+    (options?: ChatOptions): Promise<string>;
+    addMessage(msg: ChatMessage): void;
+    setInput(text: string): void;
+    submit(): void;
+  }
+  
+  /**
+   * Conversational chat UI where messages can be added programmatically
+   * @param options - Optional chat options with onInit and onSubmit callbacks
+   * @returns The final user input when submitted
+   */
+  const chat: ChatFunction;
+  
+  // =============================================================================
+  // TIER 4B: Widget/Term/Media Prompts
+  // =============================================================================
+  
+  /**
+   * Creates a floating HTML widget window
+   * @param html - HTML content for the widget
+   * @param options - Widget positioning and behavior options
+   * @returns WidgetController for managing the widget
+   */
+  function widget(html: string, options?: WidgetOptions): Promise<WidgetController>;
+  
+  /**
+   * Opens a terminal window
+   * @param command - Optional command to run in the terminal
+   * @returns Terminal output when command completes
+   */
+  function term(command?: string): Promise<string>;
+  
+  /**
+   * Opens webcam preview, captures on Enter
+   * @returns Image buffer of captured photo
+   */
+  function webcam(): Promise<Buffer>;
+  
+  /**
+   * Records audio from microphone
+   * @returns Audio buffer of recording
+   */
+  function mic(): Promise<Buffer>;
+  
+  /**
+   * Pick a color from the screen using eye dropper
+   * @returns Color information in multiple formats
+   */
+  function eyeDropper(): Promise<ColorInfo>;
+  
+  /**
+   * File search using Spotlight/mdfind
+   * @param placeholder - Search prompt text
+   * @param options - Search options including directory filter
+   * @returns Selected file path
+   */
+  function find(placeholder: string, options?: FindOptions): Promise<string>;
 }
 
 globalThis.arg = async function arg(
@@ -1047,4 +1249,349 @@ globalThis.mouse = {
     };
     send(message);
   },
+};
+
+// =============================================================================
+// TIER 4A: Chat Prompt
+// =============================================================================
+
+// Current active chat session ID (for controller methods)
+let currentChatId: string | null = null;
+
+// The chat function with attached controller methods
+const chatFn = async function chat(options?: ChatOptions): Promise<string> {
+  const id = nextId();
+  currentChatId = id;
+
+  // Send the initial chat message to open the UI
+  const message: ChatMessageType = {
+    type: 'chat',
+    id,
+  };
+  send(message);
+
+  // Call onInit if provided (allows script to add initial messages)
+  if (options?.onInit) {
+    await options.onInit();
+  }
+
+  // Wait for user submission
+  return new Promise((resolve) => {
+    pending.set(id, (msg: SubmitMessage) => {
+      const value = msg.value ?? '';
+      
+      // Call onSubmit if provided
+      if (options?.onSubmit) {
+        options.onSubmit(value).then(() => {
+          resolve(value);
+        });
+      } else {
+        resolve(value);
+      }
+      
+      currentChatId = null;
+    });
+  });
+};
+
+// Attach controller methods to the chat function
+chatFn.addMessage = function addMessage(msg: ChatMessage): void {
+  if (currentChatId === null) {
+    throw new Error('chat.addMessage() called outside of a chat session');
+  }
+  
+  const message: ChatActionMessage = {
+    type: 'chatAction',
+    id: currentChatId,
+    action: 'addMessage',
+    data: msg,
+  };
+  send(message);
+};
+
+chatFn.setInput = function setInput(text: string): void {
+  if (currentChatId === null) {
+    throw new Error('chat.setInput() called outside of a chat session');
+  }
+  
+  const message: ChatActionMessage = {
+    type: 'chatAction',
+    id: currentChatId,
+    action: 'setInput',
+    data: text,
+  };
+  send(message);
+};
+
+chatFn.submit = function submit(): void {
+  if (currentChatId === null) {
+    throw new Error('chat.submit() called outside of a chat session');
+  }
+  
+  const message: ChatActionMessage = {
+    type: 'chatAction',
+    id: currentChatId,
+    action: 'submit',
+  };
+  send(message);
+};
+
+// Expose as global
+(globalThis as unknown as { chat: typeof chatFn }).chat = chatFn;
+
+// =============================================================================
+// TIER 4B: Widget/Term/Media Prompts
+// =============================================================================
+
+// Store widget event handlers by widget ID
+const widgetHandlers = new Map<string, {
+  onClick?: (event: WidgetEvent) => void;
+  onInput?: (event: WidgetInputEvent) => void;
+  onClose?: () => void;
+  onMoved?: (pos: { x: number; y: number }) => void;
+  onResized?: (size: { width: number; height: number }) => void;
+}>();
+
+// Extend the message handler to also handle widget events
+const originalLine = rl.listeners('line')[0] as ((line: string) => void) | undefined;
+if (originalLine) {
+  rl.removeListener('line', originalLine);
+}
+
+rl.on('line', (line: string) => {
+  try {
+    const msg = JSON.parse(line);
+    
+    // Handle submit messages (existing functionality)
+    if (msg.type === 'submit' && pending.has(msg.id)) {
+      const resolver = pending.get(msg.id);
+      if (resolver) {
+        pending.delete(msg.id);
+        resolver(msg);
+      }
+      return;
+    }
+    
+    // Handle widget events
+    if (msg.type === 'widgetEvent' && widgetHandlers.has(msg.id)) {
+      const handlers = widgetHandlers.get(msg.id);
+      if (handlers) {
+        switch (msg.event) {
+          case 'click':
+            handlers.onClick?.(msg.data as WidgetEvent);
+            break;
+          case 'input':
+            handlers.onInput?.(msg.data as WidgetInputEvent);
+            break;
+          case 'close':
+            handlers.onClose?.();
+            widgetHandlers.delete(msg.id);
+            break;
+          case 'moved':
+            handlers.onMoved?.(msg.data as { x: number; y: number });
+            break;
+          case 'resized':
+            handlers.onResized?.(msg.data as { width: number; height: number });
+            break;
+        }
+      }
+    }
+  } catch {
+    // Silently ignore non-JSON lines
+  }
+});
+
+globalThis.widget = async function widget(
+  html: string,
+  options?: WidgetOptions
+): Promise<WidgetController> {
+  const id = nextId();
+
+  // Initialize handlers for this widget
+  widgetHandlers.set(id, {});
+
+  // Send widget creation message
+  const message: WidgetMessage = {
+    type: 'widget',
+    id,
+    html,
+    options,
+  };
+  send(message);
+
+  // Return controller object
+  const controller: WidgetController = {
+    setState(state: Record<string, unknown>): void {
+      const actionMessage: WidgetActionMessage = {
+        type: 'widgetAction',
+        id,
+        action: 'setState',
+        state,
+      };
+      send(actionMessage);
+    },
+
+    onClick(handler: (event: WidgetEvent) => void): void {
+      const handlers = widgetHandlers.get(id);
+      if (handlers) {
+        handlers.onClick = handler;
+      }
+    },
+
+    onInput(handler: (event: WidgetInputEvent) => void): void {
+      const handlers = widgetHandlers.get(id);
+      if (handlers) {
+        handlers.onInput = handler;
+      }
+    },
+
+    onClose(handler: () => void): void {
+      const handlers = widgetHandlers.get(id);
+      if (handlers) {
+        handlers.onClose = handler;
+      }
+    },
+
+    onMoved(handler: (pos: { x: number; y: number }) => void): void {
+      const handlers = widgetHandlers.get(id);
+      if (handlers) {
+        handlers.onMoved = handler;
+      }
+    },
+
+    onResized(handler: (size: { width: number; height: number }) => void): void {
+      const handlers = widgetHandlers.get(id);
+      if (handlers) {
+        handlers.onResized = handler;
+      }
+    },
+
+    close(): void {
+      const actionMessage: WidgetActionMessage = {
+        type: 'widgetAction',
+        id,
+        action: 'close',
+      };
+      send(actionMessage);
+      widgetHandlers.delete(id);
+    },
+  };
+
+  return controller;
+};
+
+globalThis.term = async function term(command?: string): Promise<string> {
+  const id = nextId();
+
+  return new Promise((resolve) => {
+    pending.set(id, (msg: SubmitMessage) => {
+      resolve(msg.value ?? '');
+    });
+
+    const message: TermMessage = {
+      type: 'term',
+      id,
+      command,
+    };
+
+    send(message);
+  });
+};
+
+globalThis.webcam = async function webcam(): Promise<Buffer> {
+  const id = nextId();
+
+  return new Promise((resolve) => {
+    pending.set(id, (msg: SubmitMessage) => {
+      // Value comes back as base64-encoded string
+      const base64 = msg.value ?? '';
+      resolve(Buffer.from(base64, 'base64'));
+    });
+
+    const message: WebcamMessage = {
+      type: 'webcam',
+      id,
+    };
+
+    send(message);
+  });
+};
+
+globalThis.mic = async function mic(): Promise<Buffer> {
+  const id = nextId();
+
+  return new Promise((resolve) => {
+    pending.set(id, (msg: SubmitMessage) => {
+      // Value comes back as base64-encoded string
+      const base64 = msg.value ?? '';
+      resolve(Buffer.from(base64, 'base64'));
+    });
+
+    const message: MicMessage = {
+      type: 'mic',
+      id,
+    };
+
+    send(message);
+  });
+};
+
+globalThis.eyeDropper = async function eyeDropper(): Promise<ColorInfo> {
+  const id = nextId();
+
+  return new Promise((resolve) => {
+    pending.set(id, (msg: SubmitMessage) => {
+      // Value comes back as JSON with color info
+      const value = msg.value ?? '{}';
+      try {
+        const parsed = JSON.parse(value);
+        resolve({
+          sRGBHex: parsed.sRGBHex ?? '#000000',
+          rgb: parsed.rgb ?? 'rgb(0, 0, 0)',
+          rgba: parsed.rgba ?? 'rgba(0, 0, 0, 1)',
+          hsl: parsed.hsl ?? 'hsl(0, 0%, 0%)',
+          hsla: parsed.hsla ?? 'hsla(0, 0%, 0%, 1)',
+          cmyk: parsed.cmyk ?? 'cmyk(0%, 0%, 0%, 100%)',
+        });
+      } catch {
+        resolve({
+          sRGBHex: '#000000',
+          rgb: 'rgb(0, 0, 0)',
+          rgba: 'rgba(0, 0, 0, 1)',
+          hsl: 'hsl(0, 0%, 0%)',
+          hsla: 'hsla(0, 0%, 0%, 1)',
+          cmyk: 'cmyk(0%, 0%, 0%, 100%)',
+        });
+      }
+    });
+
+    const message: EyeDropperMessage = {
+      type: 'eyeDropper',
+      id,
+    };
+
+    send(message);
+  });
+};
+
+globalThis.find = async function find(
+  placeholder: string,
+  options?: FindOptions
+): Promise<string> {
+  const id = nextId();
+
+  return new Promise((resolve) => {
+    pending.set(id, (msg: SubmitMessage) => {
+      resolve(msg.value ?? '');
+    });
+
+    const message: FindMessage = {
+      type: 'find',
+      id,
+      placeholder,
+      onlyin: options?.onlyin,
+    };
+
+    send(message);
+  });
 };
