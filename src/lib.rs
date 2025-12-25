@@ -10,3 +10,4 @@ pub mod panel;
 pub mod protocol;
 pub mod prompts;
 pub mod scripts;
+pub mod syntax;

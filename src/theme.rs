@@ -22,10 +22,12 @@ pub struct BackgroundOpacity {
 impl Default for BackgroundOpacity {
     fn default() -> Self {
         BackgroundOpacity {
-            main: 0.85,
-            title_bar: 0.9,
-            search_box: 0.92,
-            log_panel: 0.8,
+            // Lower opacity values to allow vibrancy blur to show through
+            // Values below ~0.7 will show more blur effect
+            main: 0.60,          // Was 0.85 - lower for more vibrancy
+            title_bar: 0.65,     // Was 0.9
+            search_box: 0.70,    // Was 0.92
+            log_panel: 0.55,     // Was 0.8
         }
     }
 }

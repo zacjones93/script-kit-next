@@ -23,11 +23,12 @@ mod prompts;
 mod config;
 mod panel;
 mod actions;
+mod syntax;
 
 use std::sync::{Arc, Mutex, mpsc};
 use protocol::{Message, Choice};
-use prompts::{ArgPrompt, DivPrompt};
-use actions::ActionsDialog;
+use actions::{ScriptInfo, POPUP_WIDTH, POPUP_MAX_HEIGHT};
+use syntax::highlight_code_lines;
 
 /// Channel for sending prompt messages from script thread to UI
 type PromptChannel = (mpsc::Sender<PromptMessage>, mpsc::Receiver<PromptMessage>);
@@ -435,6 +436,8 @@ struct ScriptListApp {
     // Scroll state for script list
     scroll_offset: usize,           // Index of first visible item
     viewport_height: usize,         // Number of items that fit in viewport
+    // Actions popup overlay
+    show_actions_popup: bool,
 }
 
 impl ScriptListApp {
@@ -483,6 +486,7 @@ impl ScriptListApp {
             response_sender: None,
             scroll_offset: 0,
             viewport_height: 9,  // ~9 items visible at a time (allows margin for footer)
+            show_actions_popup: false,
         }
     }
     
@@ -636,8 +640,8 @@ impl ScriptListApp {
     }
     
     fn open_actions(&mut self, cx: &mut Context<Self>) {
-        logging::log("UI", "Actions menu opened (Cmd+K)");
-        self.current_view = AppView::ActionsDialog;
+        logging::log("KEY", "Toggling actions popup");
+        self.show_actions_popup = !self.show_actions_popup;
         cx.notify();
     }
     
@@ -1070,7 +1074,7 @@ impl ScriptListApp {
     }
     
     /// Render the preview panel showing details of the selected script/scriptlet
-    fn render_preview_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_preview_panel(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         let filtered = self.filtered_results();
         let selected_result = filtered.get(self.selected_index);
         let theme = &self.theme;
@@ -1168,21 +1172,49 @@ impl ScriptListApp {
                                 .child("Code Preview")
                         );
                         
-                        // Read and display code preview
+                        // Read and display code preview with syntax highlighting
                         let code_preview = Self::read_script_preview(&script.path, 15);
+                        let lang = script.extension.as_str();
+                        let lines = highlight_code_lines(&code_preview, lang);
                         
-                        panel = panel.child(
-                            div()
+                        // Build code container - render line by line with monospace font
+                        let mut code_container = div()
+                            .w_full()
+                            .min_w(px(280.))
+                            .p(px(12.))
+                            .rounded(px(6.))
+                            .bg(rgba((theme.colors.background.search_box << 8) | 0x80))
+                            .overflow_hidden()
+                            .flex()
+                            .flex_col();
+                        
+                        // Render each line as a row of spans with monospace font
+                        for line in lines {
+                            let mut line_div = div()
+                                .flex()
+                                .flex_row()
                                 .w_full()
-                                .p(px(12.))
-                                .rounded(px(6.))
-                                .bg(rgba((theme.colors.background.search_box << 8) | 0x80))
-                                .font_family("SF Mono")
+                                .font_family("Berkeley Mono, SF Mono, Menlo, Monaco, monospace")
                                 .text_xs()
-                                .text_color(rgb(theme.colors.text.secondary))
-                                .overflow_x_hidden()
-                                .child(code_preview)
-                        );
+                                .min_h(px(16.)); // Line height
+                            
+                            if line.spans.is_empty() {
+                                // Empty line - add a space to preserve height
+                                line_div = line_div.child(" ");
+                            } else {
+                                for span in line.spans {
+                                    line_div = line_div.child(
+                                        div()
+                                            .text_color(rgb(span.color))
+                                            .child(span.text)
+                                    );
+                                }
+                            }
+                            
+                            code_container = code_container.child(line_div);
+                        }
+                        
+                        panel = panel.child(code_container);
                     }
                     scripts::SearchResult::Scriptlet(scriptlet_match) => {
                         let scriptlet = &scriptlet_match.scriptlet;
@@ -1294,25 +1326,59 @@ impl ScriptListApp {
                                 .child("Content Preview")
                         );
                         
-                        // Display scriptlet code (first 15 lines)
+                        // Display scriptlet code with syntax highlighting (first 15 lines)
                         let code_preview: String = scriptlet.code
                             .lines()
                             .take(15)
                             .collect::<Vec<_>>()
                             .join("\n");
                         
-                        panel = panel.child(
-                            div()
+                        // Determine language from tool (bash, js, etc.)
+                        let lang = match scriptlet.tool.as_str() {
+                            "bash" | "zsh" | "sh" => "bash",
+                            "node" | "bun" => "js",
+                            _ => &scriptlet.tool,
+                        };
+                        let lines = highlight_code_lines(&code_preview, lang);
+                        
+                        // Build code container - render line by line with monospace font
+                        let mut code_container = div()
+                            .w_full()
+                            .min_w(px(280.))
+                            .p(px(12.))
+                            .rounded(px(6.))
+                            .bg(rgba((theme.colors.background.search_box << 8) | 0x80))
+                            .overflow_hidden()
+                            .flex()
+                            .flex_col();
+                        
+                        // Render each line as a row of spans with monospace font
+                        for line in lines {
+                            let mut line_div = div()
+                                .flex()
+                                .flex_row()
                                 .w_full()
-                                .p(px(12.))
-                                .rounded(px(6.))
-                                .bg(rgba((theme.colors.background.search_box << 8) | 0x80))
-                                .font_family("SF Mono")
+                                .font_family("Berkeley Mono, SF Mono, Menlo, Monaco, monospace")
                                 .text_xs()
-                                .text_color(rgb(theme.colors.text.secondary))
-                                .overflow_x_hidden()
-                                .child(code_preview)
-                        );
+                                .min_h(px(16.)); // Line height
+                            
+                            if line.spans.is_empty() {
+                                // Empty line - add a space to preserve height
+                                line_div = line_div.child(" ");
+                            } else {
+                                for span in line.spans {
+                                    line_div = line_div.child(
+                                        div()
+                                            .text_color(rgb(span.color))
+                                            .child(span.text)
+                                    );
+                                }
+                            }
+                            
+                            code_container = code_container.child(line_div);
+                        }
+                        
+                        panel = panel.child(code_container);
                     }
                 }
             }
@@ -1341,6 +1407,110 @@ impl ScriptListApp {
         }
         
         panel
+    }
+    
+    /// Get the ScriptInfo for the currently focused/selected script
+    fn get_focused_script_info(&self) -> Option<ScriptInfo> {
+        let filtered = self.filtered_results();
+        if let Some(result) = filtered.get(self.selected_index) {
+            match result {
+                scripts::SearchResult::Script(m) => {
+                    Some(ScriptInfo::new(&m.script.name, m.script.path.to_string_lossy()))
+                }
+                scripts::SearchResult::Scriptlet(m) => {
+                    // Scriptlets don't have a path, use name as identifier
+                    Some(ScriptInfo::new(&m.scriptlet.name, format!("scriptlet:{}", &m.scriptlet.name)))
+                }
+            }
+        } else {
+            None
+        }
+    }
+    
+    /// Render the actions overlay popup as a static div (ActionsDialog is a Render component)
+    fn render_actions_overlay(&self, _cx: &mut Context<Self>, script_info: Option<ScriptInfo>) -> impl IntoElement {
+        // Render a simple actions popup inline rather than using the ActionsDialog component
+        // since ActionsDialog is a Render component (entity) that can't be used directly as IntoElement
+        let theme = &self.theme;
+        
+        let mut actions_container = div()
+            .flex()
+            .flex_col()
+            .w(px(POPUP_WIDTH))
+            .max_h(px(POPUP_MAX_HEIGHT))
+            .bg(rgba(0x1e1e1ee6))
+            .rounded(px(12.))
+            .shadow_lg()
+            .border_1()
+            .border_color(rgba(0x3d3d3d80))
+            .overflow_hidden()
+            .p(px(8.));
+        
+        // Header with script context
+        if let Some(info) = &script_info {
+            actions_container = actions_container.child(
+                div()
+                    .px(px(12.))
+                    .py(px(8.))
+                    .text_xs()
+                    .text_color(rgba(0x888888ff))
+                    .child(format!("Actions for: {}", info.name))
+            );
+        }
+        
+        // Define actions
+        let actions = vec![
+            ("edit_script", "Edit Script", "⌘E"),
+            ("view_logs", "View Logs", "⌘L"),
+            ("reveal_in_finder", "Reveal in Finder", "⌘⇧F"),
+            ("copy_path", "Copy Path", "⌘⇧C"),
+            ("create_script", "Create New Script", "⌘N"),
+            ("reload_scripts", "Reload Scripts", "⌘R"),
+            ("settings", "Settings", "⌘,"),
+            ("quit", "Quit", "⌘Q"),
+        ];
+        
+        for (_id, title, shortcut) in actions {
+            actions_container = actions_container.child(
+                div()
+                    .w_full()
+                    .px(px(12.))
+                    .py(px(6.))
+                    .rounded(px(6.))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .hover(|s| s.bg(rgba(0x0e47a1cc)))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(theme.colors.text.secondary))
+                            .child(title)
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgba(0x66666699))
+                            .child(shortcut)
+                    )
+            );
+        }
+        
+        // Footer hint
+        actions_container = actions_container.child(
+            div()
+                .mt(px(8.))
+                .pt(px(8.))
+                .border_t_1()
+                .border_color(rgba(0x3d3d3d60))
+                .px(px(12.))
+                .text_xs()
+                .text_color(rgba(0x666666ff))
+                .child("Press Esc to close")
+        );
+        
+        actions_container
     }
     
     fn render_script_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -1492,6 +1662,12 @@ impl ScriptListApp {
                 "down" | "arrowdown" => this.move_selection_down(cx),
                 "enter" => this.execute_selected(cx),
                 "escape" => {
+                    // If actions popup is open, close it first
+                    if this.show_actions_popup {
+                        this.show_actions_popup = false;
+                        cx.notify();
+                        return;
+                    }
                     if !this.filter_text.is_empty() {
                         this.update_filter(None, false, true, cx);
                     } else {
@@ -1659,7 +1835,30 @@ impl ScriptListApp {
                 ),
         );
         
-        main_div.into_any_element()
+        // Wrap in relative container for overlay positioning
+        let script_info = self.get_focused_script_info();
+        let show_popup = self.show_actions_popup;
+        
+        let mut container = div()
+            .relative()
+            .w_full()
+            .h_full()
+            .child(main_div);
+        
+        // Add actions popup overlay when visible
+        if show_popup {
+            container = container.child(
+                div()
+                    .absolute()
+                    .right(px(16.))
+                    .bottom(px(56.))  // Above the footer
+                    .w(px(POPUP_WIDTH))
+                    .max_h(px(POPUP_MAX_HEIGHT))
+                    .child(self.render_actions_overlay(cx, script_info))
+            );
+        }
+        
+        container.into_any_element()
     }
     
     fn render_arg_prompt(&mut self, id: String, placeholder: String, choices: Vec<Choice>, cx: &mut Context<Self>) -> AnyElement {

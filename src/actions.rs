@@ -1,10 +1,17 @@
 //! Actions Dialog Module
 //!
-//! Provides a searchable action menu for quick access to script management
-//! and global actions (edit, create, settings, quit, etc.)
+//! Provides a searchable action menu as a compact overlay popup for quick access 
+//! to script management and global actions (edit, create, settings, quit, etc.)
+//! 
+//! The dialog renders as a floating overlay popup with:
+//! - Fixed dimensions (320x400px max)
+//! - Rounded corners and box shadow
+//! - Semi-transparent background
+//! - Context-aware actions based on focused script
 
 use gpui::{
-    div, prelude::*, px, rgb, Context, FocusHandle, Focusable, Render, SharedString, Window,
+    div, point, prelude::*, px, rgba, BoxShadow, Context, FocusHandle, Focusable, Hsla, Render,
+    SharedString, Window,
 };
 use std::sync::Arc;
 use crate::logging;
@@ -13,6 +20,25 @@ use crate::logging;
 /// Signature: (action_id: String)
 pub type ActionCallback = Arc<dyn Fn(String) + Send + Sync>;
 
+/// Information about the currently focused/selected script
+/// Used for context-aware actions in the actions dialog
+#[derive(Debug, Clone)]
+pub struct ScriptInfo {
+    /// Display name of the script
+    pub name: String,
+    /// Full path to the script file
+    pub path: String,
+}
+
+impl ScriptInfo {
+    pub fn new(name: impl Into<String>, path: impl Into<String>) -> Self {
+        ScriptInfo {
+            name: name.into(),
+            path: path.into(),
+        }
+    }
+}
+
 /// Available actions in the actions menu
 #[derive(Debug, Clone)]
 pub struct Action {
@@ -20,12 +46,15 @@ pub struct Action {
     pub title: String,
     pub description: Option<String>,
     pub category: ActionCategory,
+    /// Optional keyboard shortcut hint (e.g., "⌘E")
+    pub shortcut: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ActionCategory {
-    ScriptOps,    // Edit, Create, Delete script operations
-    GlobalOps,    // Settings, Quit, etc.
+    ScriptContext,  // Actions specific to the focused script
+    ScriptOps,      // Edit, Create, Delete script operations
+    GlobalOps,      // Settings, Quit, etc.
 }
 
 impl Action {
@@ -40,8 +69,50 @@ impl Action {
             title: title.into(),
             description,
             category,
+            shortcut: None,
         }
     }
+
+    pub fn with_shortcut(mut self, shortcut: impl Into<String>) -> Self {
+        self.shortcut = Some(shortcut.into());
+        self
+    }
+}
+
+/// Get actions specific to the focused script
+pub fn get_script_context_actions(script: &ScriptInfo) -> Vec<Action> {
+    vec![
+        Action::new(
+            "run_script",
+            format!("Run \"{}\"", script.name),
+            Some("Execute this script".to_string()),
+            ActionCategory::ScriptContext,
+        ).with_shortcut("↵"),
+        Action::new(
+            "edit_script",
+            "Edit Script",
+            Some("Open in $EDITOR".to_string()),
+            ActionCategory::ScriptContext,
+        ).with_shortcut("⌘E"),
+        Action::new(
+            "view_logs",
+            "View Logs",
+            Some("Show script execution logs".to_string()),
+            ActionCategory::ScriptContext,
+        ).with_shortcut("⌘L"),
+        Action::new(
+            "reveal_in_finder",
+            "Reveal in Finder",
+            Some("Show script file in Finder".to_string()),
+            ActionCategory::ScriptContext,
+        ).with_shortcut("⌘⇧F"),
+        Action::new(
+            "copy_path",
+            "Copy Path",
+            Some("Copy script path to clipboard".to_string()),
+            ActionCategory::ScriptContext,
+        ).with_shortcut("⌘⇧C"),
+    ]
 }
 
 /// Predefined global actions
@@ -50,44 +121,48 @@ pub fn get_global_actions() -> Vec<Action> {
         Action::new(
             "create_script",
             "Create New Script",
-            Some("Create a new TypeScript script in ~/.kenv/scripts".to_string()),
+            Some("Create a new TypeScript script".to_string()),
             ActionCategory::ScriptOps,
-        ),
-        Action::new(
-            "edit_script",
-            "Edit Selected Script",
-            Some("Open selected script in $EDITOR".to_string()),
-            ActionCategory::ScriptOps,
-        ),
+        ).with_shortcut("⌘N"),
         Action::new(
             "reload_scripts",
             "Reload Scripts",
             Some("Refresh the scripts list".to_string()),
             ActionCategory::GlobalOps,
-        ),
+        ).with_shortcut("⌘R"),
         Action::new(
             "settings",
             "Settings",
-            Some("Configure hotkeys and preferences".to_string()),
+            Some("Configure preferences".to_string()),
             ActionCategory::GlobalOps,
-        ),
+        ).with_shortcut("⌘,"),
         Action::new(
             "quit",
             "Quit Script Kit",
-            Some("Exit the application (Cmd+Q)".to_string()),
+            Some("Exit the application".to_string()),
             ActionCategory::GlobalOps,
-        ),
+        ).with_shortcut("⌘Q"),
     ]
 }
 
-/// ActionsDialog - Mini searchable popup for quick actions
+/// Overlay popup dimensions and styling constants
+pub const POPUP_WIDTH: f32 = 320.0;
+pub const POPUP_MAX_HEIGHT: f32 = 400.0;
+pub const POPUP_CORNER_RADIUS: f32 = 12.0;
+pub const POPUP_PADDING: f32 = 8.0;
+pub const ITEM_PADDING_X: f32 = 12.0;
+pub const ITEM_PADDING_Y: f32 = 8.0;
+
+/// ActionsDialog - Compact overlay popup for quick actions
 pub struct ActionsDialog {
     pub actions: Vec<Action>,
     pub filtered_actions: Vec<usize>, // Indices into actions
-    pub selected_index: usize,          // Index within filtered_actions
+    pub selected_index: usize,        // Index within filtered_actions
     pub search_text: String,
     pub focus_handle: FocusHandle,
     pub on_select: ActionCallback,
+    /// Currently focused script for context-aware actions
+    pub focused_script: Option<ScriptInfo>,
 }
 
 impl ActionsDialog {
@@ -95,10 +170,22 @@ impl ActionsDialog {
         focus_handle: FocusHandle,
         on_select: ActionCallback,
     ) -> Self {
-        let actions = get_global_actions();
+        Self::with_script(focus_handle, on_select, None)
+    }
+
+    pub fn with_script(
+        focus_handle: FocusHandle,
+        on_select: ActionCallback,
+        focused_script: Option<ScriptInfo>,
+    ) -> Self {
+        let actions = Self::build_actions(&focused_script);
         let filtered_actions: Vec<usize> = (0..actions.len()).collect();
         
-        logging::log("ACTIONS", &format!("ActionsDialog created with {} actions", actions.len()));
+        logging::log("ACTIONS", &format!(
+            "ActionsDialog created with {} actions, script: {:?}", 
+            actions.len(),
+            focused_script.as_ref().map(|s| &s.name)
+        ));
         
         ActionsDialog {
             actions,
@@ -107,7 +194,30 @@ impl ActionsDialog {
             search_text: String::new(),
             focus_handle,
             on_select,
+            focused_script,
         }
+    }
+
+    /// Build the complete actions list based on focused script
+    fn build_actions(focused_script: &Option<ScriptInfo>) -> Vec<Action> {
+        let mut actions = Vec::new();
+        
+        // Add script-specific actions first if a script is focused
+        if let Some(script) = focused_script {
+            actions.extend(get_script_context_actions(script));
+        }
+        
+        // Add global actions
+        actions.extend(get_global_actions());
+        
+        actions
+    }
+
+    /// Update the focused script and rebuild actions
+    pub fn set_focused_script(&mut self, script: Option<ScriptInfo>) {
+        self.focused_script = script;
+        self.actions = Self::build_actions(&self.focused_script);
+        self.refilter();
     }
 
     /// Refilter actions based on current search_text using fuzzy matching
@@ -182,6 +292,24 @@ impl ActionsDialog {
         logging::log("ACTIONS", "Actions dialog cancelled");
         (self.on_select)("__cancel__".to_string());
     }
+
+    /// Create box shadow for the overlay popup
+    fn create_popup_shadow() -> Vec<BoxShadow> {
+        vec![
+            BoxShadow {
+                color: Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.3 },
+                offset: point(px(0.0), px(4.0)),
+                blur_radius: px(16.0),
+                spread_radius: px(0.0),
+            },
+            BoxShadow {
+                color: Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.15 },
+                offset: point(px(0.0), px(8.0)),
+                blur_radius: px(32.0),
+                spread_radius: px(-4.0),
+            },
+        ]
+    }
 }
 
 impl Focusable for ActionsDialog {
@@ -214,7 +342,7 @@ impl Render for ActionsDialog {
             }
         });
 
-        // Render search input
+        // Render search input - compact version
         let search_display = if self.search_text.is_empty() {
             SharedString::from("Search actions...")
         } else {
@@ -223,92 +351,114 @@ impl Render for ActionsDialog {
 
         let input_container = div()
             .w_full()
-            .px(px(16.))
-            .py(px(12.))
-            .bg(rgb(0x2d2d2d))
+            .px(px(ITEM_PADDING_X))
+            .py(px(ITEM_PADDING_Y))
+            .bg(rgba(0x2d2d2dcc)) // Semi-transparent darker bg
             .border_b_1()
-            .border_color(rgb(0x3d3d3d))
+            .border_color(rgba(0x3d3d3d80))
             .flex()
             .flex_row()
             .gap_2()
             .items_center()
-            .child(div().text_color(rgb(0x888888)).child("⚙"))
+            .child(div().text_color(rgba(0x888888ff)).text_sm().child("⚡"))
             .child(
                 div()
                     .flex_1()
+                    .text_sm()
                     .text_color(if self.search_text.is_empty() {
-                        rgb(0x666666)
+                        rgba(0x666666ff)
                     } else {
-                        rgb(0xcccccc)
+                        rgba(0xccccccff)
                     })
                     .child(search_display),
             );
 
-        // Render action list
+        // Render action list - compact version with overflow hidden
         let mut actions_container = div()
             .flex()
             .flex_col()
             .flex_1()
             .w_full()
-            .max_h(px(400.));
+            .overflow_hidden();
 
         if self.filtered_actions.is_empty() {
             actions_container = actions_container.child(
                 div()
                     .w_full()
-                    .py(px(32.))
-                    .px(px(16.))
-                    .text_color(rgb(0x666666))
+                    .py(px(16.))
+                    .px(px(ITEM_PADDING_X))
+                    .text_color(rgba(0x666666ff))
+                    .text_sm()
                     .child("No actions match your search"),
             );
         } else {
+            let mut current_category: Option<&ActionCategory> = None;
+            
             for (idx, &action_idx) in self.filtered_actions.iter().enumerate() {
                 if let Some(action) = self.actions.get(action_idx) {
+                    // Add category separator if category changed
+                    if current_category != Some(&action.category) {
+                        current_category = Some(&action.category);
+                        
+                        // Only show separator after first category
+                        if idx > 0 {
+                            actions_container = actions_container.child(
+                                div()
+                                    .w_full()
+                                    .h(px(1.))
+                                    .my(px(4.))
+                                    .mx(px(ITEM_PADDING_X))
+                                    .bg(rgba(0x3d3d3d60))
+                            );
+                        }
+                    }
+                    
                     let is_selected = idx == self.selected_index;
                     let bg = if is_selected {
-                        rgb(0x0e47a1) // Blue highlight
+                        rgba(0x0e47a1cc) // Blue highlight, semi-transparent
                     } else {
-                        rgb(0x1e1e1e)
+                        rgba(0x00000000) // Transparent
                     };
 
                     let title_color = if is_selected {
-                        rgb(0xffffff)
+                        rgba(0xffffffff)
                     } else {
-                        rgb(0xcccccc)
+                        rgba(0xddddddff)
                     };
 
-                    let desc_color = if is_selected {
-                        rgb(0xaaaaaa)
+                    let shortcut_color = if is_selected {
+                        rgba(0xaaaaaa99)
                     } else {
-                        rgb(0x888888)
+                        rgba(0x66666699)
                     };
 
                     let mut action_item = div()
                         .w_full()
-                        .px(px(16.))
-                        .py(px(10.))
+                        .px(px(ITEM_PADDING_X))
+                        .py(px(ITEM_PADDING_Y - 2.))
                         .bg(bg)
-                        .border_b_1()
-                        .border_color(rgb(0x3d3d3d))
+                        .rounded(px(6.))
+                        .mx(px(4.))
                         .flex()
-                        .flex_col()
-                        .gap_1();
+                        .flex_row()
+                        .items_center()
+                        .justify_between();
 
-                    // Action title
+                    // Left side: title
                     action_item = action_item.child(
                         div()
                             .text_color(title_color)
-                            .text_base()
+                            .text_sm()
                             .child(action.title.clone()),
                     );
 
-                    // Action description if present
-                    if let Some(desc) = &action.description {
+                    // Right side: keyboard shortcut
+                    if let Some(shortcut) = &action.shortcut {
                         action_item = action_item.child(
                             div()
-                                .text_color(desc_color)
-                                .text_sm()
-                                .child(desc.clone()),
+                                .text_color(shortcut_color)
+                                .text_xs()
+                                .child(shortcut.clone()),
                         );
                     }
 
@@ -317,18 +467,74 @@ impl Render for ActionsDialog {
             }
         }
 
-        // Main dialog container - positioned as a modal/overlay
+        // Main overlay popup container
+        // Fixed width, max height, rounded corners, shadow, semi-transparent bg
         div()
             .flex()
             .flex_col()
-            .w_full()
-            .h_full()
-            .bg(rgb(0x1e1e1e))
-            .text_color(rgb(0xcccccc))
+            .w(px(POPUP_WIDTH))
+            .max_h(px(POPUP_MAX_HEIGHT))
+            .bg(rgba(0x1e1e1ee6)) // Semi-transparent dark bg (90% opacity)
+            .rounded(px(POPUP_CORNER_RADIUS))
+            .shadow(Self::create_popup_shadow())
+            .border_1()
+            .border_color(rgba(0x3d3d3d80))
+            .overflow_hidden()
+            .text_color(rgba(0xccccccff))
             .key_context("actions_dialog")
             .track_focus(&self.focus_handle)
             .on_key_down(handle_key)
             .child(input_container)
             .child(actions_container)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_script_info_creation() {
+        let script = ScriptInfo::new("test-script", "/path/to/test-script.ts");
+        assert_eq!(script.name, "test-script");
+        assert_eq!(script.path, "/path/to/test-script.ts");
+    }
+
+    #[test]
+    fn test_action_with_shortcut() {
+        let action = Action::new("test", "Test Action", None, ActionCategory::GlobalOps)
+            .with_shortcut("⌘T");
+        assert_eq!(action.shortcut, Some("⌘T".to_string()));
+    }
+
+    #[test]
+    fn test_get_script_context_actions() {
+        let script = ScriptInfo::new("my-script", "/path/to/my-script.ts");
+        let actions = get_script_context_actions(&script);
+        
+        assert!(!actions.is_empty());
+        assert!(actions.iter().any(|a| a.id == "edit_script"));
+        assert!(actions.iter().any(|a| a.id == "view_logs"));
+        assert!(actions.iter().any(|a| a.id == "reveal_in_finder"));
+        assert!(actions.iter().any(|a| a.id == "copy_path"));
+        assert!(actions.iter().any(|a| a.id == "run_script"));
+    }
+
+    #[test]
+    fn test_get_global_actions() {
+        let actions = get_global_actions();
+        
+        assert!(!actions.is_empty());
+        assert!(actions.iter().any(|a| a.id == "create_script"));
+        assert!(actions.iter().any(|a| a.id == "reload_scripts"));
+        assert!(actions.iter().any(|a| a.id == "settings"));
+        assert!(actions.iter().any(|a| a.id == "quit"));
+    }
+
+    #[test]
+    fn test_popup_constants() {
+        assert_eq!(POPUP_WIDTH, 320.0);
+        assert_eq!(POPUP_MAX_HEIGHT, 400.0);
+        assert_eq!(POPUP_CORNER_RADIUS, 12.0);
     }
 }
