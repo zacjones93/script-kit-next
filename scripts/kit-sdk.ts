@@ -1,4 +1,8 @@
 import * as readline from 'node:readline';
+import * as nodePath from 'node:path';
+import * as os from 'node:os';
+import * as fs from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 
 // =============================================================================
 // Types
@@ -107,6 +111,49 @@ export interface ColorInfo {
 
 export interface FindOptions {
   onlyin?: string;
+}
+
+// =============================================================================
+// TIER 5A: Utility Types
+// =============================================================================
+
+export interface ExecOptions {
+  cwd?: string;
+  shell?: string;
+  all?: boolean;
+}
+
+export interface ExecResult {
+  stdout: string;
+  stderr: string;
+  all?: string;
+  exitCode: number;
+}
+
+export interface HttpResponse {
+  data: unknown;
+}
+
+// =============================================================================
+// TIER 5B: Storage/Path Types
+// =============================================================================
+
+export interface DbInstance {
+  data: unknown;
+  items?: unknown[];
+  write(): Promise<void>;
+}
+
+export interface StoreAPI {
+  get(key: string): Promise<unknown>;
+  set(key: string, value: unknown): Promise<void>;
+}
+
+export interface MemoryMapAPI {
+  get(key: string): unknown;
+  set(key: string, value: unknown): void;
+  delete(key: string): boolean;
+  clear(): void;
 }
 
 // =============================================================================
@@ -365,6 +412,108 @@ interface WidgetEventMessage {
   id: string;
   event: 'click' | 'input' | 'close' | 'moved' | 'resized';
   data?: WidgetEvent | WidgetInputEvent | { x: number; y: number } | { width: number; height: number };
+}
+
+// =============================================================================
+// TIER 5A: Utility Message Types
+// =============================================================================
+
+interface ExecMessage {
+  type: 'exec';
+  id: string;
+  command: string;
+  options?: ExecOptions;
+}
+
+interface DownloadMessage {
+  type: 'download';
+  id: string;
+  url: string;
+  destination: string;
+}
+
+interface TrashMessage {
+  type: 'trash';
+  id: string;
+  paths: string[];
+}
+
+interface ShowMessage {
+  type: 'show';
+}
+
+interface HideMessage {
+  type: 'hide';
+}
+
+interface BlurMessage {
+  type: 'blur';
+}
+
+interface ForceSubmitMessage {
+  type: 'forceSubmit';
+  value: unknown;
+}
+
+interface ExitMessage {
+  type: 'exit';
+  code?: number;
+}
+
+interface SetPanelMessage {
+  type: 'setPanel';
+  html: string;
+}
+
+interface SetPreviewMessage {
+  type: 'setPreview';
+  html: string;
+}
+
+interface SetPromptMessage {
+  type: 'setPrompt';
+  html: string;
+}
+
+// =============================================================================
+// TIER 5B: Storage/Path Message Types
+// =============================================================================
+
+interface DbMessage {
+  type: 'db';
+  id: string;
+  scriptName: string;
+  initialData?: unknown;
+}
+
+interface StoreMessage {
+  type: 'store';
+  id: string;
+  action: 'get' | 'set';
+  key: string;
+  value?: unknown;
+}
+
+interface BrowseMessage {
+  type: 'browse';
+  url: string;
+}
+
+interface EditFileMessage {
+  type: 'edit';
+  path: string;
+}
+
+interface RunMessage {
+  type: 'run';
+  id: string;
+  scriptName: string;
+  args: string[];
+}
+
+interface InspectMessage {
+  type: 'inspect';
+  data: unknown;
 }
 
 // =============================================================================
@@ -642,6 +791,241 @@ declare global {
    * @returns Selected file path
    */
   function find(placeholder: string, options?: FindOptions): Promise<string>;
+  
+  // =============================================================================
+  // TIER 5A: Utility Functions
+  // =============================================================================
+  
+  /**
+   * Execute a shell command
+   * @param command - Command to execute
+   * @param options - Execution options (cwd, shell, all)
+   * @returns ExecResult with stdout, stderr, and exitCode
+   */
+  function exec(command: string, options?: ExecOptions): Promise<ExecResult>;
+  
+  /**
+   * HTTP GET request
+   * @param url - URL to fetch
+   * @returns Response with data property
+   */
+  function get(url: string): Promise<HttpResponse>;
+  
+  /**
+   * HTTP POST request
+   * @param url - URL to post to
+   * @param data - Data to send
+   * @returns Response with data property
+   */
+  function post(url: string, data?: unknown): Promise<HttpResponse>;
+  
+  /**
+   * HTTP PUT request
+   * @param url - URL to put to
+   * @param data - Data to send
+   * @returns Response with data property
+   */
+  function put(url: string, data?: unknown): Promise<HttpResponse>;
+  
+  /**
+   * HTTP PATCH request
+   * @param url - URL to patch
+   * @param data - Data to send
+   * @returns Response with data property
+   */
+  function patch(url: string, data?: unknown): Promise<HttpResponse>;
+  
+  /**
+   * HTTP DELETE request
+   * @param url - URL to delete
+   * @returns Response with data property
+   */
+  function del(url: string): Promise<HttpResponse>;
+  
+  /**
+   * Download a file from URL to destination
+   * @param url - URL to download from
+   * @param destination - Local file path
+   */
+  function download(url: string, destination: string): Promise<void>;
+  
+  /**
+   * Move files to trash
+   * @param paths - File path(s) to trash
+   */
+  function trash(paths: string | string[]): Promise<void>;
+  
+  /**
+   * Show the main window
+   */
+  function show(): Promise<void>;
+  
+  /**
+   * Hide the main window
+   */
+  function hide(): Promise<void>;
+  
+  /**
+   * Blur - return focus to previous app
+   */
+  function blur(): Promise<void>;
+  
+  /**
+   * Force submit the current prompt with a value
+   * @param value - Value to submit
+   */
+  function submit(value: unknown): void;
+  
+  /**
+   * Exit the script
+   * @param code - Optional exit code
+   */
+  function exit(code?: number): void;
+  
+  /**
+   * Promise-based delay
+   * @param ms - Milliseconds to wait
+   */
+  function wait(ms: number): Promise<void>;
+  
+  /**
+   * Set the panel HTML content
+   * @param html - HTML content
+   */
+  function setPanel(html: string): void;
+  
+  /**
+   * Set the preview HTML content
+   * @param html - HTML content
+   */
+  function setPreview(html: string): void;
+  
+  /**
+   * Set the prompt HTML content
+   * @param html - HTML content
+   */
+  function setPrompt(html: string): void;
+  
+  /**
+   * Generate a UUID
+   * @returns UUID string
+   */
+  function uuid(): string;
+  
+  /**
+   * Compile a simple template string
+   * @param template - Template with {{key}} placeholders
+   * @returns Function that takes data and returns filled template
+   */
+  function compile(template: string): (data: Record<string, unknown>) => string;
+  
+  // =============================================================================
+  // TIER 5B: Path Utilities
+  // =============================================================================
+  
+  /**
+   * Returns path relative to user's home directory
+   * @param segments - Path segments to join
+   * @returns Full path from home directory
+   */
+  function home(...segments: string[]): string;
+  
+  /**
+   * Returns path relative to ~/.kenv
+   * @param segments - Path segments to join
+   * @returns Full path from kenv directory
+   */
+  function kenvPath(...segments: string[]): string;
+  
+  /**
+   * Returns path relative to ~/.kit
+   * @param segments - Path segments to join
+   * @returns Full path from kit directory
+   */
+  function kitPath(...segments: string[]): string;
+  
+  /**
+   * Returns path relative to system temp + kit subfolder
+   * @param segments - Path segments to join
+   * @returns Full path in temp directory
+   */
+  function tmpPath(...segments: string[]): string;
+  
+  // =============================================================================
+  // TIER 5B: File Utilities
+  // =============================================================================
+  
+  /**
+   * Check if path is a file
+   * @param filePath - Path to check
+   * @returns True if path is a file
+   */
+  function isFile(filePath: string): Promise<boolean>;
+  
+  /**
+   * Check if path is a directory
+   * @param dirPath - Path to check
+   * @returns True if path is a directory
+   */
+  function isDir(dirPath: string): Promise<boolean>;
+  
+  /**
+   * Check if file is executable
+   * @param filePath - Path to check
+   * @returns True if file is executable
+   */
+  function isBin(filePath: string): Promise<boolean>;
+  
+  // =============================================================================
+  // TIER 5B: Database/Store
+  // =============================================================================
+  
+  /**
+   * Simple JSON file database
+   * @param initialData - Initial data if database doesn't exist
+   * @returns Database instance with data and write method
+   */
+  function db(initialData?: unknown): Promise<DbInstance>;
+  
+  /**
+   * Key-value store for persistent data
+   */
+  const store: StoreAPI;
+  
+  /**
+   * In-memory map (not persisted)
+   */
+  const memoryMap: MemoryMapAPI;
+  
+  // =============================================================================
+  // TIER 5B: Browser/App Utilities
+  // =============================================================================
+  
+  /**
+   * Open URL in default browser
+   * @param url - URL to open
+   */
+  function browse(url: string): Promise<void>;
+  
+  /**
+   * Open file in KIT_EDITOR
+   * @param filePath - File path to edit
+   */
+  function editFile(filePath: string): Promise<void>;
+  
+  /**
+   * Run another script
+   * @param scriptName - Name of script to run
+   * @param args - Arguments to pass to script
+   * @returns Result from the script
+   */
+  function run(scriptName: string, ...args: string[]): Promise<unknown>;
+  
+  /**
+   * Pretty-print data for inspection
+   * @param data - Data to inspect
+   */
+  function inspect(data: unknown): Promise<void>;
 }
 
 globalThis.arg = async function arg(
@@ -1594,4 +1978,432 @@ globalThis.find = async function find(
 
     send(message);
   });
+};
+
+// =============================================================================
+// TIER 5A: Utility Functions
+// =============================================================================
+
+// Shell Execution - sends command to GPUI for execution
+globalThis.exec = async function exec(
+  command: string,
+  options?: ExecOptions
+): Promise<ExecResult> {
+  const id = nextId();
+
+  return new Promise((resolve) => {
+    pending.set(id, (msg: SubmitMessage) => {
+      const value = msg.value ?? '{}';
+      try {
+        const parsed = JSON.parse(value);
+        resolve({
+          stdout: parsed.stdout ?? '',
+          stderr: parsed.stderr ?? '',
+          all: options?.all ? parsed.all : undefined,
+          exitCode: parsed.exitCode ?? 0,
+        });
+      } catch {
+        resolve({
+          stdout: '',
+          stderr: 'Failed to parse exec result',
+          exitCode: 1,
+        });
+      }
+    });
+
+    const message: ExecMessage = {
+      type: 'exec',
+      id,
+      command,
+      options,
+    };
+
+    send(message);
+  });
+};
+
+// HTTP Methods - use fetch directly (Bun supports it natively)
+globalThis.get = async function get(url: string): Promise<HttpResponse> {
+  const response = await fetch(url);
+  const data = await response.json();
+  return { data };
+};
+
+globalThis.post = async function post(url: string, data?: unknown): Promise<HttpResponse> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: data ? JSON.stringify(data) : undefined,
+  });
+  const responseData = await response.json();
+  return { data: responseData };
+};
+
+globalThis.put = async function put(url: string, data?: unknown): Promise<HttpResponse> {
+  const response = await fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: data ? JSON.stringify(data) : undefined,
+  });
+  const responseData = await response.json();
+  return { data: responseData };
+};
+
+globalThis.patch = async function patch(url: string, data?: unknown): Promise<HttpResponse> {
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: data ? JSON.stringify(data) : undefined,
+  });
+  const responseData = await response.json();
+  return { data: responseData };
+};
+
+globalThis.del = async function del(url: string): Promise<HttpResponse> {
+  const response = await fetch(url, {
+    method: 'DELETE',
+  });
+  const data = await response.json();
+  return { data };
+};
+
+// File Operations
+globalThis.download = async function download(
+  url: string,
+  destination: string
+): Promise<void> {
+  const id = nextId();
+
+  return new Promise((resolve) => {
+    pending.set(id, () => {
+      resolve();
+    });
+
+    const message: DownloadMessage = {
+      type: 'download',
+      id,
+      url,
+      destination,
+    };
+
+    send(message);
+  });
+};
+
+globalThis.trash = async function trash(paths: string | string[]): Promise<void> {
+  const id = nextId();
+  const pathArray = Array.isArray(paths) ? paths : [paths];
+
+  return new Promise((resolve) => {
+    pending.set(id, () => {
+      resolve();
+    });
+
+    const message: TrashMessage = {
+      type: 'trash',
+      id,
+      paths: pathArray,
+    };
+
+    send(message);
+  });
+};
+
+// Window Control (fire-and-forget)
+globalThis.show = async function show(): Promise<void> {
+  const message: ShowMessage = { type: 'show' };
+  send(message);
+};
+
+globalThis.hide = async function hide(): Promise<void> {
+  const message: HideMessage = { type: 'hide' };
+  send(message);
+};
+
+globalThis.blur = async function blur(): Promise<void> {
+  const message: BlurMessage = { type: 'blur' };
+  send(message);
+};
+
+// Prompt Control
+globalThis.submit = function submit(value: unknown): void {
+  const message: ForceSubmitMessage = { type: 'forceSubmit', value };
+  send(message);
+};
+
+globalThis.exit = function exit(code?: number): void {
+  const message: ExitMessage = { type: 'exit', code };
+  send(message);
+};
+
+globalThis.wait = function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+};
+
+// Content Setters
+globalThis.setPanel = function setPanel(html: string): void {
+  const message: SetPanelMessage = { type: 'setPanel', html };
+  send(message);
+};
+
+globalThis.setPreview = function setPreview(html: string): void {
+  const message: SetPreviewMessage = { type: 'setPreview', html };
+  send(message);
+};
+
+globalThis.setPrompt = function setPrompt(html: string): void {
+  const message: SetPromptMessage = { type: 'setPrompt', html };
+  send(message);
+};
+
+// Misc Utilities
+globalThis.uuid = function uuid(): string {
+  return crypto.randomUUID();
+};
+
+globalThis.compile = function compile(
+  template: string
+): (data: Record<string, unknown>) => string {
+  return (data: Record<string, unknown>) => {
+    return template.replace(/\{\{(\w+)\}\}/g, (_, key) => {
+      const value = data[key];
+      return value !== undefined ? String(value) : '';
+    });
+  };
+};
+
+// =============================================================================
+// TIER 5B: Path Utilities (pure functions using node:path and node:os)
+// =============================================================================
+
+globalThis.home = function home(...segments: string[]): string {
+  return nodePath.join(os.homedir(), ...segments);
+};
+
+globalThis.kenvPath = function kenvPath(...segments: string[]): string {
+  return nodePath.join(os.homedir(), '.kenv', ...segments);
+};
+
+globalThis.kitPath = function kitPath(...segments: string[]): string {
+  return nodePath.join(os.homedir(), '.kit', ...segments);
+};
+
+globalThis.tmpPath = function tmpPath(...segments: string[]): string {
+  return nodePath.join(os.tmpdir(), 'kit', ...segments);
+};
+
+// =============================================================================
+// TIER 5B: File Utilities (pure JS using Node fs)
+// =============================================================================
+
+globalThis.isFile = async function isFile(filePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(filePath);
+    return stat.isFile();
+  } catch {
+    return false;
+  }
+};
+
+globalThis.isDir = async function isDir(dirPath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(dirPath);
+    return stat.isDirectory();
+  } catch {
+    return false;
+  }
+};
+
+globalThis.isBin = async function isBin(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+// =============================================================================
+// TIER 5B: Database (JSON file storage)
+// =============================================================================
+
+// Get the script name from the call stack or default to 'default'
+function getScriptName(): string {
+  // Try to get the script name from process.argv
+  const scriptPath = process.argv[1] || '';
+  const basename = nodePath.basename(scriptPath, nodePath.extname(scriptPath));
+  return basename || 'default';
+}
+
+globalThis.db = async function db(initialData?: unknown): Promise<DbInstance> {
+  const scriptName = getScriptName();
+  const id = nextId();
+  
+  return new Promise((resolve) => {
+    pending.set(id, (msg: SubmitMessage) => {
+      const value = msg.value ?? '{}';
+      let parsedData: unknown;
+      try {
+        parsedData = JSON.parse(value);
+      } catch {
+        parsedData = initialData ?? {};
+      }
+      
+      // Create the DbInstance
+      const instance: DbInstance = {
+        data: parsedData,
+        items: Array.isArray(parsedData) ? parsedData : undefined,
+        write: async () => {
+          const writeId = nextId();
+          return new Promise<void>((writeResolve) => {
+            pending.set(writeId, () => {
+              writeResolve();
+            });
+            
+            const writeMessage: DbMessage = {
+              type: 'db',
+              id: writeId,
+              scriptName,
+              initialData: instance.data,
+            };
+            send(writeMessage);
+          });
+        },
+      };
+      
+      resolve(instance);
+    });
+    
+    const message: DbMessage = {
+      type: 'db',
+      id,
+      scriptName,
+      initialData,
+    };
+    
+    send(message);
+  });
+};
+
+// =============================================================================
+// TIER 5B: Key-Value Store
+// =============================================================================
+
+globalThis.store = {
+  async get(key: string): Promise<unknown> {
+    const id = nextId();
+    
+    return new Promise((resolve) => {
+      pending.set(id, (msg: SubmitMessage) => {
+        const value = msg.value;
+        if (value === undefined || value === null || value === '') {
+          resolve(undefined);
+        } else {
+          try {
+            resolve(JSON.parse(value));
+          } catch {
+            resolve(value);
+          }
+        }
+      });
+      
+      const message: StoreMessage = {
+        type: 'store',
+        id,
+        action: 'get',
+        key,
+      };
+      send(message);
+    });
+  },
+  
+  async set(key: string, value: unknown): Promise<void> {
+    const id = nextId();
+    
+    return new Promise((resolve) => {
+      pending.set(id, () => {
+        resolve();
+      });
+      
+      const message: StoreMessage = {
+        type: 'store',
+        id,
+        action: 'set',
+        key,
+        value,
+      };
+      send(message);
+    });
+  },
+};
+
+// =============================================================================
+// TIER 5B: Memory Map (in-process only, no messages needed)
+// =============================================================================
+
+const internalMemoryMap = new Map<string, unknown>();
+
+globalThis.memoryMap = {
+  get(key: string): unknown {
+    return internalMemoryMap.get(key);
+  },
+  
+  set(key: string, value: unknown): void {
+    internalMemoryMap.set(key, value);
+  },
+  
+  delete(key: string): boolean {
+    return internalMemoryMap.delete(key);
+  },
+  
+  clear(): void {
+    internalMemoryMap.clear();
+  },
+};
+
+// =============================================================================
+// TIER 5B: Browser/App Utilities
+// =============================================================================
+
+globalThis.browse = async function browse(url: string): Promise<void> {
+  const message: BrowseMessage = { type: 'browse', url };
+  send(message);
+};
+
+globalThis.editFile = async function editFile(filePath: string): Promise<void> {
+  const message: EditFileMessage = { type: 'edit', path: filePath };
+  send(message);
+};
+
+globalThis.run = async function run(scriptName: string, ...args: string[]): Promise<unknown> {
+  const id = nextId();
+  
+  return new Promise((resolve) => {
+    pending.set(id, (msg: SubmitMessage) => {
+      const value = msg.value;
+      if (value === undefined || value === null || value === '') {
+        resolve(undefined);
+      } else {
+        try {
+          resolve(JSON.parse(value));
+        } catch {
+          resolve(value);
+        }
+      }
+    });
+    
+    const message: RunMessage = {
+      type: 'run',
+      id,
+      scriptName,
+      args,
+    };
+    
+    send(message);
+  });
+};
+
+globalThis.inspect = async function inspect(data: unknown): Promise<void> {
+  const message: InspectMessage = { type: 'inspect', data };
+  send(message);
 };
