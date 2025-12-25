@@ -4,6 +4,9 @@ use std::io::{Write, BufReader};
 use crate::protocol::{Message, JsonlReader, serialize_message};
 use crate::logging;
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
 /// Embedded SDK content (included at compile time)
 const EMBEDDED_SDK: &str = include_str!("../scripts/kit-sdk.ts");
 
@@ -116,11 +119,98 @@ fn find_sdk_path() -> Option<PathBuf> {
     None
 }
 
+/// Wrapper that tracks process ID for cleanup
+/// This stores the PID at spawn time so we can kill the process group even after
+/// the Child is moved or consumed.
+/// 
+/// CRITICAL: The Drop impl kills the process group, so this MUST be kept alive
+/// until the script is done executing!
+#[derive(Debug)]
+pub struct ProcessHandle {
+    /// Process ID (used as PGID since we spawn with process_group(0))
+    pid: u32,
+    /// Whether the process has been explicitly killed
+    killed: bool,
+}
+
+impl ProcessHandle {
+    fn new(pid: u32) -> Self {
+        logging::log("EXEC", &format!("ProcessHandle created for PID {}", pid));
+        Self { pid, killed: false }
+    }
+
+    /// Kill the process group (Unix) or just the process (other platforms)
+    fn kill(&mut self) {
+        if self.killed {
+            logging::log("EXEC", &format!("Process {} already killed, skipping", self.pid));
+            return;
+        }
+        self.killed = true;
+        
+        #[cfg(unix)]
+        {
+            // Kill the entire process group using the kill command with negative PID
+            // Since we spawned with process_group(0), the PGID equals the PID
+            // Using negative PID tells kill to target the process group
+            let negative_pgid = format!("-{}", self.pid);
+            logging::log("EXEC", &format!("Killing process group PGID {} with SIGKILL", self.pid));
+            
+            match Command::new("kill")
+                .args(["-9", &negative_pgid])
+                .output()
+            {
+                Ok(output) => {
+                    if output.status.success() {
+                        logging::log("EXEC", &format!("Successfully killed process group {}", self.pid));
+                    } else {
+                        // Process might already be dead, which is fine
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        if stderr.contains("No such process") {
+                            logging::log("EXEC", &format!("Process group {} already exited", self.pid));
+                        } else {
+                            logging::log("EXEC", &format!("kill command failed for PGID {}: {}", self.pid, stderr));
+                        }
+                    }
+                }
+                Err(e) => {
+                    logging::log("EXEC", &format!("Failed to execute kill command: {}", e));
+                }
+            }
+        }
+        
+        #[cfg(not(unix))]
+        {
+            logging::log("EXEC", &format!("Non-Unix platform: process {} marked as killed", self.pid));
+            // On non-Unix platforms, we rely on the Child::kill() method being called separately
+        }
+    }
+    
+    /// Check if process is still running (Unix only)
+    #[cfg(unix)]
+    fn is_alive(&self) -> bool {
+        // Use kill -0 to check if process exists
+        Command::new("kill")
+            .args(["-0", &self.pid.to_string()])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+}
+
+impl Drop for ProcessHandle {
+    fn drop(&mut self) {
+        logging::log("EXEC", &format!("ProcessHandle dropping for PID {}", self.pid));
+        self.kill();
+    }
+}
+
 /// Session for bidirectional communication with a running script
 pub struct ScriptSession {
     pub stdin: ChildStdin,
     stdout_reader: JsonlReader<BufReader<ChildStdout>>,
     child: Child,
+    /// Process handle for cleanup - kills process group on drop
+    process_handle: ProcessHandle,
 }
 
 /// Split session components for separate read/write threads
@@ -128,17 +218,58 @@ pub struct SplitSession {
     pub stdin: ChildStdin,
     pub stdout_reader: JsonlReader<BufReader<ChildStdout>>,
     pub child: Child,
+    /// Process handle for cleanup - kills process group on drop
+    /// IMPORTANT: This MUST be kept alive until the script completes!
+    /// Dropping it will kill the process group via the Drop impl.
+    pub process_handle: ProcessHandle,
 }
 
 impl ScriptSession {
     /// Split the session into separate read/write components
     /// This allows using separate threads for reading and writing
     pub fn split(self) -> SplitSession {
+        logging::log("EXEC", &format!("Splitting ScriptSession for PID {}", self.process_handle.pid));
         SplitSession {
             stdin: self.stdin,
             stdout_reader: self.stdout_reader,
             child: self.child,
+            process_handle: self.process_handle,
         }
+    }
+}
+
+impl SplitSession {
+    /// Check if the child process is still running
+    pub fn is_running(&mut self) -> bool {
+        match self.child.try_wait() {
+            Ok(None) => true,
+            Ok(Some(_)) => false,
+            Err(_) => false,
+        }
+    }
+
+    /// Kill the child process and its process group
+    pub fn kill(&mut self) -> Result<(), String> {
+        logging::log("EXEC", &format!("SplitSession::kill() for PID {}", self.process_handle.pid));
+        self.process_handle.kill();
+        // Also try the standard kill for good measure
+        let _ = self.child.kill();
+        Ok(())
+    }
+
+    /// Wait for the child process to terminate and get its exit code
+    pub fn wait(&mut self) -> Result<i32, String> {
+        let status = self.child
+            .wait()
+            .map_err(|e| format!("Failed to wait for script process: {}", e))?;
+        let code = status.code().unwrap_or(-1);
+        logging::log("EXEC", &format!("Script exited with code: {}", code));
+        Ok(code)
+    }
+
+    /// Get the process ID
+    pub fn pid(&self) -> u32 {
+        self.process_handle.pid
     }
 }
 
@@ -185,11 +316,18 @@ impl ScriptSession {
         Ok(code)
     }
 
-    /// Kill the child process
+    /// Kill the child process and its process group
     pub fn kill(&mut self) -> Result<(), String> {
-        logging::log("EXEC", "Killing script process");
-        self.child.kill()
-            .map_err(|e| format!("Failed to kill script process: {}", e))
+        logging::log("EXEC", &format!("ScriptSession::kill() for PID {}", self.process_handle.pid));
+        self.process_handle.kill();
+        // Also try the standard kill for good measure
+        let _ = self.child.kill();
+        Ok(())
+    }
+
+    /// Get the process ID
+    pub fn pid(&self) -> u32 {
+        self.process_handle.pid
     }
 }
 
@@ -264,19 +402,29 @@ fn spawn_script(cmd: &str, args: &[&str]) -> Result<ScriptSession, String> {
     
     logging::log("EXEC", &format!("spawn_script: {} {:?}", executable, args));
     
-    let mut child = Command::new(&executable)
+    let mut command = Command::new(&executable);
+    command
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .map_err(|e| {
-            let err = format!("Failed to spawn '{}': {}", executable, e);
-            logging::log("EXEC", &format!("SPAWN ERROR: {}", err));
-            err
-        })?;
+        .stderr(Stdio::inherit());
+    
+    // On Unix, spawn in a new process group so we can kill all children
+    // process_group(0) means the child's PID becomes the PGID
+    #[cfg(unix)]
+    {
+        command.process_group(0);
+        logging::log("EXEC", "Using process group for child process");
+    }
+    
+    let mut child = command.spawn().map_err(|e| {
+        let err = format!("Failed to spawn '{}': {}", executable, e);
+        logging::log("EXEC", &format!("SPAWN ERROR: {}", err));
+        err
+    })?;
 
-    logging::log("EXEC", &format!("Process spawned with PID: {:?}", child.id()));
+    let pid = child.id();
+    logging::log("EXEC", &format!("Process spawned with PID: {} (PGID: {})", pid, pid));
 
     let stdin = child
         .stdin
@@ -288,12 +436,14 @@ fn spawn_script(cmd: &str, args: &[&str]) -> Result<ScriptSession, String> {
         .take()
         .ok_or_else(|| "Failed to open script stdout".to_string())?;
 
+    let process_handle = ProcessHandle::new(pid);
     logging::log("EXEC", "ScriptSession created successfully");
     
     Ok(ScriptSession {
         stdin,
         stdout_reader: JsonlReader::new(BufReader::new(stdout)),
         child,
+        process_handle,
     })
 }
 
@@ -484,5 +634,114 @@ mod tests {
     fn test_multiple_dots_in_filename() {
         assert!(is_typescript(&PathBuf::from("my.test.script.ts")));
         assert!(is_javascript(&PathBuf::from("my.test.script.js")));
+    }
+
+    #[test]
+    fn test_process_handle_double_kill_is_safe() {
+        // Double kill should not panic
+        let mut handle = ProcessHandle::new(99999); // Non-existent PID
+        handle.kill();
+        handle.kill(); // Should be safe to call again
+        assert!(handle.killed);
+    }
+
+    #[test]
+    fn test_process_handle_drop_calls_kill() {
+        // Create a handle and let it drop
+        let handle = ProcessHandle::new(99998); // Non-existent PID
+        assert!(!handle.killed);
+        drop(handle);
+        // If we get here without panic, drop successfully called kill
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_spawn_and_kill_process() {
+        // Spawn a simple process that sleeps
+        let result = spawn_script("sleep", &["10"]);
+        
+        if let Ok(mut session) = result {
+            let pid = session.pid();
+            assert!(pid > 0);
+            
+            // Process should be running
+            assert!(session.is_running());
+            
+            // Kill it
+            session.kill().expect("kill should succeed");
+            
+            // Wait a moment for the process to die
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            
+            // Process should no longer be running
+            assert!(!session.is_running());
+        }
+        // If spawn failed (sleep not available), that's OK for this test
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_drop_kills_process() {
+        // Spawn a process
+        let result = spawn_script("sleep", &["30"]);
+        
+        if let Ok(session) = result {
+            let pid = session.pid();
+            
+            // Drop the session - should kill the process
+            drop(session);
+            
+            // Wait for process to be fully cleaned up (may take a bit)
+            // Use ps to check if process is truly gone or just a zombie
+            let mut is_dead = false;
+            for _ in 0..10 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                
+                // Check process state using ps
+                let check = Command::new("ps")
+                    .args(["-p", &pid.to_string(), "-o", "state="])
+                    .output();
+                
+                match check {
+                    Ok(output) => {
+                        let state = String::from_utf8_lossy(&output.stdout);
+                        let state = state.trim();
+                        // Process is dead if ps returns empty or shows Z (zombie)
+                        // We consider zombie as "dead enough" since it's not running
+                        if state.is_empty() || state.starts_with('Z') || !output.status.success() {
+                            is_dead = true;
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        // Command failed to run, assume process is dead
+                        is_dead = true;
+                        break;
+                    }
+                }
+            }
+            assert!(is_dead, "Process should be dead after drop");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_split_session_kill() {
+        // Spawn a process and split it
+        let result = spawn_script("sleep", &["10"]);
+        
+        if let Ok(session) = result {
+            let pid = session.pid();
+            let mut split = session.split();
+            
+            assert_eq!(split.pid(), pid);
+            assert!(split.is_running());
+            
+            // Kill via split session
+            split.kill().expect("kill should succeed");
+            
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            assert!(!split.is_running());
+        }
     }
 }

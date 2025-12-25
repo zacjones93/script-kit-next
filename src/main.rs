@@ -841,6 +841,10 @@ impl ScriptListApp {
                 
                 let mut stdin = split.stdin;
                 let mut stdout_reader = split.stdout_reader;
+                // CRITICAL: Keep process_handle and child alive - they kill the process on drop!
+                // We move them into the reader thread so they live until the script exits.
+                let _process_handle = split.process_handle;
+                let _child = split.child;
                 
                 // Channel for sending responses from UI to writer thread
                 let (response_tx, response_rx) = mpsc::channel::<Message>();
@@ -878,7 +882,13 @@ impl ScriptListApp {
                 });
                 
                 // Reader thread - handles receiving messages from script (blocking is OK here)
+                // CRITICAL: Move _process_handle and _child into this thread to keep them alive!
+                // When the reader thread exits, they'll be dropped and the process killed.
                 std::thread::spawn(move || {
+                    // These variables keep the process alive - they're dropped when the thread exits
+                    let _keep_alive_handle = _process_handle;
+                    let _keep_alive_child = _child;
+                    
                     loop {
                         match stdout_reader.next_message() {
                             Ok(Some(msg)) => {
@@ -921,7 +931,7 @@ impl ScriptListApp {
                             }
                         }
                     }
-                    logging::log("EXEC", "Reader thread exited");
+                    logging::log("EXEC", "Reader thread exited, process handle will now be dropped");
                 });
                 
                 // Store the response sender for the UI to use
