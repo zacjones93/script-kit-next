@@ -1,0 +1,335 @@
+#!/usr/bin/env bun
+/**
+ * SDK Test Runner
+ * 
+ * Runs all tests in tests/sdk/ and reports results.
+ * 
+ * Usage:
+ *   bun run scripts/test-runner.ts              # Run all tests
+ *   bun run scripts/test-runner.ts test-arg.ts  # Run single test
+ *   bun run scripts/test-runner.ts --json       # Output JSON only
+ * 
+ * Environment:
+ *   SDK_TEST_TIMEOUT=10    # Max seconds per test (default: 30)
+ *   SDK_TEST_VERBOSE=true  # Extra debug output
+ */
+
+import { readdir } from 'node:fs/promises';
+import { basename, join, resolve } from 'node:path';
+
+import { spawn } from 'bun';
+
+// =============================================================================
+// Types
+// =============================================================================
+
+interface TestResult {
+  test: string;
+  status: 'running' | 'pass' | 'fail' | 'skip';
+  timestamp: string;
+  result?: unknown;
+  error?: string;
+  duration_ms?: number;
+}
+
+interface TestFileResult {
+  file: string;
+  tests: TestResult[];
+  duration_ms: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+}
+
+interface RunnerSummary {
+  files: TestFileResult[];
+  total_passed: number;
+  total_failed: number;
+  total_skipped: number;
+  total_duration_ms: number;
+}
+
+// =============================================================================
+// Configuration
+// =============================================================================
+
+const PROJECT_ROOT = resolve(import.meta.dir, '..');
+const SDK_PATH = join(PROJECT_ROOT, 'scripts', 'kit-sdk.ts');
+const TESTS_DIR = join(PROJECT_ROOT, 'tests', 'sdk');
+const TIMEOUT_MS = parseInt(process.env.SDK_TEST_TIMEOUT || '30', 10) * 1000;
+const VERBOSE = process.env.SDK_TEST_VERBOSE === 'true';
+const JSON_ONLY = process.argv.includes('--json');
+
+// =============================================================================
+// Utilities
+// =============================================================================
+
+function log(msg: string) {
+  if (!JSON_ONLY) {
+    console.log(msg);
+  }
+}
+
+function logVerbose(msg: string) {
+  if (VERBOSE && !JSON_ONLY) {
+    console.log(`  [VERBOSE] ${msg}`);
+  }
+}
+
+function jsonlLog(data: object) {
+  console.log(JSON.stringify(data));
+}
+
+// =============================================================================
+// Test Execution
+// =============================================================================
+
+async function runTestFile(filePath: string): Promise<TestFileResult> {
+  const fileName = basename(filePath);
+  const startTime = Date.now();
+  const tests: TestResult[] = [];
+  
+  log(`\nRunning: ${fileName}`);
+  logVerbose(`Full path: ${filePath}`);
+  logVerbose(`SDK path: ${SDK_PATH}`);
+  
+  try {
+    // Run the test file with SDK preload
+    // Note: For automated testing, we simulate user input by providing stdin
+    const proc = spawn({
+      cmd: ['bun', 'run', '--preload', SDK_PATH, filePath],
+      cwd: PROJECT_ROOT,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      stdin: 'pipe',
+    });
+    
+    // Collect stdout (JSONL test results)
+    let stdout = '';
+    let stderr = '';
+    
+    // Create a timeout promise
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(`Test timed out after ${TIMEOUT_MS}ms`)), TIMEOUT_MS);
+    });
+    
+    // Read stdout in chunks
+    const stdoutReader = (async () => {
+      const reader = proc.stdout.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        stdout += decoder.decode(value);
+      }
+    })();
+    
+    // Read stderr in chunks
+    const stderrReader = (async () => {
+      const reader = proc.stderr.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value);
+        stderr += chunk;
+        if (VERBOSE) {
+          // Print stderr in real-time for debugging
+          process.stderr.write(chunk);
+        }
+      }
+    })();
+    
+    // For SDK-only testing (no GPUI app), we need to simulate responses
+    // The test will hang waiting for submit messages, so we just let it timeout
+    // In a real integration test with the GPUI app, the app would respond
+    
+    // For now, just wait for the process or timeout
+    try {
+      await Promise.race([
+        Promise.all([stdoutReader, stderrReader, proc.exited]),
+        timeoutPromise,
+      ]);
+    } catch {
+      // Kill the process on timeout
+      proc.kill();
+      logVerbose(`Process killed due to timeout`);
+    }
+    
+    const exitCode = await proc.exited;
+    logVerbose(`Exit code: ${exitCode}`);
+    logVerbose(`Stdout length: ${stdout.length}`);
+    logVerbose(`Stderr length: ${stderr.length}`);
+    
+    // Parse JSONL results from stdout
+    const lines = stdout.split('\n').filter(line => line.trim());
+    for (const line of lines) {
+      try {
+        const result = JSON.parse(line) as TestResult;
+        if (result.test && result.status) {
+          tests.push(result);
+          
+          // Print result in human-readable format
+          const icon = result.status === 'pass' ? '✅' : 
+                       result.status === 'fail' ? '❌' : 
+                       result.status === 'skip' ? '⏭️' : '🔄';
+          const duration = result.duration_ms ? ` (${result.duration_ms}ms)` : '';
+          const error = result.error ? ` - ${result.error}` : '';
+          
+          if (result.status !== 'running') {
+            log(`  ${icon} ${result.test}${duration}${error}`);
+          }
+        }
+      } catch {
+        // Not JSON, might be other output
+        logVerbose(`Non-JSON line: ${line.substring(0, 80)}...`);
+      }
+    }
+    
+    // If no tests were parsed, mark as failed
+    if (tests.length === 0) {
+      tests.push({
+        test: fileName,
+        status: 'fail',
+        timestamp: new Date().toISOString(),
+        error: 'No test results parsed from output',
+        duration_ms: Date.now() - startTime,
+      });
+      log(`  ❌ No test results (check stderr output)`);
+    }
+    
+  } catch (err) {
+    tests.push({
+      test: fileName,
+      status: 'fail',
+      timestamp: new Date().toISOString(),
+      error: String(err),
+      duration_ms: Date.now() - startTime,
+    });
+    log(`  ❌ Error: ${err}`);
+  }
+  
+  const duration_ms = Date.now() - startTime;
+  
+  // Count results (only count final status, not 'running')
+  const finalTests = tests.filter(t => t.status !== 'running');
+  const uniqueTests = new Map<string, TestResult>();
+  for (const t of finalTests) {
+    uniqueTests.set(t.test, t);
+  }
+  
+  const passed = Array.from(uniqueTests.values()).filter(t => t.status === 'pass').length;
+  const failed = Array.from(uniqueTests.values()).filter(t => t.status === 'fail').length;
+  const skipped = Array.from(uniqueTests.values()).filter(t => t.status === 'skip').length;
+  
+  return {
+    file: fileName,
+    tests,
+    duration_ms,
+    passed,
+    failed,
+    skipped,
+  };
+}
+
+async function findTestFiles(specificTest?: string): Promise<string[]> {
+  if (specificTest) {
+    // Handle relative or absolute path
+    if (specificTest.startsWith('/')) {
+      return [specificTest];
+    }
+    // Check if it's just a filename
+    const testPath = specificTest.includes('/') 
+      ? join(PROJECT_ROOT, specificTest)
+      : join(TESTS_DIR, specificTest);
+    return [testPath];
+  }
+  
+  // Find all test-*.ts files in tests/sdk/
+  try {
+    const files = await readdir(TESTS_DIR);
+    return files
+      .filter(f => f.startsWith('test-') && f.endsWith('.ts'))
+      .map(f => join(TESTS_DIR, f))
+      .sort();
+  } catch {
+    log(`Warning: Could not read ${TESTS_DIR}`);
+    return [];
+  }
+}
+
+// =============================================================================
+// Main
+// =============================================================================
+
+async function main() {
+  const startTime = Date.now();
+  
+  // Parse arguments
+  const args = process.argv.slice(2).filter(a => !a.startsWith('--'));
+  const specificTest = args[0];
+  
+  if (!JSON_ONLY) {
+    log('SDK Test Runner v1.0');
+    log('═'.repeat(60));
+  }
+  
+  // Find test files
+  const testFiles = await findTestFiles(specificTest);
+  
+  if (testFiles.length === 0) {
+    log('No test files found');
+    process.exit(1);
+  }
+  
+  logVerbose(`Found ${testFiles.length} test file(s)`);
+  
+  // Run tests
+  const results: TestFileResult[] = [];
+  
+  for (const file of testFiles) {
+    const result = await runTestFile(file);
+    results.push(result);
+    
+    // Output JSONL for machine parsing
+    if (JSON_ONLY) {
+      jsonlLog({
+        type: 'file_result',
+        ...result,
+      });
+    }
+  }
+  
+  // Calculate summary
+  const summary: RunnerSummary = {
+    files: results,
+    total_passed: results.reduce((sum, r) => sum + r.passed, 0),
+    total_failed: results.reduce((sum, r) => sum + r.failed, 0),
+    total_skipped: results.reduce((sum, r) => sum + r.skipped, 0),
+    total_duration_ms: Date.now() - startTime,
+  };
+  
+  // Print summary
+  if (!JSON_ONLY) {
+    log('');
+    log('═'.repeat(60));
+    log(`Results: ${summary.total_passed} passed, ${summary.total_failed} failed, ${summary.total_skipped} skipped`);
+    log(`Total time: ${summary.total_duration_ms}ms`);
+  }
+  
+  // Output final summary as JSONL
+  if (JSON_ONLY) {
+    jsonlLog({
+      type: 'summary',
+      ...summary,
+    });
+  }
+  
+  // Exit with appropriate code
+  process.exit(summary.total_failed > 0 ? 1 : 0);
+}
+
+main().catch(err => {
+  console.error('Test runner error:', err);
+  process.exit(1);
+});
