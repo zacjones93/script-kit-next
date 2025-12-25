@@ -453,12 +453,19 @@ struct ScriptListApp {
     response_sender: Option<mpsc::Sender<Message>>,
     // Scroll handle for uniform_list (automatic virtualized scrolling)
     list_scroll_handle: UniformListScrollHandle,
+    // P0: Scroll handle for virtualized arg prompt choices
+    arg_list_scroll_handle: UniformListScrollHandle,
     // Actions popup overlay
     show_actions_popup: bool,
     // ActionsDialog entity for focus management
     actions_dialog: Option<Entity<ActionsDialog>>,
     // Cursor blink state
     cursor_visible: bool,
+    // Current script process PID for explicit cleanup (belt-and-suspenders)
+    current_script_pid: Option<u32>,
+    // P1: Cache for filtered_results() - invalidate on filter_text change only
+    cached_filtered_results: Vec<scripts::SearchResult>,
+    filter_cache_key: String,
 }
 
 impl ScriptListApp {
@@ -521,9 +528,14 @@ impl ScriptListApp {
             prompt_receiver: None,
             response_sender: None,
             list_scroll_handle: UniformListScrollHandle::new(),
+            arg_list_scroll_handle: UniformListScrollHandle::new(),
             show_actions_popup: false,
             actions_dialog: None,
             cursor_visible: true,
+            current_script_pid: None,
+            // P1: Initialize filter cache
+            cached_filtered_results: Vec::new(),
+            filter_cache_key: String::from("\0_UNINITIALIZED_\0"), // Sentinel value to force initial compute
         }
     }
     
@@ -562,13 +574,26 @@ impl ScriptListApp {
         self.scriptlets = scripts::read_scriptlets();
         self.selected_index = 0;
         self.list_scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
+        // P1: Invalidate cache when scripts change
+        self.invalidate_filter_cache();
         logging::log("APP", &format!("Scripts refreshed: {} scripts, {} scriptlets loaded", self.scripts.len(), self.scriptlets.len()));
         logging::log("SCROLL", "Scripts refreshed - reset: selected_index=0");
         cx.notify();
     }
 
     /// Get unified filtered results combining scripts and scriptlets
+    /// P1: Now uses caching - invalidates only when filter_text changes
     fn filtered_results(&self) -> Vec<scripts::SearchResult> {
+        // P1: Return cached results if filter hasn't changed
+        if self.filter_text == self.filter_cache_key {
+            logging::log_debug("CACHE", &format!("Filter cache HIT for '{}'", self.filter_text));
+            return self.cached_filtered_results.clone();
+        }
+        
+        // P1: Cache miss - need to recompute (will be done by get_filtered_results_mut)
+        logging::log_debug("CACHE", &format!("Filter cache MISS - need recompute for '{}' (cached key: '{}')", 
+            self.filter_text, self.filter_cache_key));
+        
         // PERF: Measure search time (only log when actually filtering)
         let search_start = std::time::Instant::now();
         let results = scripts::fuzzy_search_unified(&self.scripts, &self.scriptlets, &self.filter_text);
@@ -585,6 +610,37 @@ impl ScriptListApp {
             ));
         }
         results
+    }
+    
+    /// P1: Get filtered results with cache update (mutable version)
+    /// Call this when you need to ensure cache is updated
+    fn get_filtered_results_cached(&mut self) -> &Vec<scripts::SearchResult> {
+        if self.filter_text != self.filter_cache_key {
+            logging::log_debug("CACHE", &format!("Filter cache MISS - recomputing for '{}'", self.filter_text));
+            let search_start = std::time::Instant::now();
+            self.cached_filtered_results = scripts::fuzzy_search_unified(&self.scripts, &self.scriptlets, &self.filter_text);
+            self.filter_cache_key = self.filter_text.clone();
+            let search_elapsed = search_start.elapsed();
+            
+            if !self.filter_text.is_empty() {
+                logging::log("PERF", &format!(
+                    "Search '{}' took {:.2}ms ({} results from {} total)",
+                    self.filter_text,
+                    search_elapsed.as_secs_f64() * 1000.0,
+                    self.cached_filtered_results.len(),
+                    self.scripts.len() + self.scriptlets.len()
+                ));
+            }
+        } else {
+            logging::log_debug("CACHE", &format!("Filter cache HIT for '{}'", self.filter_text));
+        }
+        &self.cached_filtered_results
+    }
+    
+    /// P1: Invalidate filter cache (call when scripts/scriptlets change)
+    fn invalidate_filter_cache(&mut self) {
+        logging::log_debug("CACHE", "Filter cache INVALIDATED");
+        self.filter_cache_key = String::from("\0_INVALIDATED_\0");
     }
 
     fn filtered_scripts(&self) -> Vec<scripts::Script> {
@@ -764,6 +820,12 @@ impl ScriptListApp {
         match executor::execute_script_interactive(&script.path) {
             Ok(session) => {
                 logging::log("EXEC", "Interactive session started successfully");
+                
+                // Store PID for explicit cleanup (belt-and-suspenders approach)
+                let pid = session.pid();
+                self.current_script_pid = Some(pid);
+                logging::log("EXEC", &format!("Stored script PID {} for cleanup", pid));
+                
                 *self.script_session.lock().unwrap() = Some(session);
                 
                 // Create channel for script thread to send prompt messages to UI
@@ -968,6 +1030,18 @@ impl ScriptListApp {
             logging::log("EXEC", "No response_sender - script may not be running");
         }
         
+        // Belt-and-suspenders: Force-kill the process group using stored PID
+        // This ensures cleanup even if Drop doesn't fire properly
+        if let Some(pid) = self.current_script_pid.take() {
+            logging::log("CLEANUP", &format!("Force-killing script process group {}", pid));
+            #[cfg(unix)]
+            {
+                let _ = std::process::Command::new("kill")
+                    .args(["-9", &format!("-{}", pid)])
+                    .output();
+            }
+        }
+        
         // Abort script session if it exists
         if let Ok(mut session_guard) = self.script_session.lock() {
             if let Some(_session) = session_guard.take() {
@@ -991,12 +1065,26 @@ impl ScriptListApp {
         
         logging::log("UI", &format!("Resetting to script list (was: {})", old_view));
         
+        // Belt-and-suspenders: Force-kill the process group using stored PID
+        // This runs BEFORE clearing channels to ensure cleanup even if Drop doesn't fire
+        if let Some(pid) = self.current_script_pid.take() {
+            logging::log("CLEANUP", &format!("Force-killing script process group {} during reset", pid));
+            #[cfg(unix)]
+            {
+                let _ = std::process::Command::new("kill")
+                    .args(["-9", &format!("-{}", pid)])
+                    .output();
+            }
+        }
+        
         // Reset view
         self.current_view = AppView::ScriptList;
         
         // Clear arg prompt state
         self.arg_input_text.clear();
         self.arg_selected_index = 0;
+        // P0: Reset arg scroll handle
+        self.arg_list_scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
         
         // Clear filter and selection state for fresh menu
         self.filter_text.clear();
@@ -1057,6 +1145,24 @@ impl ScriptListApp {
                 choices.iter()
                     .enumerate()
                     .filter(|(_, c)| c.name.to_lowercase().contains(&filter))
+                    .collect()
+            }
+        } else {
+            vec![]
+        }
+    }
+    
+    /// P0: Get filtered choices as owned data for uniform_list closure
+    fn get_filtered_arg_choices_owned(&self) -> Vec<(usize, Choice)> {
+        if let AppView::ArgPrompt { choices, .. } = &self.current_view {
+            if self.arg_input_text.is_empty() {
+                choices.iter().enumerate().map(|(i, c)| (i, c.clone())).collect()
+            } else {
+                let filter = self.arg_input_text.to_lowercase();
+                choices.iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.name.to_lowercase().contains(&filter))
+                    .map(|(i, c)| (i, c.clone()))
                     .collect()
             }
         } else {
@@ -1527,7 +1633,8 @@ impl ScriptListApp {
     }
     
     fn render_script_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let filtered = self.filtered_results();
+        // P1: Use cached filtered results
+        let filtered = self.get_filtered_results_cached();
         let filtered_len = filtered.len();
         let total_len = self.scripts.len() + self.scriptlets.len();
         let theme = &self.theme;
@@ -1539,7 +1646,17 @@ impl ScriptListApp {
 
         // Clone values needed for the uniform_list closure
         let selected_index = self.selected_index;
-        let theme_colors = theme.colors.clone();
+        
+        // P4: Pre-compute theme values - extract primitives before closure
+        // This avoids cloning the entire theme.colors struct
+        let text_primary = theme.colors.text.primary;
+        let text_secondary = theme.colors.text.secondary;
+        let text_muted = theme.colors.text.muted;
+        let text_dimmed = theme.colors.text.dimmed;
+        let accent_selected = theme.colors.accent.selected;
+        let accent_selected_subtle = theme.colors.accent.selected_subtle;
+        let background_main = theme.colors.background.main;
+        logging::log_debug("PERF", "P4: Pre-computed 7 theme values for render closure");
 
         // Build script list using uniform_list for proper virtualized scrolling
         let list_element: AnyElement = if filtered_len == 0 {
@@ -1562,9 +1679,11 @@ impl ScriptListApp {
             uniform_list(
                 "script-list",
                 filtered_len,
-                cx.processor(move |_this, visible_range, _window, _cx| {
+                cx.processor(move |_this, visible_range: std::ops::Range<usize>, _window, _cx| {
                     let mut items = Vec::new();
-                    let filtered = _this.filtered_results();
+                    // P1: Use cached filtered results inside closure
+                    let filtered = _this.get_filtered_results_cached();
+                    logging::log("SCROLL", &format!("Script list visible range: {:?} ({} items)", visible_range.clone(), visible_range.clone().count()));
                     
                     for ix in visible_range {
                         if let Some(result) = filtered.get(ix) {
@@ -1580,9 +1699,9 @@ impl ScriptListApp {
                                 }
                             };
                             
-                            // Subtle selection backgrounds
-                            let selected_bg = rgba((theme_colors.accent.selected_subtle << 8) | 0x80);
-                            let hover_bg = rgba((theme_colors.accent.selected_subtle << 8) | 0x40);
+                            // P4: Use pre-computed theme values (primitives, no clone needed)
+                            let selected_bg = rgba((accent_selected_subtle << 8) | 0x80);
+                            let hover_bg = rgba((accent_selected_subtle << 8) | 0x40);
                             
                             // Build content with name + description
                             let mut item_content = div()
@@ -1594,9 +1713,9 @@ impl ScriptListApp {
                                 div().text_sm().font_weight(gpui::FontWeight::MEDIUM).overflow_hidden().child(name_display)
                             );
                             
-                            // Description - use accent color when selected, truncate to single line
+                            // P4: Use pre-computed accent_selected and text_muted
                             if let Some(desc) = description {
-                                let desc_color = if is_selected { rgb(theme_colors.accent.selected) } else { rgb(theme_colors.text.muted) };
+                                let desc_color = if is_selected { rgb(accent_selected) } else { rgb(text_muted) };
                                 item_content = item_content.child(
                                     div().text_xs().text_color(desc_color).overflow_hidden().max_h(px(16.)).child(desc)
                                 );
@@ -1618,14 +1737,16 @@ impl ScriptListApp {
                                             .px(px(12.))
                                             .bg(if is_selected { selected_bg } else { rgba(0x00000000) })
                                             .hover(|s| s.bg(hover_bg))
-                                            .text_color(if is_selected { rgb(theme_colors.text.primary) } else { rgb(theme_colors.text.secondary) })
+                                            // P4: Use pre-computed text_primary and text_secondary
+                                            .text_color(if is_selected { rgb(text_primary) } else { rgb(text_secondary) })
                                             .font_family(".AppleSystemUIFont")
                                             .cursor_pointer()
                                             .flex().flex_row().items_center().justify_between().gap_2()
                                             .child(item_content)
                                             .child(
+                                                // P4: Use pre-computed text_dimmed
                                                 div().flex().flex_row().items_center().gap_2().flex_shrink_0()
-                                                    .child(if let Some(sc) = shortcut { div().text_xs().text_color(rgb(theme_colors.text.dimmed)).child(sc) } else { div() })
+                                                    .child(if let Some(sc) = shortcut { div().text_xs().text_color(rgb(text_dimmed)).child(sc) } else { div() })
                                             )
                                     ),
                             );
@@ -1874,6 +1995,9 @@ impl ScriptListApp {
                 "up" | "arrowup" => {
                     if this.arg_selected_index > 0 {
                         this.arg_selected_index -= 1;
+                        // P0: Scroll to keep selection visible
+                        this.arg_list_scroll_handle.scroll_to_item(this.arg_selected_index, ScrollStrategy::Nearest);
+                        logging::log_debug("SCROLL", &format!("P0: Arg up: selected_index={}", this.arg_selected_index));
                         cx.notify();
                     }
                 }
@@ -1881,6 +2005,9 @@ impl ScriptListApp {
                     let filtered = this.filtered_arg_choices();
                     if this.arg_selected_index < filtered.len().saturating_sub(1) {
                         this.arg_selected_index += 1;
+                        // P0: Scroll to keep selection visible
+                        this.arg_list_scroll_handle.scroll_to_item(this.arg_selected_index, ScrollStrategy::Nearest);
+                        logging::log_debug("SCROLL", &format!("P0: Arg down: selected_index={}", this.arg_selected_index));
                         cx.notify();
                     }
                 }
@@ -1925,51 +2052,82 @@ impl ScriptListApp {
         };
         let input_is_empty = self.arg_input_text.is_empty();
         
-        // Build choice list
-        let mut list_container = div().flex().flex_col().w_full();
+        // P4: Pre-compute theme values for arg prompt
+        let accent_selected = theme.colors.accent.selected;
+        let background_main = theme.colors.background.main;
+        let text_primary = theme.colors.text.primary;
+        let text_secondary = theme.colors.text.secondary;
+        let text_muted = theme.colors.text.muted;
         
-        if filtered_len == 0 {
-            list_container = list_container.child(
-                div()
-                    .w_full()
-                    .py(px(24.))
-                    .text_center()
-                    .text_color(rgb(theme.colors.text.muted))
-                    .child("No choices match your filter"),
-            );
+        // P0: Clone data needed for uniform_list closure
+        let arg_selected_index = self.arg_selected_index;
+        let filtered_choices = self.get_filtered_arg_choices_owned();
+        let filtered_choices_len = filtered_choices.len();
+        logging::log_debug("UI", &format!("P0: Arg prompt has {} filtered choices", filtered_choices_len));
+        
+        // P0: Build virtualized choice list using uniform_list
+        let list_element: AnyElement = if filtered_choices_len == 0 {
+            div()
+                .w_full()
+                .py(px(24.))
+                .text_center()
+                .text_color(rgb(theme.colors.text.muted))
+                .child("No choices match your filter")
+                .into_any_element()
         } else {
-            for (idx, (_, choice)) in filtered.iter().enumerate() {
-                let is_selected = idx == self.arg_selected_index;
-                
-                let mut item = div()
-                    .w_full()
-                    .px(px(12.))
-                    .py(px(8.))
-                    .rounded(px(8.))
-                    .bg(if is_selected { rgb(theme.colors.accent.selected) } else { rgb(theme.colors.background.main) })
-                    .text_color(if is_selected { rgb(theme.colors.text.primary) } else { rgb(theme.colors.text.secondary) })
-                    .child(choice.name.clone());
-                
-                if let Some(desc) = &choice.description {
-                    item = item.child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(theme.colors.text.muted))
-                            .child(desc.clone())
-                    );
-                }
-                
-                list_container = list_container.child(
-                    div().w_full().px(px(12.)).child(item)
-                );
-            }
-        }
+            // P0: Use uniform_list for virtualized scrolling of arg choices
+            uniform_list(
+                "arg-choices",
+                filtered_choices_len,
+                move |visible_range, _window, _cx| {
+                    logging::log_debug("SCROLL", &format!("P0: Arg choices visible range: {:?}", visible_range.clone()));
+                    visible_range.map(|ix| {
+                        if let Some((_, choice)) = filtered_choices.get(ix) {
+                            let is_selected = ix == arg_selected_index;
+                            
+                            // P0: Fixed height items (40px) for uniform_list
+                            let mut item = div()
+                                .id(ix)
+                                .w_full()
+                                .h(px(40.))  // P0: FIXED HEIGHT required for uniform_list
+                                .px(px(12.))
+                                .flex()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .px(px(12.))
+                                        .py(px(8.))
+                                        .rounded(px(8.))
+                                        // P4: Use pre-computed theme values
+                                        .bg(if is_selected { rgb(accent_selected) } else { rgb(background_main) })
+                                        .text_color(if is_selected { rgb(text_primary) } else { rgb(text_secondary) })
+                                        .child(choice.name.clone())
+                                );
+                            
+                            // Note: For uniform_list with fixed height, we skip description 
+                            // to keep items at consistent 40px height
+                            item
+                        } else {
+                            div().id(ix).h(px(40.))
+                        }
+                    }).collect()
+                },
+            )
+            .h_full()
+            .track_scroll(&self.arg_list_scroll_handle)
+            .into_any_element()
+        };
         
         // Use theme opacity and shadow settings
         let opacity = self.theme.get_opacity();
         let bg_hex = theme.colors.background.main;
         let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
         let box_shadows = self.create_box_shadows();
+        
+        // P4: Pre-compute more theme values for the main container
+        let ui_border = theme.colors.ui.border;
+        let text_dimmed = theme.colors.text.dimmed;
         
         div()
             .flex()
@@ -1979,7 +2137,7 @@ impl ScriptListApp {
             .w_full()
             .h_full()
             .rounded(px(12.))
-            .text_color(rgb(theme.colors.text.primary))
+            .text_color(rgb(text_primary))
             .font_family(".AppleSystemUIFont")
             .key_context("arg_prompt")
             .track_focus(&self.focus_handle)
@@ -2001,7 +2159,7 @@ impl ScriptListApp {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .text_color(rgb(theme.colors.accent.selected))
+                            .text_color(rgb(accent_selected))
                             .text_lg()
                             .child("?")
                     )
@@ -2009,13 +2167,13 @@ impl ScriptListApp {
                         div()
                             .flex_1()
                             .text_xl()
-                            .text_color(if input_is_empty { rgb(theme.colors.text.muted) } else { rgb(theme.colors.text.primary) })
+                            .text_color(if input_is_empty { rgb(text_muted) } else { rgb(text_primary) })
                             .child(input_display)
                     )
                     .child(
                         div()
                             .text_sm()
-                            .text_color(rgb(theme.colors.text.dimmed))
+                            .text_color(rgb(text_dimmed))
                             .child(format!("{} choices", choices.len()))
                     ),
             )
@@ -2024,17 +2182,18 @@ impl ScriptListApp {
                 div()
                     .mx(px(16.))
                     .h(px(1.))
-                    .bg(rgba((theme.colors.ui.border << 8) | 0x60))
+                    .bg(rgba((ui_border << 8) | 0x60))
             )
-            // Choice list
+            // P0: Choice list using virtualized uniform_list
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .min_h(px(0.))  // P0: Allow flex container to shrink
                     .w_full()
                     .py(px(4.))
-                    .child(list_container)
+                    .child(list_element)
             )
             // Footer
             .child(
@@ -2043,9 +2202,9 @@ impl ScriptListApp {
                     .px(px(16.))
                     .py(px(10.))
                     .border_t_1()
-                    .border_color(rgba((theme.colors.ui.border << 8) | 0x60))
+                    .border_color(rgba((ui_border << 8) | 0x60))
                     .text_xs()
-                    .text_color(rgb(theme.colors.text.muted))
+                    .text_color(rgb(text_muted))
                     .child("↑↓ navigate • ⏎ select • Esc cancel")
             )
             .into_any_element()

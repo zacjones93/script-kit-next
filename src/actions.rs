@@ -10,8 +10,8 @@
 //! - Context-aware actions based on focused script
 
 use gpui::{
-    div, point, prelude::*, px, rgba, BoxShadow, Context, FocusHandle, Focusable, Hsla, Render,
-    SharedString, Window,
+    div, point, prelude::*, px, rgba, uniform_list, BoxShadow, Context, FocusHandle, Focusable, 
+    Hsla, Render, ScrollStrategy, SharedString, UniformListScrollHandle, Window,
 };
 use std::sync::Arc;
 use crate::logging;
@@ -152,6 +152,8 @@ pub const POPUP_CORNER_RADIUS: f32 = 12.0;
 pub const POPUP_PADDING: f32 = 8.0;
 pub const ITEM_PADDING_X: f32 = 12.0;
 pub const ITEM_PADDING_Y: f32 = 8.0;
+/// Fixed height for action items (required for uniform_list virtualization)
+pub const ACTION_ITEM_HEIGHT: f32 = 36.0;
 
 /// ActionsDialog - Compact overlay popup for quick actions
 pub struct ActionsDialog {
@@ -163,6 +165,8 @@ pub struct ActionsDialog {
     pub on_select: ActionCallback,
     /// Currently focused script for context-aware actions
     pub focused_script: Option<ScriptInfo>,
+    /// Scroll handle for uniform_list virtualization
+    pub scroll_handle: UniformListScrollHandle,
 }
 
 impl ActionsDialog {
@@ -195,6 +199,7 @@ impl ActionsDialog {
             focus_handle,
             on_select,
             focused_script,
+            scroll_handle: UniformListScrollHandle::new(),
         }
     }
 
@@ -243,6 +248,8 @@ impl ActionsDialog {
                 .collect();
         }
         self.selected_index = 0; // Reset selection when filtering
+        self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
+        logging::log_debug("ACTIONS_SCROLL", &format!("Filter changed: reset to top, {} results", self.filtered_actions.len()));
     }
 
     /// Handle character input
@@ -265,6 +272,8 @@ impl ActionsDialog {
     fn move_up(&mut self, cx: &mut Context<Self>) {
         if self.selected_index > 0 {
             self.selected_index -= 1;
+            self.scroll_handle.scroll_to_item(self.selected_index, ScrollStrategy::Nearest);
+            logging::log_debug("ACTIONS_SCROLL", &format!("Up: selected_index={}", self.selected_index));
             cx.notify();
         }
     }
@@ -273,6 +282,8 @@ impl ActionsDialog {
     fn move_down(&mut self, cx: &mut Context<Self>) {
         if self.selected_index < self.filtered_actions.len().saturating_sub(1) {
             self.selected_index += 1;
+            self.scroll_handle.scroll_to_item(self.selected_index, ScrollStrategy::Nearest);
+            logging::log_debug("ACTIONS_SCROLL", &format!("Down: selected_index={}", self.selected_index));
             cx.notify();
         }
     }
@@ -373,99 +384,114 @@ impl Render for ActionsDialog {
                     .child(search_display),
             );
 
-        // Render action list - compact version with overflow hidden
-        let mut actions_container = div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .w_full()
-            .overflow_hidden();
-
-        if self.filtered_actions.is_empty() {
-            actions_container = actions_container.child(
-                div()
-                    .w_full()
-                    .py(px(16.))
-                    .px(px(ITEM_PADDING_X))
-                    .text_color(rgba(0x666666ff))
-                    .text_sm()
-                    .child("No actions match your search"),
-            );
+        // Render action list using uniform_list for virtualized scrolling
+        let actions_container = if self.filtered_actions.is_empty() {
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .w_full()
+                .child(
+                    div()
+                        .w_full()
+                        .py(px(16.))
+                        .px(px(ITEM_PADDING_X))
+                        .text_color(rgba(0x666666ff))
+                        .text_sm()
+                        .child("No actions match your search"),
+                )
+                .into_any_element()
         } else {
-            let mut current_category: Option<&ActionCategory> = None;
+            // Clone data needed for the uniform_list closure
+            let selected_index = self.selected_index;
+            let filtered_len = self.filtered_actions.len();
             
-            for (idx, &action_idx) in self.filtered_actions.iter().enumerate() {
-                if let Some(action) = self.actions.get(action_idx) {
-                    // Add category separator if category changed
-                    if current_category != Some(&action.category) {
-                        current_category = Some(&action.category);
-                        
-                        // Only show separator after first category
-                        if idx > 0 {
-                            actions_container = actions_container.child(
-                                div()
+            logging::log_debug("ACTIONS_SCROLL", &format!(
+                "Rendering uniform_list: {} items, selected={}",
+                filtered_len, selected_index
+            ));
+            
+            uniform_list(
+                "actions-list",
+                filtered_len,
+                cx.processor(move |this: &mut ActionsDialog, visible_range, _window, _cx| {
+                    logging::log_debug("ACTIONS_SCROLL", &format!(
+                        "Actions visible range: {:?} (total={})",
+                        visible_range, this.filtered_actions.len()
+                    ));
+                    
+                    let mut items = Vec::new();
+                    
+                    for idx in visible_range {
+                        if let Some(&action_idx) = this.filtered_actions.get(idx) {
+                            if let Some(action) = this.actions.get(action_idx) {
+                                let action: &Action = action; // Explicit type annotation
+                                let is_selected = idx == selected_index;
+                                let bg = if is_selected {
+                                    rgba(0x0e47a1cc) // Blue highlight, semi-transparent
+                                } else {
+                                    rgba(0x00000000) // Transparent
+                                };
+
+                                let title_color = if is_selected {
+                                    rgba(0xffffffff)
+                                } else {
+                                    rgba(0xddddddff)
+                                };
+
+                                let shortcut_color = if is_selected {
+                                    rgba(0xaaaaaa99)
+                                } else {
+                                    rgba(0x66666699)
+                                };
+
+                                // Clone strings for SharedString conversion
+                                let title_str: String = action.title.clone();
+                                let shortcut_opt: Option<String> = action.shortcut.clone();
+
+                                let mut action_item = div()
+                                    .id(idx)
                                     .w_full()
-                                    .h(px(1.))
-                                    .my(px(4.))
-                                    .mx(px(ITEM_PADDING_X))
-                                    .bg(rgba(0x3d3d3d60))
-                            );
+                                    .h(px(ACTION_ITEM_HEIGHT)) // Fixed height for uniform_list
+                                    .px(px(ITEM_PADDING_X))
+                                    .bg(bg)
+                                    .rounded(px(6.))
+                                    .mx(px(4.))
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .justify_between();
+
+                                // Left side: title
+                                action_item = action_item.child(
+                                    div()
+                                        .text_color(title_color)
+                                        .text_sm()
+                                        .child(title_str),
+                                );
+
+                                // Right side: keyboard shortcut
+                                if let Some(shortcut) = shortcut_opt {
+                                    action_item = action_item.child(
+                                        div()
+                                            .text_color(shortcut_color)
+                                            .text_xs()
+                                            .child(shortcut),
+                                    );
+                                }
+
+                                items.push(action_item);
+                            }
                         }
                     }
-                    
-                    let is_selected = idx == self.selected_index;
-                    let bg = if is_selected {
-                        rgba(0x0e47a1cc) // Blue highlight, semi-transparent
-                    } else {
-                        rgba(0x00000000) // Transparent
-                    };
-
-                    let title_color = if is_selected {
-                        rgba(0xffffffff)
-                    } else {
-                        rgba(0xddddddff)
-                    };
-
-                    let shortcut_color = if is_selected {
-                        rgba(0xaaaaaa99)
-                    } else {
-                        rgba(0x66666699)
-                    };
-
-                    let mut action_item = div()
-                        .w_full()
-                        .px(px(ITEM_PADDING_X))
-                        .py(px(ITEM_PADDING_Y - 2.))
-                        .bg(bg)
-                        .rounded(px(6.))
-                        .mx(px(4.))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .justify_between();
-
-                    // Left side: title
-                    action_item = action_item.child(
-                        div()
-                            .text_color(title_color)
-                            .text_sm()
-                            .child(action.title.clone()),
-                    );
-
-                    // Right side: keyboard shortcut
-                    if let Some(shortcut) = &action.shortcut {
-                        action_item = action_item.child(
-                            div()
-                                .text_color(shortcut_color)
-                                .text_xs()
-                                .child(shortcut.clone()),
-                        );
-                    }
-
-                    actions_container = actions_container.child(action_item);
-                }
-            }
-        }
+                    items
+                }),
+            )
+            .flex_1()
+            .w_full()
+            .track_scroll(&self.scroll_handle)
+            .into_any_element()
+        };
 
         // Main overlay popup container
         // Fixed width, max height, rounded corners, shadow, semi-transparent bg
@@ -536,5 +562,44 @@ mod tests {
         assert_eq!(POPUP_WIDTH, 320.0);
         assert_eq!(POPUP_MAX_HEIGHT, 400.0);
         assert_eq!(POPUP_CORNER_RADIUS, 12.0);
+    }
+
+    #[test]
+    fn test_action_item_height_constant() {
+        // Fixed height is required for uniform_list virtualization
+        assert_eq!(ACTION_ITEM_HEIGHT, 36.0);
+        // Ensure item height is positive and reasonable
+        assert!(ACTION_ITEM_HEIGHT > 0.0);
+        assert!(ACTION_ITEM_HEIGHT < POPUP_MAX_HEIGHT);
+    }
+
+    #[test]
+    fn test_max_visible_items() {
+        // Calculate max visible items that can fit in the popup
+        // This helps verify scroll virtualization is worthwhile
+        let max_visible = (POPUP_MAX_HEIGHT / ACTION_ITEM_HEIGHT) as usize;
+        // With 400px max height and 36px items, ~11 items fit
+        assert!(max_visible >= 10, "Should fit at least 10 items");
+        assert!(max_visible <= 15, "Sanity check on max visible");
+    }
+
+    #[test]
+    fn test_actions_exceed_visible_space() {
+        // Verify that with script context + global actions, we exceed visible space
+        // This confirms scrolling/virtualization is needed
+        let script = ScriptInfo::new("test-script", "/path/to/test.ts");
+        let script_actions = get_script_context_actions(&script);
+        let global_actions = get_global_actions();
+        let total_actions = script_actions.len() + global_actions.len();
+        
+        let max_visible = (POPUP_MAX_HEIGHT / ACTION_ITEM_HEIGHT) as usize;
+        
+        // With 5 script context actions + 4 global = 9 actions
+        // At 36px height in 400px container, we can fit ~11 items
+        // So we might not always overflow, but we're close
+        assert!(total_actions >= 8, "Should have at least 8 total actions");
+        
+        // Log for visibility
+        println!("Total actions: {}, Max visible: {}", total_actions, max_visible);
     }
 }

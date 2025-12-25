@@ -83,3 +83,15 @@ pub fn get_last_logs(n: usize) -> Vec<String> {
 pub fn log_path() -> std::path::PathBuf {
     std::env::temp_dir().join("script-kit-gpui.log")
 }
+
+/// Debug-only logging - compiled out in release builds
+/// Use for verbose performance/scroll/cache logging
+#[cfg(debug_assertions)]
+pub fn log_debug(category: &str, message: &str) {
+    log(category, message);
+}
+
+#[cfg(not(debug_assertions))]
+pub fn log_debug(_category: &str, _message: &str) {
+    // No-op in release builds
+}

@@ -1,3 +1,4 @@
+use gpui::{rgb, rgba, Hsla, Rgba};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
@@ -578,6 +579,150 @@ pub fn load_theme() -> Theme {
     }
 }
 
+// ============================================================================
+// Lightweight Theme Extraction Helpers
+// ============================================================================
+// These structs pre-compute theme values for efficient use in render closures.
+// They implement Copy to avoid heap allocations when captured by closures.
+
+/// Lightweight struct for list item rendering - Copy to avoid clone in closures
+/// 
+/// This struct pre-computes the exact colors needed for rendering list items,
+/// avoiding the need to clone the full ThemeColors struct into render closures.
+/// 
+/// # Example
+/// ```ignore
+/// let list_colors = theme.colors.list_item_colors();
+/// // Pass list_colors into closure - it's Copy, so no heap allocation
+/// uniform_list(cx, |_this, visible_range, _window, _cx| {
+///     for ix in visible_range {
+///         let bg = if is_selected { list_colors.background_selected } else { list_colors.background };
+///         // ... render item
+///     }
+/// })
+/// ```
+#[derive(Copy, Clone, Debug)]
+pub struct ListItemColors {
+    /// Normal item background (usually transparent)
+    pub background: Rgba,
+    /// Background when hovering over an item
+    pub background_hover: Rgba,
+    /// Background when item is selected
+    pub background_selected: Rgba,
+    /// Primary text color (for item names)
+    pub text: Rgba,
+    /// Secondary/muted text color (for descriptions when not selected)
+    pub text_secondary: Rgba,
+    /// Dimmed text color (for shortcuts, metadata)
+    pub text_dimmed: Rgba,
+    /// Accent text color (for descriptions when selected)
+    pub text_accent: Rgba,
+    /// Border color for separators
+    pub border: Rgba,
+}
+
+impl ListItemColors {
+    /// Create ListItemColors from a ColorScheme
+    /// 
+    /// This extracts only the colors needed for list item rendering.
+    pub fn from_color_scheme(colors: &ColorScheme) -> Self {
+        // Pre-compute rgba colors with appropriate alpha values
+        // Background is transparent, hover/selected use subtle colors
+        let selected_subtle = colors.accent.selected_subtle;
+        
+        #[cfg(debug_assertions)]
+        eprintln!("[THEME] Extracting list item colors: selected_subtle=#{:06x}", selected_subtle);
+        
+        ListItemColors {
+            background: rgba(0x00000000),  // Fully transparent
+            background_hover: rgba((selected_subtle << 8) | 0x40),  // 25% opacity
+            background_selected: rgba((selected_subtle << 8) | 0x80),  // 50% opacity
+            text: rgb(colors.text.primary),
+            text_secondary: rgb(colors.text.secondary),
+            text_dimmed: rgb(colors.text.dimmed),
+            text_accent: rgb(colors.accent.selected),
+            border: rgb(colors.ui.border),
+        }
+    }
+    
+    /// Convert a specific color to Hsla for advanced styling
+    pub fn text_as_hsla(&self) -> Hsla {
+        self.text.into()
+    }
+    
+    /// Get description color based on selection state
+    pub fn description_color(&self, is_selected: bool) -> Rgba {
+        if is_selected {
+            self.text_accent
+        } else {
+            self.text_secondary
+        }
+    }
+    
+    /// Get item text color based on selection state
+    pub fn item_text_color(&self, is_selected: bool) -> Rgba {
+        if is_selected {
+            self.text
+        } else {
+            self.text_secondary
+        }
+    }
+}
+
+impl ColorScheme {
+    /// Extract only the colors needed for list item rendering
+    /// 
+    /// This creates a lightweight, Copy struct that can be efficiently
+    /// passed into closures without cloning the full ColorScheme.
+    pub fn list_item_colors(&self) -> ListItemColors {
+        ListItemColors::from_color_scheme(self)
+    }
+}
+
+/// Lightweight struct for input field rendering
+/// 
+/// Pre-computes colors for search boxes, text inputs, etc.
+#[derive(Copy, Clone, Debug)]
+pub struct InputFieldColors {
+    /// Background color of the input
+    pub background: Rgba,
+    /// Text color when typing
+    pub text: Rgba,
+    /// Placeholder text color
+    pub placeholder: Rgba,
+    /// Border color
+    pub border: Rgba,
+    /// Cursor color
+    pub cursor: Rgba,
+}
+
+impl InputFieldColors {
+    /// Create InputFieldColors from a ColorScheme
+    pub fn from_color_scheme(colors: &ColorScheme) -> Self {
+        #[cfg(debug_assertions)]
+        eprintln!("[THEME] Extracting input field colors");
+        
+        InputFieldColors {
+            background: rgba((colors.background.search_box << 8) | 0x80),
+            text: rgb(colors.text.primary),
+            placeholder: rgb(colors.text.muted),
+            border: rgba((colors.ui.border << 8) | 0x60),
+            cursor: rgb(0x00ffff),  // Cyan cursor
+        }
+    }
+}
+
+impl ColorScheme {
+    /// Extract colors for input field rendering
+    pub fn input_field_colors(&self) -> InputFieldColors {
+        InputFieldColors::from_color_scheme(self)
+    }
+}
+
+// ============================================================================
+// End Lightweight Theme Extraction Helpers
+// ============================================================================
+
 /// Log theme configuration for debugging
 fn log_theme_config(theme: &Theme) {
     let opacity = theme.get_opacity();
@@ -695,5 +840,117 @@ mod tests {
         // The result will vary based on the system's actual appearance setting
         let _is_dark = detect_system_appearance();
         // Don't assert a specific value, just ensure it doesn't panic
+    }
+    
+    // ========================================================================
+    // ListItemColors Tests
+    // ========================================================================
+    
+    #[test]
+    fn test_list_item_colors_is_copy() {
+        // Compile-time verification that ListItemColors implements Copy
+        fn assert_copy<T: Copy>() {}
+        assert_copy::<ListItemColors>();
+    }
+    
+    #[test]
+    fn test_list_item_colors_from_dark_scheme() {
+        let scheme = ColorScheme::dark_default();
+        let colors = scheme.list_item_colors();
+        
+        // Verify background is transparent
+        assert_eq!(colors.background.a, 0.0);
+        
+        // Verify hover and selected have some opacity (not transparent)
+        assert!(colors.background_hover.a > 0.0);
+        assert!(colors.background_selected.a > 0.0);
+        
+        // Verify selected has more opacity than hover
+        assert!(colors.background_selected.a > colors.background_hover.a);
+    }
+    
+    #[test]
+    fn test_list_item_colors_from_light_scheme() {
+        let scheme = ColorScheme::light_default();
+        let colors = scheme.list_item_colors();
+        
+        // Verify we get colors from light scheme
+        // Light scheme uses 0xe8e8e8 for selected_subtle
+        assert!(colors.background_selected.a > 0.0);
+    }
+    
+    #[test]
+    fn test_list_item_colors_description_color() {
+        let scheme = ColorScheme::dark_default();
+        let colors = scheme.list_item_colors();
+        
+        let selected_desc = colors.description_color(true);
+        let unselected_desc = colors.description_color(false);
+        
+        // Selected should use accent, unselected should use secondary
+        // These should be different colors
+        assert_ne!(selected_desc.r, unselected_desc.r);
+    }
+    
+    #[test]
+    fn test_list_item_colors_item_text_color() {
+        let scheme = ColorScheme::dark_default();
+        let colors = scheme.list_item_colors();
+        
+        let selected_text = colors.item_text_color(true);
+        let unselected_text = colors.item_text_color(false);
+        
+        // For dark theme, selected should be primary (white), unselected secondary
+        assert!(selected_text.r >= unselected_text.r);
+    }
+    
+    #[test]
+    fn test_list_item_colors_text_as_hsla() {
+        let scheme = ColorScheme::dark_default();
+        let colors = scheme.list_item_colors();
+        
+        let hsla = colors.text_as_hsla();
+        
+        // Dark theme primary text is white (0xffffff)
+        // White should have high lightness
+        assert!(hsla.l > 0.9);
+    }
+    
+    // ========================================================================
+    // InputFieldColors Tests
+    // ========================================================================
+    
+    #[test]
+    fn test_input_field_colors_is_copy() {
+        // Compile-time verification that InputFieldColors implements Copy
+        fn assert_copy<T: Copy>() {}
+        assert_copy::<InputFieldColors>();
+    }
+    
+    #[test]
+    fn test_input_field_colors_from_scheme() {
+        let scheme = ColorScheme::dark_default();
+        let colors = scheme.input_field_colors();
+        
+        // Background should have some alpha (semi-transparent)
+        assert!(colors.background.a > 0.0);
+        assert!(colors.background.a < 1.0);
+        
+        // Border should have some alpha
+        assert!(colors.border.a > 0.0);
+        
+        // Text should be fully opaque
+        assert_eq!(colors.text.a, 1.0);
+    }
+    
+    #[test]
+    fn test_input_field_cursor_color() {
+        let scheme = ColorScheme::dark_default();
+        let colors = scheme.input_field_colors();
+        
+        // Cursor should be cyan (0x00ffff)
+        // In rgba, cyan has g=1.0, b=1.0, r=0.0
+        assert!(colors.cursor.g > 0.9);
+        assert!(colors.cursor.b > 0.9);
     }
 }
