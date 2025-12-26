@@ -613,29 +613,29 @@ impl ScriptListApp {
     
     /// Switch to a different design variant
     /// 
-    /// This allows hot-swapping between design styles without restarting.
-    /// Use Cmd+1 through Cmd+0 to switch designs.
-    fn switch_design(&mut self, variant: DesignVariant, cx: &mut Context<Self>) {
+    /// Cycle to the next design variant.
+    /// Use Cmd+1 to cycle through all designs.
+    fn cycle_design(&mut self, cx: &mut Context<Self>) {
         let old_design = self.current_design;
-        if old_design != variant {
-            logging::log("DESIGN", &format!(
-                "Switching design: {:?} -> {:?} (shortcut: Cmd+{})",
-                old_design, 
-                variant,
-                variant.shortcut_number().map(|n| n.to_string()).unwrap_or_else(|| "?".to_string())
-            ));
-            logging::log("DESIGN", &format!(
-                "Design '{}': {}",
-                variant.name(),
-                variant.description()
-            ));
-            self.current_design = variant;
-            // Force a full re-render with the new design
-            cx.notify();
-            logging::log("DESIGN", "Design switch complete, UI notified");
-        } else {
-            logging::log_debug("DESIGN", &format!("Design {:?} already active, no switch needed", variant));
-        }
+        let new_design = old_design.next();
+        let all_designs = DesignVariant::all();
+        let current_idx = all_designs.iter().position(|&v| v == new_design).unwrap_or(0);
+        
+        logging::log("DESIGN", &format!(
+            "Cycling design: {} -> {} ({}/{})",
+            old_design.name(),
+            new_design.name(),
+            current_idx + 1,
+            all_designs.len()
+        ));
+        logging::log("DESIGN", &format!(
+            "Design '{}': {}",
+            new_design.name(),
+            new_design.description()
+        ));
+        
+        self.current_design = new_design;
+        cx.notify();
     }
     
     /// Show an error notification to the user
@@ -2081,65 +2081,9 @@ impl ScriptListApp {
                         this.toggle_actions(cx, window); 
                         return; 
                     }
-                    // Cmd+1 through Cmd+0 for design switching
+                    // Cmd+1 cycles through all designs
                     "1" => {
-                        if let Some(variant) = DesignVariant::from_keyboard_number(1) {
-                            this.switch_design(variant, cx);
-                        }
-                        return;
-                    }
-                    "2" => {
-                        if let Some(variant) = DesignVariant::from_keyboard_number(2) {
-                            this.switch_design(variant, cx);
-                        }
-                        return;
-                    }
-                    "3" => {
-                        if let Some(variant) = DesignVariant::from_keyboard_number(3) {
-                            this.switch_design(variant, cx);
-                        }
-                        return;
-                    }
-                    "4" => {
-                        if let Some(variant) = DesignVariant::from_keyboard_number(4) {
-                            this.switch_design(variant, cx);
-                        }
-                        return;
-                    }
-                    "5" => {
-                        if let Some(variant) = DesignVariant::from_keyboard_number(5) {
-                            this.switch_design(variant, cx);
-                        }
-                        return;
-                    }
-                    "6" => {
-                        if let Some(variant) = DesignVariant::from_keyboard_number(6) {
-                            this.switch_design(variant, cx);
-                        }
-                        return;
-                    }
-                    "7" => {
-                        if let Some(variant) = DesignVariant::from_keyboard_number(7) {
-                            this.switch_design(variant, cx);
-                        }
-                        return;
-                    }
-                    "8" => {
-                        if let Some(variant) = DesignVariant::from_keyboard_number(8) {
-                            this.switch_design(variant, cx);
-                        }
-                        return;
-                    }
-                    "9" => {
-                        if let Some(variant) = DesignVariant::from_keyboard_number(9) {
-                            this.switch_design(variant, cx);
-                        }
-                        return;
-                    }
-                    "0" => {
-                        if let Some(variant) = DesignVariant::from_keyboard_number(0) {
-                            this.switch_design(variant, cx);
-                        }
+                        this.cycle_design(cx);
                         return;
                     }
                     _ => {}

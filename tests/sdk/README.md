@@ -26,6 +26,7 @@ cargo build && ./target/debug/script-kit-gpui tests/sdk/test-arg.ts
 | `test-arg.ts` | `arg()` | Choice prompts with string and structured choices |
 | `test-div.ts` | `div()` | HTML content display |
 | `test-md.ts` | `md()` | Markdown to HTML conversion |
+| `test-term.ts` | `term()` | Interactive terminal with optional command |
 
 ## Output Format
 
@@ -62,9 +63,13 @@ Running: tests/sdk/test-md.ts
   ✅ md-formatting (3ms)
   ✅ md-lists (4ms)
 
+Running: tests/sdk/test-term.ts
+  ✅ term-with-command (102ms)
+  ✅ term-interactive (85ms)
+
 ════════════════════════════════════════════════════════════
-Results: 6 passed, 0 failed, 0 skipped
-Total time: 117ms
+Results: 8 passed, 0 failed, 0 skipped
+Total time: 304ms
 ```
 
 ## Writing New Tests
