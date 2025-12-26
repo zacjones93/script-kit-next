@@ -287,58 +287,6 @@ pub fn read_scriptlets() -> Vec<Scriptlet> {
     debug!(count = scriptlets.len(), "Loaded scriptlets from all .md files");
     scriptlets
 }
-    };
-
-    let scriptlets_file = home.join(".kenv/scriptlets/scriptlets.md");
-
-    // Check if file exists
-    if !scriptlets_file.exists() {
-        debug!(path = %scriptlets_file.display(), "Scriptlets file does not exist");
-        return vec![];
-    }
-
-    match fs::read_to_string(&scriptlets_file) {
-        Ok(content) => {
-            let mut scriptlets = Vec::new();
-
-            // Split by ## headings
-            let mut current_section = String::new();
-            for line in content.lines() {
-                if line.starts_with("##") && !current_section.is_empty() {
-                    // Parse previous section
-                    if let Some(scriptlet) = parse_scriptlet_section(&current_section) {
-                        scriptlets.push(scriptlet);
-                    }
-                    current_section = line.to_string();
-                } else {
-                    current_section.push('\n');
-                    current_section.push_str(line);
-                }
-            }
-
-            // Parse the last section
-            if !current_section.is_empty() {
-                if let Some(scriptlet) = parse_scriptlet_section(&current_section) {
-                    scriptlets.push(scriptlet);
-                }
-            }
-
-            // Sort by name
-            scriptlets.sort_by(|a, b| a.name.cmp(&b.name));
-
-            debug!(count = scriptlets.len(), "Loaded scriptlets");
-            scriptlets
-        }
-        Err(e) => {
-            warn!(
-                error = %e,
-                path = %scriptlets_file.display(),
-                "Failed to read scriptlets file"
-            );
-            vec![]
-        }
-    }
-}
 
 /// Reads scripts from ~/.kenv/scripts directory
 /// Returns a sorted list of Script structs for .ts and .js files

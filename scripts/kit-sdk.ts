@@ -5,6 +5,11 @@ import * as fs from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 
 // =============================================================================
+// SDK Version - Used to verify correct version is loaded
+// =============================================================================
+export const SDK_VERSION = '0.2.0';
+
+// =============================================================================
 // Types
 // =============================================================================
 
@@ -319,12 +324,23 @@ interface ClipboardMessage {
 
 interface SetSelectedTextMessage {
   type: 'setSelectedText';
+  requestId: string;
   text: string;
 }
 
 interface GetSelectedTextMessage {
   type: 'getSelectedText';
-  id: string;
+  requestId: string;
+}
+
+interface CheckAccessibilityMessage {
+  type: 'checkAccessibility';
+  requestId: string;
+}
+
+interface RequestAccessibilityMessage {
+  type: 'requestAccessibility';
+  requestId: string;
 }
 
 interface KeyboardMessage {
@@ -700,16 +716,41 @@ declare global {
   function paste(): Promise<string>;
   
   /**
-   * Set selected text (simulates paste at cursor)
-   * @param text - Text to insert
+   * Replace the currently selected text in the focused application.
+   * Uses macOS Accessibility APIs for reliability (95%+ of apps).
+   * Falls back to clipboard simulation for apps that block accessibility.
+   * 
+   * @param text - The text to insert (replaces selection)
+   * @throws If accessibility permission not granted
+   * @throws If paste operation fails
    */
   function setSelectedText(text: string): Promise<void>;
   
   /**
-   * Get selected text (simulates copy from selection)
-   * @returns Selected text
+   * Get the currently selected text from the focused application.
+   * Uses macOS Accessibility APIs for reliability (95%+ of apps).
+   * Falls back to clipboard simulation for apps that block accessibility.
+   * 
+   * @returns The selected text, or empty string if nothing selected
+   * @throws If accessibility permission not granted
    */
   function getSelectedText(): Promise<string>;
+  
+  /**
+   * Check if accessibility permission is granted.
+   * Required for getSelectedText and setSelectedText to work reliably.
+   * 
+   * @returns true if permission granted, false otherwise
+   */
+  function hasAccessibilityPermission(): Promise<boolean>;
+  
+  /**
+   * Request accessibility permission (opens System Preferences).
+   * User must manually grant permission in System Preferences > Privacy & Security > Accessibility.
+   * 
+   * @returns true if permission was granted after request, false otherwise
+   */
+  function requestAccessibilityPermission(): Promise<boolean>;
   
   /**
    * Clipboard API object
@@ -1468,21 +1509,93 @@ globalThis.menu = async function menu(icon: string, scripts?: string[]): Promise
   send(message);
 };
 
-// Text operations that need responses
+/**
+ * Replace the currently selected text in the focused application.
+ * Uses macOS Accessibility APIs for reliability (95%+ of apps).
+ * Falls back to clipboard simulation for apps that block accessibility.
+ * 
+ * @param text - The text to insert (replaces selection)
+ * @throws If accessibility permission not granted
+ * @throws If paste operation fails
+ */
 globalThis.setSelectedText = async function setSelectedText(text: string): Promise<void> {
-  const message: SetSelectedTextMessage = { type: 'setSelectedText', text };
-  send(message);
+  const id = nextId();
+  
+  return new Promise((resolve, reject) => {
+    pending.set(id, (msg: SubmitMessage) => {
+      // Check if there was an error
+      if (msg.value && msg.value.startsWith('ERROR:')) {
+        reject(new Error(msg.value.substring(6).trim()));
+      } else {
+        resolve();
+      }
+    });
+    
+    const message: SetSelectedTextMessage = { type: 'setSelectedText', requestId: id, text };
+    send(message);
+  });
 };
 
+/**
+ * Get the currently selected text from the focused application.
+ * Uses macOS Accessibility APIs for reliability (95%+ of apps).
+ * Falls back to clipboard simulation for apps that block accessibility.
+ * 
+ * @returns The selected text, or empty string if nothing selected
+ * @throws If accessibility permission not granted
+ */
 globalThis.getSelectedText = async function getSelectedText(): Promise<string> {
+  const id = nextId();
+  
+  return new Promise((resolve, reject) => {
+    pending.set(id, (msg: SubmitMessage) => {
+      // Check if there was an error
+      if (msg.value && msg.value.startsWith('ERROR:')) {
+        reject(new Error(msg.value.substring(6).trim()));
+      } else {
+        resolve(msg.value ?? '');
+      }
+    });
+    
+    const message: GetSelectedTextMessage = { type: 'getSelectedText', requestId: id };
+    send(message);
+  });
+};
+
+/**
+ * Check if accessibility permission is granted.
+ * Required for getSelectedText and setSelectedText to work reliably.
+ * 
+ * @returns true if permission granted, false otherwise
+ */
+globalThis.hasAccessibilityPermission = async function hasAccessibilityPermission(): Promise<boolean> {
   const id = nextId();
   
   return new Promise((resolve) => {
     pending.set(id, (msg: SubmitMessage) => {
-      resolve(msg.value ?? '');
+      resolve(msg.value === 'true');
     });
     
-    const message: GetSelectedTextMessage = { type: 'getSelectedText', id };
+    const message: CheckAccessibilityMessage = { type: 'checkAccessibility', requestId: id };
+    send(message);
+  });
+};
+
+/**
+ * Request accessibility permission (opens System Preferences).
+ * User must manually grant permission in System Preferences > Privacy & Security > Accessibility.
+ * 
+ * @returns true if permission was granted after request, false otherwise
+ */
+globalThis.requestAccessibilityPermission = async function requestAccessibilityPermission(): Promise<boolean> {
+  const id = nextId();
+  
+  return new Promise((resolve) => {
+    pending.set(id, (msg: SubmitMessage) => {
+      resolve(msg.value === 'true');
+    });
+    
+    const message: RequestAccessibilityMessage = { type: 'requestAccessibility', requestId: id };
     send(message);
   });
 };

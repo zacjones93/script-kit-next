@@ -16,6 +16,7 @@ pub mod perf;
 pub mod protocol;
 pub mod prompts;
 pub mod scripts;
+pub mod selected_text;
 pub mod term_prompt;
 pub mod syntax;
 pub mod terminal;

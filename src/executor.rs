@@ -4,7 +4,11 @@ use std::io::{Write, BufReader};
 use std::time::Instant;
 use crate::protocol::{Message, JsonlReader, serialize_message};
 use crate::logging;
-use tracing::{info, error, debug, instrument};
+use tracing::{info, error, debug, warn, instrument};
+
+// Conditionally import selected_text for macOS only
+#[cfg(target_os = "macos")]
+use crate::selected_text;
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -61,15 +65,16 @@ fn ensure_sdk_extracted() -> Option<PathBuf> {
         }
     }
     
-    // Write if missing (always write to ensure latest version)
-    // In production, we might want to add version checking
-    if !sdk_path.exists() {
-        if let Err(e) = std::fs::write(&sdk_path, EMBEDDED_SDK) {
-            logging::log("EXEC", &format!("Failed to write SDK: {}", e));
-            return None;
-        }
-        logging::log("EXEC", &format!("Extracted SDK to {}", sdk_path.display()));
+    // Always write embedded SDK to ensure latest version
+    // The embedded SDK is compiled into the binary via include_str!
+    if let Err(e) = std::fs::write(&sdk_path, EMBEDDED_SDK) {
+        logging::log("EXEC", &format!("Failed to write SDK: {}", e));
+        return None;
     }
+    
+    // Log SDK info for debugging
+    let sdk_len = EMBEDDED_SDK.len();
+    logging::log("EXEC", &format!("Extracted SDK to {} ({} bytes)", sdk_path.display(), sdk_len));
     
     Some(sdk_path)
 }
@@ -654,6 +659,165 @@ fn is_javascript(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+// ============================================================================
+// Selected Text Message Handlers
+// ============================================================================
+
+/// Result of handling a selected text message
+#[derive(Debug)]
+pub enum SelectedTextHandleResult {
+    /// Message was handled, here's the response to send back
+    Handled(Message),
+    /// Message was not a selected text operation
+    NotHandled,
+}
+
+/// Handle selected text protocol messages.
+///
+/// This function checks if a message is a selected text operation and handles it
+/// by calling the appropriate selected_text module functions.
+///
+/// # Arguments
+/// * `msg` - The incoming message to potentially handle
+///
+/// # Returns
+/// * `SelectedTextHandleResult::Handled(response)` - Message was handled, send response back
+/// * `SelectedTextHandleResult::NotHandled` - Message was not a selected text operation
+///
+/// # Example
+/// ```ignore
+/// match handle_selected_text_message(&msg) {
+///     SelectedTextHandleResult::Handled(response) => {
+///         send_response(response);
+///     }
+///     SelectedTextHandleResult::NotHandled => {
+///         // Handle as other message type
+///     }
+/// }
+/// ```
+#[instrument(skip_all)]
+pub fn handle_selected_text_message(msg: &Message) -> SelectedTextHandleResult {
+    match msg {
+        Message::GetSelectedText { request_id } => {
+            debug!(request_id = %request_id, "Handling GetSelectedText");
+            let response = handle_get_selected_text(request_id);
+            SelectedTextHandleResult::Handled(response)
+        }
+        Message::SetSelectedText { text, request_id } => {
+            debug!(request_id = %request_id, text_len = text.len(), "Handling SetSelectedText");
+            let response = handle_set_selected_text(text, request_id);
+            SelectedTextHandleResult::Handled(response)
+        }
+        Message::CheckAccessibility { request_id } => {
+            debug!(request_id = %request_id, "Handling CheckAccessibility");
+            let response = handle_check_accessibility(request_id);
+            SelectedTextHandleResult::Handled(response)
+        }
+        Message::RequestAccessibility { request_id } => {
+            debug!(request_id = %request_id, "Handling RequestAccessibility");
+            let response = handle_request_accessibility(request_id);
+            SelectedTextHandleResult::Handled(response)
+        }
+        _ => SelectedTextHandleResult::NotHandled,
+    }
+}
+
+/// Handle GET_SELECTED_TEXT request
+#[cfg(target_os = "macos")]
+fn handle_get_selected_text(request_id: &str) -> Message {
+    logging::log("EXEC", &format!("GetSelectedText request: {}", request_id));
+    
+    match selected_text::get_selected_text() {
+        Ok(text) => {
+            info!(request_id = %request_id, text_len = text.len(), "Got selected text");
+            logging::log("EXEC", &format!("GetSelectedText success: {} chars", text.len()));
+            // Return as Submit message so SDK pending map can match by id
+            Message::Submit { id: request_id.to_string(), value: Some(text) }
+        }
+        Err(e) => {
+            warn!(request_id = %request_id, error = %e, "Failed to get selected text");
+            logging::log("EXEC", &format!("GetSelectedText error: {}", e));
+            // Return error prefixed with ERROR: so SDK can detect and reject
+            Message::Submit { id: request_id.to_string(), value: Some(format!("ERROR: {}", e)) }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn handle_get_selected_text(request_id: &str) -> Message {
+    logging::log("EXEC", &format!("GetSelectedText request: {} (not supported on this platform)", request_id));
+    warn!(request_id = %request_id, "Selected text not supported on this platform");
+    Message::Submit { id: request_id.to_string(), value: Some(String::new()) }
+}
+
+/// Handle SET_SELECTED_TEXT request
+#[cfg(target_os = "macos")]
+fn handle_set_selected_text(text: &str, request_id: &str) -> Message {
+    logging::log("EXEC", &format!("SetSelectedText request: {} ({} chars)", request_id, text.len()));
+    
+    match selected_text::set_selected_text(text) {
+        Ok(()) => {
+            info!(request_id = %request_id, "Set selected text successfully");
+            logging::log("EXEC", "SetSelectedText success");
+            // Return success as Submit with empty value
+            Message::Submit { id: request_id.to_string(), value: None }
+        }
+        Err(e) => {
+            warn!(request_id = %request_id, error = %e, "Failed to set selected text");
+            logging::log("EXEC", &format!("SetSelectedText error: {}", e));
+            // Return error prefixed with ERROR: so SDK can detect and reject
+            Message::Submit { id: request_id.to_string(), value: Some(format!("ERROR: {}", e)) }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn handle_set_selected_text(_text: &str, request_id: &str) -> Message {
+    logging::log("EXEC", &format!("SetSelectedText request: {} (not supported on this platform)", request_id));
+    warn!(request_id = %request_id, "Selected text not supported on this platform");
+    Message::Submit { id: request_id.to_string(), value: Some("ERROR: Not supported on this platform".to_string()) }
+}
+
+/// Handle CHECK_ACCESSIBILITY request
+#[cfg(target_os = "macos")]
+fn handle_check_accessibility(request_id: &str) -> Message {
+    logging::log("EXEC", &format!("CheckAccessibility request: {}", request_id));
+    
+    let granted = selected_text::has_accessibility_permission();
+    info!(request_id = %request_id, granted = granted, "Checked accessibility permission");
+    logging::log("EXEC", &format!("CheckAccessibility: granted={}", granted));
+    
+    // Return as Submit with "true" or "false" string value
+    Message::Submit { id: request_id.to_string(), value: Some(granted.to_string()) }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn handle_check_accessibility(request_id: &str) -> Message {
+    logging::log("EXEC", &format!("CheckAccessibility request: {} (not supported on this platform)", request_id));
+    // On non-macOS, report as "not granted" since the feature isn't available
+    Message::Submit { id: request_id.to_string(), value: Some("false".to_string()) }
+}
+
+/// Handle REQUEST_ACCESSIBILITY request
+#[cfg(target_os = "macos")]
+fn handle_request_accessibility(request_id: &str) -> Message {
+    logging::log("EXEC", &format!("RequestAccessibility request: {}", request_id));
+    
+    let granted = selected_text::request_accessibility_permission();
+    info!(request_id = %request_id, granted = granted, "Requested accessibility permission");
+    logging::log("EXEC", &format!("RequestAccessibility: granted={}", granted));
+    
+    // Return as Submit with "true" or "false" string value
+    Message::Submit { id: request_id.to_string(), value: Some(granted.to_string()) }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn handle_request_accessibility(request_id: &str) -> Message {
+    logging::log("EXEC", &format!("RequestAccessibility request: {} (not supported on this platform)", request_id));
+    // On non-macOS, can't request permissions
+    Message::Submit { id: request_id.to_string(), value: Some("false".to_string()) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -818,5 +982,139 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(100));
             assert!(!split.is_running());
         }
+    }
+
+    // ============================================================
+    // Selected Text Handler Tests
+    // ============================================================
+
+    use crate::protocol::Message;
+    use super::{handle_selected_text_message, SelectedTextHandleResult};
+
+    #[test]
+    fn test_handle_get_selected_text_returns_handled() {
+        let msg = Message::get_selected_text("req-001".to_string());
+        let result = handle_selected_text_message(&msg);
+        
+        match result {
+            SelectedTextHandleResult::Handled(response) => {
+                // Response should be Submit message (for SDK compatibility)
+                match response {
+                    Message::Submit { id, .. } => {
+                        assert_eq!(id, "req-001");
+                    }
+                    _ => panic!("Expected Submit response, got {:?}", response),
+                }
+            }
+            SelectedTextHandleResult::NotHandled => {
+                panic!("Expected message to be handled");
+            }
+        }
+    }
+
+    #[test]
+    fn test_handle_set_selected_text_returns_handled() {
+        let msg = Message::set_selected_text_msg("test text".to_string(), "req-002".to_string());
+        let result = handle_selected_text_message(&msg);
+        
+        match result {
+            SelectedTextHandleResult::Handled(response) => {
+                // Response should be Submit message (for SDK compatibility)
+                match response {
+                    Message::Submit { id, .. } => {
+                        assert_eq!(id, "req-002");
+                    }
+                    _ => panic!("Expected Submit response, got {:?}", response),
+                }
+            }
+            SelectedTextHandleResult::NotHandled => {
+                panic!("Expected message to be handled");
+            }
+        }
+    }
+
+    #[test]
+    fn test_handle_check_accessibility_returns_handled() {
+        let msg = Message::check_accessibility("req-003".to_string());
+        let result = handle_selected_text_message(&msg);
+        
+        match result {
+            SelectedTextHandleResult::Handled(response) => {
+                // Response should be Submit message with "true" or "false" value
+                match response {
+                    Message::Submit { id, value } => {
+                        assert_eq!(id, "req-003");
+                        // value should be "true" or "false"
+                        assert!(value == Some("true".to_string()) || value == Some("false".to_string()));
+                    }
+                    _ => panic!("Expected Submit response, got {:?}", response),
+                }
+            }
+            SelectedTextHandleResult::NotHandled => {
+                panic!("Expected message to be handled");
+            }
+        }
+    }
+
+    #[test]
+    fn test_handle_request_accessibility_returns_handled() {
+        let msg = Message::request_accessibility("req-004".to_string());
+        let result = handle_selected_text_message(&msg);
+        
+        match result {
+            SelectedTextHandleResult::Handled(response) => {
+                // Response should be Submit message with "true" or "false" value
+                match response {
+                    Message::Submit { id, value } => {
+                        assert_eq!(id, "req-004");
+                        // value should be "true" or "false"
+                        assert!(value == Some("true".to_string()) || value == Some("false".to_string()));
+                    }
+                    _ => panic!("Expected Submit response, got {:?}", response),
+                }
+            }
+            SelectedTextHandleResult::NotHandled => {
+                panic!("Expected message to be handled");
+            }
+        }
+    }
+
+    #[test]
+    fn test_unrelated_message_returns_not_handled() {
+        let msg = Message::beep();
+        let result = handle_selected_text_message(&msg);
+        
+        match result {
+            SelectedTextHandleResult::Handled(_) => {
+                panic!("Expected message to not be handled");
+            }
+            SelectedTextHandleResult::NotHandled => {
+                // Expected
+            }
+        }
+    }
+
+    #[test]
+    fn test_arg_message_returns_not_handled() {
+        let msg = Message::arg("1".to_string(), "Pick".to_string(), vec![]);
+        let result = handle_selected_text_message(&msg);
+        
+        match result {
+            SelectedTextHandleResult::Handled(_) => {
+                panic!("Expected message to not be handled");
+            }
+            SelectedTextHandleResult::NotHandled => {
+                // Expected
+            }
+        }
+    }
+
+    #[test]
+    fn test_response_messages_not_handled() {
+        // Response messages shouldn't be handled (they're outgoing, not incoming)
+        // Submit messages are responses, so they should not be handled
+        let msg1 = Message::Submit { id: "req-x".to_string(), value: Some("text".to_string()) };
+        
+        assert!(matches!(handle_selected_text_message(&msg1), SelectedTextHandleResult::NotHandled));
     }
 }

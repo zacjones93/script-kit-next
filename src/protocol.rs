@@ -424,6 +424,69 @@ pub enum Message {
     /// Set prompt HTML content
     #[serde(rename = "setPrompt")]
     SetPrompt { html: String },
+
+    // ============================================================
+    // SELECTED TEXT OPERATIONS
+    // ============================================================
+
+    /// Get currently selected text from focused application
+    #[serde(rename = "getSelectedText")]
+    GetSelectedText {
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+
+    /// Set (replace) currently selected text in focused application
+    #[serde(rename = "setSelectedText")]
+    SetSelectedText {
+        text: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+
+    /// Check if accessibility permissions are granted
+    #[serde(rename = "checkAccessibility")]
+    CheckAccessibility {
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+
+    /// Request accessibility permissions (shows system dialog)
+    #[serde(rename = "requestAccessibility")]
+    RequestAccessibility {
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+
+    // ============================================================
+    // SELECTED TEXT RESPONSES
+    // ============================================================
+
+    /// Response with selected text
+    #[serde(rename = "selectedText")]
+    SelectedText {
+        text: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+
+    /// Response after setting text
+    #[serde(rename = "textSet")]
+    TextSet {
+        success: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+
+    /// Response with accessibility permission status
+    #[serde(rename = "accessibilityStatus")]
+    AccessibilityStatus {
+        granted: bool,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
 }
 
 impl Message {
@@ -514,6 +577,14 @@ impl Message {
             Message::SetPanel { .. } => None,
             Message::SetPreview { .. } => None,
             Message::SetPrompt { .. } => None,
+            // Selected text operations (use request_id)
+            Message::GetSelectedText { request_id, .. } => Some(request_id),
+            Message::SetSelectedText { request_id, .. } => Some(request_id),
+            Message::CheckAccessibility { request_id, .. } => Some(request_id),
+            Message::RequestAccessibility { request_id, .. } => Some(request_id),
+            Message::SelectedText { request_id, .. } => Some(request_id),
+            Message::TextSet { request_id, .. } => Some(request_id),
+            Message::AccessibilityStatus { request_id, .. } => Some(request_id),
         }
     }
 
@@ -743,6 +814,61 @@ impl Message {
     /// Create a set prompt message
     pub fn set_prompt(html: String) -> Self {
         Message::SetPrompt { html }
+    }
+
+    // ============================================================
+    // Constructor methods for selected text operations
+    // ============================================================
+
+    /// Create a get selected text request
+    pub fn get_selected_text(request_id: String) -> Self {
+        Message::GetSelectedText { request_id }
+    }
+
+    /// Create a set selected text request
+    pub fn set_selected_text_msg(text: String, request_id: String) -> Self {
+        Message::SetSelectedText { text, request_id }
+    }
+
+    /// Create a check accessibility request
+    pub fn check_accessibility(request_id: String) -> Self {
+        Message::CheckAccessibility { request_id }
+    }
+
+    /// Create a request accessibility request
+    pub fn request_accessibility(request_id: String) -> Self {
+        Message::RequestAccessibility { request_id }
+    }
+
+    /// Create a selected text response
+    pub fn selected_text_response(text: String, request_id: String) -> Self {
+        Message::SelectedText { text, request_id }
+    }
+
+    /// Create a text set response (success)
+    pub fn text_set_success(request_id: String) -> Self {
+        Message::TextSet {
+            success: true,
+            error: None,
+            request_id,
+        }
+    }
+
+    /// Create a text set response (error)
+    pub fn text_set_error(error: String, request_id: String) -> Self {
+        Message::TextSet {
+            success: false,
+            error: Some(error),
+            request_id,
+        }
+    }
+
+    /// Create an accessibility status response
+    pub fn accessibility_status(granted: bool, request_id: String) -> Self {
+        Message::AccessibilityStatus {
+            granted,
+            request_id,
+        }
     }
 }
 
@@ -1939,5 +2065,197 @@ mod tests {
         // Should be EOF
         let msg3 = reader.next_message_graceful().unwrap();
         assert!(msg3.is_none());
+    }
+
+    // ============================================================
+    // SELECTED TEXT OPERATION TESTS
+    // ============================================================
+
+    #[test]
+    fn test_serialize_get_selected_text() {
+        let msg = Message::get_selected_text("req-123".to_string());
+        let json = serialize_message(&msg).unwrap();
+        assert!(json.contains("\"type\":\"getSelectedText\""));
+        assert!(json.contains("\"requestId\":\"req-123\""));
+    }
+
+    #[test]
+    fn test_parse_get_selected_text() {
+        let json = r#"{"type":"getSelectedText","requestId":"req-456"}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::GetSelectedText { request_id } => {
+                assert_eq!(request_id, "req-456");
+            }
+            _ => panic!("Expected GetSelectedText message"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_set_selected_text() {
+        let msg = Message::set_selected_text_msg("Hello World".to_string(), "req-789".to_string());
+        let json = serialize_message(&msg).unwrap();
+        assert!(json.contains("\"type\":\"setSelectedText\""));
+        assert!(json.contains("\"text\":\"Hello World\""));
+        assert!(json.contains("\"requestId\":\"req-789\""));
+    }
+
+    #[test]
+    fn test_parse_set_selected_text() {
+        let json = r#"{"type":"setSelectedText","text":"New text","requestId":"req-abc"}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::SetSelectedText { text, request_id } => {
+                assert_eq!(text, "New text");
+                assert_eq!(request_id, "req-abc");
+            }
+            _ => panic!("Expected SetSelectedText message"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_check_accessibility() {
+        let msg = Message::check_accessibility("req-check".to_string());
+        let json = serialize_message(&msg).unwrap();
+        assert!(json.contains("\"type\":\"checkAccessibility\""));
+        assert!(json.contains("\"requestId\":\"req-check\""));
+    }
+
+    #[test]
+    fn test_parse_check_accessibility() {
+        let json = r#"{"type":"checkAccessibility","requestId":"req-check-2"}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::CheckAccessibility { request_id } => {
+                assert_eq!(request_id, "req-check-2");
+            }
+            _ => panic!("Expected CheckAccessibility message"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_request_accessibility() {
+        let msg = Message::request_accessibility("req-request".to_string());
+        let json = serialize_message(&msg).unwrap();
+        assert!(json.contains("\"type\":\"requestAccessibility\""));
+        assert!(json.contains("\"requestId\":\"req-request\""));
+    }
+
+    #[test]
+    fn test_parse_request_accessibility() {
+        let json = r#"{"type":"requestAccessibility","requestId":"req-request-2"}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::RequestAccessibility { request_id } => {
+                assert_eq!(request_id, "req-request-2");
+            }
+            _ => panic!("Expected RequestAccessibility message"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_selected_text_response() {
+        let msg = Message::selected_text_response("Selected content".to_string(), "req-111".to_string());
+        let json = serialize_message(&msg).unwrap();
+        assert!(json.contains("\"type\":\"selectedText\""));
+        assert!(json.contains("\"text\":\"Selected content\""));
+        assert!(json.contains("\"requestId\":\"req-111\""));
+    }
+
+    #[test]
+    fn test_parse_selected_text_response() {
+        let json = r#"{"type":"selectedText","text":"Some text","requestId":"req-222"}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::SelectedText { text, request_id } => {
+                assert_eq!(text, "Some text");
+                assert_eq!(request_id, "req-222");
+            }
+            _ => panic!("Expected SelectedText message"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_text_set_success() {
+        let msg = Message::text_set_success("req-333".to_string());
+        let json = serialize_message(&msg).unwrap();
+        assert!(json.contains("\"type\":\"textSet\""));
+        assert!(json.contains("\"success\":true"));
+        assert!(json.contains("\"requestId\":\"req-333\""));
+        // error field should be omitted when None
+        assert!(!json.contains("\"error\""));
+    }
+
+    #[test]
+    fn test_serialize_text_set_error() {
+        let msg = Message::text_set_error("Permission denied".to_string(), "req-444".to_string());
+        let json = serialize_message(&msg).unwrap();
+        assert!(json.contains("\"type\":\"textSet\""));
+        assert!(json.contains("\"success\":false"));
+        assert!(json.contains("\"error\":\"Permission denied\""));
+        assert!(json.contains("\"requestId\":\"req-444\""));
+    }
+
+    #[test]
+    fn test_parse_text_set_success() {
+        let json = r#"{"type":"textSet","success":true,"requestId":"req-555"}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::TextSet { success, error, request_id } => {
+                assert!(success);
+                assert_eq!(error, None);
+                assert_eq!(request_id, "req-555");
+            }
+            _ => panic!("Expected TextSet message"),
+        }
+    }
+
+    #[test]
+    fn test_parse_text_set_error() {
+        let json = r#"{"type":"textSet","success":false,"error":"Failed","requestId":"req-666"}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::TextSet { success, error, request_id } => {
+                assert!(!success);
+                assert_eq!(error, Some("Failed".to_string()));
+                assert_eq!(request_id, "req-666");
+            }
+            _ => panic!("Expected TextSet message"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_accessibility_status() {
+        let msg = Message::accessibility_status(true, "req-777".to_string());
+        let json = serialize_message(&msg).unwrap();
+        assert!(json.contains("\"type\":\"accessibilityStatus\""));
+        assert!(json.contains("\"granted\":true"));
+        assert!(json.contains("\"requestId\":\"req-777\""));
+    }
+
+    #[test]
+    fn test_parse_accessibility_status() {
+        let json = r#"{"type":"accessibilityStatus","granted":false,"requestId":"req-888"}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::AccessibilityStatus { granted, request_id } => {
+                assert!(!granted);
+                assert_eq!(request_id, "req-888");
+            }
+            _ => panic!("Expected AccessibilityStatus message"),
+        }
+    }
+
+    #[test]
+    fn test_selected_text_message_ids() {
+        // Messages with request_id
+        assert_eq!(Message::get_selected_text("a".to_string()).id(), Some("a"));
+        assert_eq!(Message::set_selected_text_msg("".to_string(), "b".to_string()).id(), Some("b"));
+        assert_eq!(Message::check_accessibility("c".to_string()).id(), Some("c"));
+        assert_eq!(Message::request_accessibility("d".to_string()).id(), Some("d"));
+        assert_eq!(Message::selected_text_response("".to_string(), "e".to_string()).id(), Some("e"));
+        assert_eq!(Message::text_set_success("f".to_string()).id(), Some("f"));
+        assert_eq!(Message::text_set_error("".to_string(), "g".to_string()).id(), Some("g"));
+        assert_eq!(Message::accessibility_status(true, "h".to_string()).id(), Some("h"));
     }
 }

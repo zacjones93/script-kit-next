@@ -44,3 +44,12 @@ alacritty_terminal = "0.25"    # Zed uses 0.25.1-rc1, this gets latest 0.25.x st
 vte = "0.15"                   # ANSI escape sequence parser, required by alacritty_terminal 0.25
 bitflags = "2.10"              # For cell attribute flags
 async-channel = "2.3"          # Async channel for stdin command listener
+
+# Selected text functionality (getSelectedText/setSelectedText)
+get-selected-text = "0.1"      # Hybrid AX + clipboard fallback for reading selected text
+arboard = "3.6"                # Clipboard access for setSelectedText fallback
+enigo = "0.6"                  # Keyboard simulation for Cmd+V fallback
+macos-accessibility-client = "0.0.1"  # Permission checking for accessibility APIs
+
+[build-dependencies]
+dirs = "5.0"  # For build.rs to copy SDK to ~/.kit/lib/
