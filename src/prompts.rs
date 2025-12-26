@@ -138,6 +138,89 @@ impl ArgPrompt {
     fn submit_cancel(&mut self) {
         (self.on_submit)(self.id.clone(), None);
     }
+    
+    /// Get colors for search box based on design variant
+    /// Returns: (search_box_bg, border_color, muted_text, dimmed_text, secondary_text)
+    fn get_search_colors(&self, colors: &crate::designs::DesignColors) -> (gpui::Rgba, gpui::Rgba, gpui::Rgba, gpui::Rgba, gpui::Rgba) {
+        use gpui::rgb;
+        if self.design_variant == DesignVariant::Default {
+            (
+                rgb(self.theme.colors.background.search_box),
+                rgb(self.theme.colors.ui.border),
+                rgb(self.theme.colors.text.muted),
+                rgb(self.theme.colors.text.dimmed),
+                rgb(self.theme.colors.text.secondary),
+            )
+        } else {
+            (
+                rgb(colors.background_secondary),
+                rgb(colors.border),
+                rgb(colors.text_muted),
+                rgb(colors.text_dimmed),
+                rgb(colors.text_secondary),
+            )
+        }
+    }
+    
+    /// Get colors for main container based on design variant
+    /// Returns: (main_bg, container_text)
+    fn get_container_colors(&self, colors: &crate::designs::DesignColors) -> (gpui::Rgba, gpui::Rgba) {
+        use gpui::rgb;
+        if self.design_variant == DesignVariant::Default {
+            (
+                rgb(self.theme.colors.background.main),
+                rgb(self.theme.colors.text.secondary),
+            )
+        } else {
+            (
+                rgb(colors.background),
+                rgb(colors.text_secondary),
+            )
+        }
+    }
+    
+    /// Get colors for a choice item based on selection state and design variant
+    /// Returns: (bg, name_color, desc_color)
+    fn get_item_colors(&self, is_selected: bool, colors: &crate::designs::DesignColors) -> (gpui::Rgba, gpui::Rgba, gpui::Rgba) {
+        use gpui::rgb;
+        if self.design_variant == DesignVariant::Default {
+            (
+                if is_selected {
+                    rgb(self.theme.colors.accent.selected)
+                } else {
+                    rgb(self.theme.colors.background.main)
+                },
+                if is_selected {
+                    rgb(self.theme.colors.text.primary)
+                } else {
+                    rgb(self.theme.colors.text.secondary)
+                },
+                if is_selected {
+                    rgb(self.theme.colors.text.tertiary)
+                } else {
+                    rgb(self.theme.colors.text.muted)
+                },
+            )
+        } else {
+            (
+                if is_selected {
+                    rgb(colors.background_selected)
+                } else {
+                    rgb(colors.background)
+                },
+                if is_selected {
+                    rgb(colors.text_on_accent)
+                } else {
+                    rgb(colors.text_secondary)
+                },
+                if is_selected {
+                    rgb(colors.text_secondary)
+                } else {
+                    rgb(colors.text_muted)
+                },
+            )
+        }
+    }
 }
 
 impl Focusable for ArgPrompt {
@@ -185,27 +268,9 @@ impl Render for ArgPrompt {
             SharedString::from(self.input_text.clone())
         };
 
-        // Use design tokens for colors (with theme fallback for Default variant)
+        // Use helper method for design/theme color extraction
         let (search_box_bg, border_color, muted_text, dimmed_text, secondary_text) = 
-            if self.design_variant == DesignVariant::Default {
-                // Use theme colors for default design
-                (
-                    rgb(self.theme.colors.background.search_box),
-                    rgb(self.theme.colors.ui.border),
-                    rgb(self.theme.colors.text.muted),
-                    rgb(self.theme.colors.text.dimmed),
-                    rgb(self.theme.colors.text.secondary),
-                )
-            } else {
-                // Use design tokens for non-default designs
-                (
-                    rgb(colors.background_secondary),
-                    rgb(colors.border),
-                    rgb(colors.text_muted),
-                    rgb(colors.text_dimmed),
-                    rgb(colors.text_secondary),
-                )
-            };
+            self.get_search_colors(&colors);
 
         let input_container = div()
             .w_full()
@@ -254,44 +319,8 @@ impl Render for ArgPrompt {
                 if let Some(choice) = self.choices.get(choice_idx) {
                     let is_selected = idx == self.selected_index;
                     
-                    // Use design tokens for item colors (with theme fallback for Default)
-                    let (bg, name_color, desc_color) = if self.design_variant == DesignVariant::Default {
-                        (
-                            if is_selected {
-                                rgb(self.theme.colors.accent.selected)
-                            } else {
-                                rgb(self.theme.colors.background.main)
-                            },
-                            if is_selected {
-                                rgb(self.theme.colors.text.primary)
-                            } else {
-                                rgb(self.theme.colors.text.secondary)
-                            },
-                            if is_selected {
-                                rgb(self.theme.colors.text.tertiary)
-                            } else {
-                                rgb(self.theme.colors.text.muted)
-                            },
-                        )
-                    } else {
-                        (
-                            if is_selected {
-                                rgb(colors.background_selected)
-                            } else {
-                                rgb(colors.background)
-                            },
-                            if is_selected {
-                                rgb(colors.text_on_accent)
-                            } else {
-                                rgb(colors.text_secondary)
-                            },
-                            if is_selected {
-                                rgb(colors.text_secondary)
-                            } else {
-                                rgb(colors.text_muted)
-                            },
-                        )
-                    };
+                    // Use helper method for item colors
+                    let (bg, name_color, desc_color) = self.get_item_colors(is_selected, &colors);
 
                     let mut choice_item = div()
                         .w_full()
@@ -328,18 +357,8 @@ impl Render for ArgPrompt {
             }
         }
 
-        // Main container colors (with theme fallback for Default)
-        let (main_bg, container_text) = if self.design_variant == DesignVariant::Default {
-            (
-                rgb(self.theme.colors.background.main),
-                rgb(self.theme.colors.text.secondary),
-            )
-        } else {
-            (
-                rgb(colors.background),
-                rgb(colors.text_secondary),
-            )
-        };
+        // Use helper method for container colors
+        let (main_bg, container_text) = self.get_container_colors(&colors);
 
         // Main container - fills entire window height with no bottom gap
         // Layout: input_container (fixed height) + choices_container (flex_1 fills rest)

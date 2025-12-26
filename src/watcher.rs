@@ -70,7 +70,7 @@ impl ConfigWatcher {
 
         let thread_handle = thread::spawn(move || {
             if let Err(e) = Self::watch_loop(tx) {
-                eprintln!("Config watcher error: {}", e);
+                warn!(error = %e, watcher = "config", "Config watcher error");
             }
         });
 
@@ -112,10 +112,6 @@ impl ConfigWatcher {
             target = "config.ts",
             "Config watcher started"
         );
-        eprintln!(
-            "Config watcher started, watching {:?} for changes to config.ts",
-            watch_path
-        );
 
         // Main watch loop
         loop {
@@ -152,19 +148,16 @@ impl ConfigWatcher {
                                 let mut flag = debounce_flag.lock().unwrap();
                                 *flag = false;
                                 info!(file = "config.ts", "Config file changed, emitting reload event");
-                                eprintln!("Config file changed, emitting reload event");
                             });
                         }
                     }
                 }
                 Ok(Err(e)) => {
                     warn!(error = %e, watcher = "config", "File watcher error");
-                    eprintln!("File watcher error: {}", e);
                 }
                 Err(_) => {
                     // Channel closed, exit watch loop
                     info!(watcher = "config", "Config watcher shutting down");
-                    eprintln!("Config watcher shutting down");
                     break;
                 }
             }
@@ -217,7 +210,7 @@ impl ThemeWatcher {
 
         let thread_handle = thread::spawn(move || {
             if let Err(e) = Self::watch_loop(tx) {
-                eprintln!("Theme watcher error: {}", e);
+                warn!(error = %e, watcher = "theme", "Theme watcher error");
             }
         });
 
@@ -259,10 +252,6 @@ impl ThemeWatcher {
             target = "theme.json",
             "Theme watcher started"
         );
-        eprintln!(
-            "Theme watcher started, watching {:?} for changes to theme.json",
-            watch_path
-        );
 
         // Main watch loop
         loop {
@@ -299,19 +288,16 @@ impl ThemeWatcher {
                                 let mut flag = debounce_flag.lock().unwrap();
                                 *flag = false;
                                 info!(file = "theme.json", "Theme file changed, emitting reload event");
-                                eprintln!("Theme file changed, emitting reload event");
                             });
                         }
                     }
                 }
                 Ok(Err(e)) => {
                     warn!(error = %e, watcher = "theme", "File watcher error");
-                    eprintln!("File watcher error: {}", e);
                 }
                 Err(_) => {
                     // Channel closed, exit watch loop
                     info!(watcher = "theme", "Theme watcher shutting down");
-                    eprintln!("Theme watcher shutting down");
                     break;
                 }
             }
@@ -364,7 +350,7 @@ impl ScriptWatcher {
 
         let thread_handle = thread::spawn(move || {
             if let Err(e) = Self::watch_loop(tx) {
-                eprintln!("Script watcher error: {}", e);
+                warn!(error = %e, watcher = "scripts", "Script watcher error");
             }
         });
 
@@ -407,20 +393,12 @@ impl ScriptWatcher {
                 recursive = true,
                 "Scriptlets watcher started"
             );
-            eprintln!(
-                "Script watcher started, watching {:?} recursively for scriptlets",
-                scriptlets_path
-            );
         }
 
         info!(
             path = %scripts_path.display(),
             recursive = true,
             "Script watcher started"
-        );
-        eprintln!(
-            "Script watcher started, watching {:?} recursively for changes",
-            scripts_path
         );
 
         // Main watch loop
@@ -452,19 +430,16 @@ impl ScriptWatcher {
                                 let mut flag = debounce_flag.lock().unwrap();
                                 *flag = false;
                                 info!(directory = "scripts", "Script directory changed, emitting reload event");
-                                eprintln!("Script directory changed, emitting reload event");
                             });
                         }
                     }
                 }
                 Ok(Err(e)) => {
                     warn!(error = %e, watcher = "scripts", "File watcher error");
-                    eprintln!("File watcher error: {}", e);
                 }
                 Err(_) => {
                     // Channel closed, exit watch loop
                     info!(watcher = "scripts", "Script watcher shutting down");
-                    eprintln!("Script watcher shutting down");
                     break;
                 }
             }
@@ -515,7 +490,7 @@ impl AppearanceWatcher {
 
         let thread_handle = thread::spawn(move || {
             if let Err(e) = Self::watch_loop(tx) {
-                eprintln!("Appearance watcher error: {}", e);
+                warn!(error = %e, watcher = "appearance", "Appearance watcher error");
             }
         });
 
@@ -529,7 +504,6 @@ impl AppearanceWatcher {
         let poll_interval = Duration::from_secs(2);
 
         info!(poll_interval_secs = 2, "Appearance watcher started");
-        eprintln!("Appearance watcher started, polling system appearance every 2 seconds");
 
         loop {
             // Detect current system appearance
@@ -542,13 +516,8 @@ impl AppearanceWatcher {
                     AppearanceChangeEvent::Light => "light",
                 };
                 info!(mode = mode, "System appearance changed");
-                eprintln!(
-                    "System appearance changed to: {}",
-                    mode
-                );
                 if tx.send_blocking(current_appearance.clone()).is_err() {
                     info!(watcher = "appearance", "Appearance watcher receiver dropped, shutting down");
-                    eprintln!("Appearance watcher receiver dropped, shutting down");
                     break;
                 }
                 last_appearance = Some(current_appearance);

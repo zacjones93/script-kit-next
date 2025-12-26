@@ -31,6 +31,32 @@ import { basename, join, resolve, dirname } from 'node:path';
 import { existsSync } from 'node:fs';
 
 // =============================================================================
+// Timeout Handling Utility
+// =============================================================================
+
+const TEST_TIMEOUT_MS = parseInt(process.env.TEST_TIMEOUT_MS || '30000');
+
+/**
+ * Run an async function with a timeout.
+ * Rejects with a timeout error if the function doesn't complete in time.
+ */
+async function runWithTimeout<T>(
+  fn: () => Promise<T>,
+  timeoutMs: number,
+  name: string
+): Promise<T> {
+  return Promise.race([
+    fn(),
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`${name} timed out after ${timeoutMs}ms`)),
+        timeoutMs
+      )
+    ),
+  ]);
+}
+
+// =============================================================================
 // Types
 // =============================================================================
 

@@ -19,7 +19,7 @@ use gpui::{
 use std::sync::Arc;
 use crate::logging;
 use crate::theme;
-use crate::designs::{DesignVariant, get_tokens};
+use crate::designs::{DesignVariant, DesignColors, get_tokens};
 
 /// Callback for action selection
 /// Signature: (action_id: String)
@@ -179,10 +179,10 @@ pub struct ActionsDialog {
 }
 
 /// Helper function to combine a hex color with an alpha value
-/// Shifts hex left 8 bits and adds alpha to create RGBA value for gpui::rgba()
+/// Delegates to DesignColors::hex_with_alpha for DRY
 #[inline]
 fn hex_with_alpha(hex: u32, alpha: u8) -> u32 {
-    (hex << 8) | (alpha as u32)
+    DesignColors::hex_with_alpha(hex, alpha)
 }
 
 impl ActionsDialog {
@@ -370,6 +370,48 @@ impl ActionsDialog {
             },
         ]
     }
+    
+    /// Get colors for the search box based on design variant
+    /// Returns: (search_box_bg, border_color, muted_text, dimmed_text, secondary_text)
+    fn get_search_colors(&self, colors: &crate::designs::DesignColors) -> (gpui::Rgba, gpui::Rgba, gpui::Rgba, gpui::Rgba, gpui::Rgba) {
+        use gpui::{rgb, rgba};
+        if self.design_variant == DesignVariant::Default {
+            (
+                rgba(hex_with_alpha(self.theme.colors.background.search_box, 0xcc)),
+                rgba(hex_with_alpha(self.theme.colors.ui.border, 0x80)),
+                rgb(self.theme.colors.text.muted),
+                rgb(self.theme.colors.text.dimmed),
+                rgb(self.theme.colors.text.secondary),
+            )
+        } else {
+            (
+                rgba(hex_with_alpha(colors.background_secondary, 0xcc)),
+                rgba(hex_with_alpha(colors.border, 0x80)),
+                rgb(colors.text_muted),
+                rgb(colors.text_dimmed),
+                rgb(colors.text_secondary),
+            )
+        }
+    }
+    
+    /// Get colors for the main container based on design variant
+    /// Returns: (main_bg, container_border, container_text)
+    fn get_container_colors(&self, colors: &crate::designs::DesignColors) -> (gpui::Rgba, gpui::Rgba, gpui::Rgba) {
+        use gpui::{rgb, rgba};
+        if self.design_variant == DesignVariant::Default {
+            (
+                rgba(hex_with_alpha(self.theme.colors.background.main, 0xe6)),
+                rgba(hex_with_alpha(self.theme.colors.ui.border, 0x80)),
+                rgb(self.theme.colors.text.secondary),
+            )
+        } else {
+            (
+                rgba(hex_with_alpha(colors.background, 0xe6)),
+                rgba(hex_with_alpha(colors.border, 0x80)),
+                rgb(colors.text_secondary),
+            )
+        }
+    }
 }
 
 impl Focusable for ActionsDialog {
@@ -415,27 +457,9 @@ impl Render for ActionsDialog {
             SharedString::from(self.search_text.clone())
         };
 
-        // Use design tokens for colors (with theme fallback for Default variant)
+        // Use helper method for design/theme color extraction
         let (search_box_bg, border_color, muted_text, dimmed_text, secondary_text) = 
-            if self.design_variant == DesignVariant::Default {
-                // Use theme colors for default design
-                (
-                    rgba(hex_with_alpha(self.theme.colors.background.search_box, 0xcc)),
-                    rgba(hex_with_alpha(self.theme.colors.ui.border, 0x80)),
-                    rgb(self.theme.colors.text.muted),
-                    rgb(self.theme.colors.text.dimmed),
-                    rgb(self.theme.colors.text.secondary),
-                )
-            } else {
-                // Use design tokens for non-default designs
-                (
-                    rgba(hex_with_alpha(colors.background_secondary, 0xcc)),
-                    rgba(hex_with_alpha(colors.border, 0x80)),
-                    rgb(colors.text_muted),
-                    rgb(colors.text_dimmed),
-                    rgb(colors.text_secondary),
-                )
-            };
+            self.get_search_colors(&colors);
         
         let input_container = div()
             .w_full()
@@ -597,21 +621,9 @@ impl Render for ActionsDialog {
             .into_any_element()
         };
 
-        // Extract theme/design colors for main container
+        // Use helper method for container colors
         let (main_bg, container_border, container_text) = 
-            if self.design_variant == DesignVariant::Default {
-                (
-                    rgba(hex_with_alpha(self.theme.colors.background.main, 0xe6)),
-                    rgba(hex_with_alpha(self.theme.colors.ui.border, 0x80)),
-                    rgb(self.theme.colors.text.secondary),
-                )
-            } else {
-                (
-                    rgba(hex_with_alpha(colors.background, 0xe6)),
-                    rgba(hex_with_alpha(colors.border, 0x80)),
-                    rgb(colors.text_secondary),
-                )
-            };
+            self.get_container_colors(&colors);
         
         // Main overlay popup container
         // Fixed width, max height, rounded corners, shadow, semi-transparent bg

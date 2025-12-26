@@ -70,6 +70,15 @@ pub struct DesignColors {
     pub shadow: u32,
 }
 
+impl DesignColors {
+    /// Combine a hex color (0xRRGGBB) with an alpha value (0-255)
+    /// Returns a value suitable for gpui::rgba() in 0xRRGGBBAA format
+    #[inline]
+    pub fn hex_with_alpha(hex: u32, alpha: u8) -> u32 {
+        (hex << 8) | (alpha as u32)
+    }
+}
+
 impl Default for DesignColors {
     fn default() -> Self {
         // Default dark theme colors

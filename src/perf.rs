@@ -13,7 +13,7 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use crate::logging::log;
+use tracing::{debug, warn};
 
 // =============================================================================
 // CONFIGURATION
@@ -131,15 +131,13 @@ impl KeyEventTracker {
 
     /// Log current statistics
     pub fn log_stats(&self) {
-        log(
-            "KEY_PERF",
-            &format!(
-                "rate={:.1}/s avg={:.2}ms slow={:.1}% total={}",
-                self.events_per_second(),
-                self.avg_processing_time_us() as f64 / 1000.0,
-                self.slow_event_percentage(),
-                self.total_events
-            ),
+        debug!(
+            category = "KEY_PERF",
+            rate_per_sec = self.events_per_second(),
+            avg_ms = self.avg_processing_time_us() as f64 / 1000.0,
+            slow_percent = self.slow_event_percentage(),
+            total_events = self.total_events,
+            "Key event statistics"
         );
     }
 }
@@ -221,15 +219,13 @@ impl ScrollTimer {
 
     /// Log scroll timing stats
     pub fn log_stats(&self) {
-        log(
-            "SCROLL_TIMING",
-            &format!(
-                "avg={:.2}ms max={:.2}ms slow={} total={}",
-                self.avg_time_us() as f64 / 1000.0,
-                self.max_time_us() as f64 / 1000.0,
-                self.slow_count,
-                self.total_ops
-            ),
+        debug!(
+            category = "SCROLL_TIMING",
+            avg_ms = self.avg_time_us() as f64 / 1000.0,
+            max_ms = self.max_time_us() as f64 / 1000.0,
+            slow_count = self.slow_count,
+            total_ops = self.total_ops,
+            "Scroll timing statistics"
         );
     }
 }
@@ -314,14 +310,12 @@ impl FrameTimer {
 
     /// Log frame timing stats
     pub fn log_stats(&self) {
-        log(
-            "FRAME_PERF",
-            &format!(
-                "fps={:.1} dropped={:.1}% total={}",
-                self.avg_fps(),
-                self.dropped_percentage(),
-                self.total_frames
-            ),
+        debug!(
+            category = "FRAME_PERF",
+            fps = self.avg_fps(),
+            dropped_percent = self.dropped_percentage(),
+            total_frames = self.total_frames,
+            "Frame timing statistics"
         );
     }
 }
@@ -426,9 +420,10 @@ pub fn log_key_rate() {
     if let Ok(tracker) = get_perf_tracker().lock() {
         let rate = tracker.key_events.events_per_second();
         if rate > 20.0 {
-            log(
-                "KEY_PERF",
-                &format!("HIGH_RATE: {:.1} events/sec", rate),
+            warn!(
+                category = "KEY_PERF",
+                rate_per_sec = rate,
+                "High key event rate detected"
             );
         }
     }
@@ -479,14 +474,12 @@ impl Drop for TimingGuard {
         let duration_us = duration.as_micros();
 
         if duration_us > self.threshold_us {
-            log(
-                "PERF_SLOW",
-                &format!(
-                    "{} took {:.2}ms (threshold: {:.2}ms)",
-                    self.operation,
-                    duration_us as f64 / 1000.0,
-                    self.threshold_us as f64 / 1000.0
-                ),
+            warn!(
+                category = "PERF_SLOW",
+                operation = self.operation,
+                duration_ms = duration_us as f64 / 1000.0,
+                threshold_ms = self.threshold_us as f64 / 1000.0,
+                "Slow operation detected"
             );
         }
     }

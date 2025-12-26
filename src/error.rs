@@ -1,4 +1,5 @@
 use thiserror::Error;
+use tracing::{error, warn};
 
 /// Error severity for UI display
 #[allow(dead_code)]
@@ -78,7 +79,7 @@ impl<T, E: std::fmt::Debug> NotifyResultExt<T> for std::result::Result<T, E> {
         match self {
             Ok(v) => Some(v),
             Err(e) => {
-                eprintln!("[ERROR] {:?}", e);
+                error!(error = ?e, "Operation failed");
                 None
             }
         }
@@ -88,7 +89,7 @@ impl<T, E: std::fmt::Debug> NotifyResultExt<T> for std::result::Result<T, E> {
         match self {
             Ok(v) => Some(v),
             Err(e) => {
-                eprintln!("[WARN] {:?}", e);
+                warn!(error = ?e, "Operation warning");
                 None
             }
         }

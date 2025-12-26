@@ -1,99 +1,284 @@
+// Name: SDK Test - Storage and Path Utilities
+// Description: Tests path utilities, file utilities, and memory map
+
 /**
- * TIER 5B Test: Storage, Path, and Utility Functions
+ * SDK TEST: test-storage.ts
  * 
- * This test demonstrates:
- * - Path utilities (home, kenvPath, kitPath, tmpPath)
- * - File utilities (isFile, isDir, isBin)
- * - Database and store (db, store, memoryMap)
- * - Browser/App utilities (browse, editFile, run, inspect)
+ * Tests storage and path utility functions.
  * 
- * Run with: bun scripts/kit-sdk.ts tests/sdk/test-storage.ts
+ * Test cases:
+ * 1. path-home: home() path function
+ * 2. path-kenv: kenvPath() function
+ * 3. path-kit: kitPath() function
+ * 4. path-tmp: tmpPath() function
+ * 5. file-isFile: isFile() check
+ * 6. file-isDir: isDir() check
+ * 7. memoryMap-operations: memoryMap get/set/delete/clear
+ * 
+ * Expected behavior:
+ * - Path functions return valid file system paths
+ * - File checks return boolean values
+ * - memoryMap provides in-memory key-value storage
  */
 
 import '../../scripts/kit-sdk';
 
 // =============================================================================
-// Path Utilities Tests
+// Test Infrastructure
 // =============================================================================
 
-async function testPathUtilities() {
-  console.log('=== Testing Path Utilities ===\n');
-  
-  // Test home()
-  const homePath = home();
-  console.log(`home(): ${homePath}`);
-  
-  const downloadsPath = home('Downloads', 'file.txt');
-  console.log(`home('Downloads', 'file.txt'): ${downloadsPath}`);
-  
-  // Test kenvPath()
-  const kenvRoot = kenvPath();
-  console.log(`kenvPath(): ${kenvRoot}`);
-  
-  const scriptsPath = kenvPath('scripts', 'hello.ts');
-  console.log(`kenvPath('scripts', 'hello.ts'): ${scriptsPath}`);
-  
-  // Test kitPath()
-  const kitRoot = kitPath();
-  console.log(`kitPath(): ${kitRoot}`);
-  
-  const dbPath = kitPath('db', 'scripts.json');
-  console.log(`kitPath('db', 'scripts.json'): ${dbPath}`);
-  
-  // Test tmpPath()
-  const tmpRoot = tmpPath();
-  console.log(`tmpPath(): ${tmpRoot}`);
-  
-  const tmpFile = tmpPath('output.txt');
-  console.log(`tmpPath('output.txt'): ${tmpFile}`);
-  
-  console.log('');
+interface TestResult {
+  test: string;
+  status: 'running' | 'pass' | 'fail' | 'skip';
+  timestamp: string;
+  result?: unknown;
+  error?: string;
+  duration_ms?: number;
+  expected?: string;
+  actual?: string;
+}
+
+function logTest(name: string, status: TestResult['status'], extra?: Partial<TestResult>) {
+  const result: TestResult = {
+    test: name,
+    status,
+    timestamp: new Date().toISOString(),
+    ...extra
+  };
+  console.log(JSON.stringify(result));
+}
+
+function debug(msg: string) {
+  console.error(`[TEST] ${msg}`);
 }
 
 // =============================================================================
-// File Utilities Tests
+// Tests
 // =============================================================================
 
-async function testFileUtilities() {
-  console.log('=== Testing File Utilities ===\n');
+debug('test-storage.ts starting...');
+debug(`SDK globals: home=${typeof home}, kenvPath=${typeof kenvPath}, kitPath=${typeof kitPath}`);
+
+// -----------------------------------------------------------------------------
+// Test 1: home() path function
+// -----------------------------------------------------------------------------
+const test1 = 'path-home';
+logTest(test1, 'running');
+const start1 = Date.now();
+
+try {
+  debug('Test 1: home() path function');
   
-  // Test isFile() - check if this test file exists
-  const thisFile = import.meta.path || process.argv[1];
+  const homePath = home();
+  const downloadsPath = home('Downloads', 'file.txt');
+  
+  debug(`home(): ${homePath}`);
+  debug(`home('Downloads', 'file.txt'): ${downloadsPath}`);
+  
+  const checks = [
+    homePath.startsWith('/'),
+    downloadsPath.includes('Downloads'),
+    downloadsPath.endsWith('file.txt'),
+  ];
+  
+  if (checks.every(Boolean)) {
+    logTest(test1, 'pass', { result: homePath, duration_ms: Date.now() - start1 });
+  } else {
+    logTest(test1, 'fail', { 
+      error: 'home() did not return valid paths',
+      actual: homePath,
+      duration_ms: Date.now() - start1 
+    });
+  }
+} catch (err) {
+  logTest(test1, 'fail', { error: String(err), duration_ms: Date.now() - start1 });
+}
+
+// -----------------------------------------------------------------------------
+// Test 2: kenvPath() function
+// -----------------------------------------------------------------------------
+const test2 = 'path-kenv';
+logTest(test2, 'running');
+const start2 = Date.now();
+
+try {
+  debug('Test 2: kenvPath() function');
+  
+  const kenvRoot = kenvPath();
+  const scriptsPath = kenvPath('scripts', 'hello.ts');
+  
+  debug(`kenvPath(): ${kenvRoot}`);
+  debug(`kenvPath('scripts', 'hello.ts'): ${scriptsPath}`);
+  
+  const checks = [
+    kenvRoot.startsWith('/'),
+    scriptsPath.includes('scripts'),
+    scriptsPath.endsWith('hello.ts'),
+  ];
+  
+  if (checks.every(Boolean)) {
+    logTest(test2, 'pass', { result: kenvRoot, duration_ms: Date.now() - start2 });
+  } else {
+    logTest(test2, 'fail', { 
+      error: 'kenvPath() did not return valid paths',
+      actual: kenvRoot,
+      duration_ms: Date.now() - start2 
+    });
+  }
+} catch (err) {
+  logTest(test2, 'fail', { error: String(err), duration_ms: Date.now() - start2 });
+}
+
+// -----------------------------------------------------------------------------
+// Test 3: kitPath() function
+// -----------------------------------------------------------------------------
+const test3 = 'path-kit';
+logTest(test3, 'running');
+const start3 = Date.now();
+
+try {
+  debug('Test 3: kitPath() function');
+  
+  const kitRoot = kitPath();
+  const dbPath = kitPath('db', 'scripts.json');
+  
+  debug(`kitPath(): ${kitRoot}`);
+  debug(`kitPath('db', 'scripts.json'): ${dbPath}`);
+  
+  const checks = [
+    kitRoot.startsWith('/'),
+    dbPath.includes('db'),
+    dbPath.endsWith('scripts.json'),
+  ];
+  
+  if (checks.every(Boolean)) {
+    logTest(test3, 'pass', { result: kitRoot, duration_ms: Date.now() - start3 });
+  } else {
+    logTest(test3, 'fail', { 
+      error: 'kitPath() did not return valid paths',
+      actual: kitRoot,
+      duration_ms: Date.now() - start3 
+    });
+  }
+} catch (err) {
+  logTest(test3, 'fail', { error: String(err), duration_ms: Date.now() - start3 });
+}
+
+// -----------------------------------------------------------------------------
+// Test 4: tmpPath() function
+// -----------------------------------------------------------------------------
+const test4 = 'path-tmp';
+logTest(test4, 'running');
+const start4 = Date.now();
+
+try {
+  debug('Test 4: tmpPath() function');
+  
+  const tmpRoot = tmpPath();
+  const tmpFile = tmpPath('output.txt');
+  
+  debug(`tmpPath(): ${tmpRoot}`);
+  debug(`tmpPath('output.txt'): ${tmpFile}`);
+  
+  const checks = [
+    tmpRoot.startsWith('/'),
+    tmpFile.endsWith('output.txt'),
+  ];
+  
+  if (checks.every(Boolean)) {
+    logTest(test4, 'pass', { result: tmpRoot, duration_ms: Date.now() - start4 });
+  } else {
+    logTest(test4, 'fail', { 
+      error: 'tmpPath() did not return valid paths',
+      actual: tmpRoot,
+      duration_ms: Date.now() - start4 
+    });
+  }
+} catch (err) {
+  logTest(test4, 'fail', { error: String(err), duration_ms: Date.now() - start4 });
+}
+
+// -----------------------------------------------------------------------------
+// Test 5: isFile() check
+// -----------------------------------------------------------------------------
+const test5 = 'file-isFile';
+logTest(test5, 'running');
+const start5 = Date.now();
+
+try {
+  debug('Test 5: isFile() check');
+  
+  // @ts-expect-error Bun runtime provides these
+  const thisFile = import.meta.path || Bun.argv[1];
   const isThisFile = await isFile(thisFile);
-  console.log(`isFile('${thisFile}'): ${isThisFile}`);
-  
-  // Test isFile() - check non-existent file
   const nonExistent = '/this/does/not/exist.txt';
   const isNonExistent = await isFile(nonExistent);
-  console.log(`isFile('${nonExistent}'): ${isNonExistent}`);
   
-  // Test isDir() - check home directory
-  const homeDir = home();
-  const isHomeDir = await isDir(homeDir);
-  console.log(`isDir('${homeDir}'): ${isHomeDir}`);
+  debug(`isFile('${thisFile}'): ${isThisFile}`);
+  debug(`isFile('${nonExistent}'): ${isNonExistent}`);
   
-  // Test isDir() - check a file (should be false)
-  const isFileDirTest = await isDir(thisFile);
-  console.log(`isDir('${thisFile}'): ${isFileDirTest}`);
+  const checks = [
+    isThisFile === true,
+    isNonExistent === false,
+  ];
   
-  // Test isBin() - check /bin/ls
-  const binLs = '/bin/ls';
-  const isBinLs = await isBin(binLs);
-  console.log(`isBin('${binLs}'): ${isBinLs}`);
-  
-  // Test isBin() - check this file (should be false)
-  const isBinThisFile = await isBin(thisFile);
-  console.log(`isBin('${thisFile}'): ${isBinThisFile}`);
-  
-  console.log('');
+  if (checks.every(Boolean)) {
+    logTest(test5, 'pass', { result: 'isFile works correctly', duration_ms: Date.now() - start5 });
+  } else {
+    logTest(test5, 'fail', { 
+      error: 'isFile() did not return expected values',
+      duration_ms: Date.now() - start5 
+    });
+  }
+} catch (err) {
+  logTest(test5, 'fail', { error: String(err), duration_ms: Date.now() - start5 });
 }
 
-// =============================================================================
-// Memory Map Tests (in-process, no messages)
-// =============================================================================
+// -----------------------------------------------------------------------------
+// Test 6: isDir() check
+// -----------------------------------------------------------------------------
+const test6 = 'file-isDir';
+logTest(test6, 'running');
+const start6 = Date.now();
 
-async function testMemoryMap() {
-  console.log('=== Testing Memory Map ===\n');
+try {
+  debug('Test 6: isDir() check');
+  
+  const homeDir = home();
+  const isHomeDir = await isDir(homeDir);
+  // @ts-expect-error Bun runtime provides these
+  const thisFile = import.meta.path || Bun.argv[1];
+  const isFileDirTest = await isDir(thisFile);
+  
+  debug(`isDir('${homeDir}'): ${isHomeDir}`);
+  debug(`isDir('${thisFile}'): ${isFileDirTest}`);
+  
+  const checks = [
+    isHomeDir === true,
+    isFileDirTest === false,
+  ];
+  
+  if (checks.every(Boolean)) {
+    logTest(test6, 'pass', { result: 'isDir works correctly', duration_ms: Date.now() - start6 });
+  } else {
+    logTest(test6, 'fail', { 
+      error: 'isDir() did not return expected values',
+      duration_ms: Date.now() - start6 
+    });
+  }
+} catch (err) {
+  logTest(test6, 'fail', { error: String(err), duration_ms: Date.now() - start6 });
+}
+
+// -----------------------------------------------------------------------------
+// Test 7: memoryMap operations
+// -----------------------------------------------------------------------------
+const test7 = 'memoryMap-operations';
+logTest(test7, 'running');
+const start7 = Date.now();
+
+try {
+  debug('Test 7: memoryMap operations');
   
   // Set some values
   memoryMap.set('counter', 42);
@@ -101,126 +286,73 @@ async function testMemoryMap() {
   memoryMap.set('tags', ['javascript', 'typescript', 'bun']);
   
   // Get values
-  console.log(`memoryMap.get('counter'): ${memoryMap.get('counter')}`);
-  console.log(`memoryMap.get('user'): ${JSON.stringify(memoryMap.get('user'))}`);
-  console.log(`memoryMap.get('tags'): ${JSON.stringify(memoryMap.get('tags'))}`);
+  const counter = memoryMap.get('counter');
+  const user = memoryMap.get('user') as { name: string; age: number };
+  const tags = memoryMap.get('tags') as string[];
+  
+  debug(`memoryMap.get('counter'): ${counter}`);
+  debug(`memoryMap.get('user'): ${JSON.stringify(user)}`);
+  debug(`memoryMap.get('tags'): ${JSON.stringify(tags)}`);
   
   // Get non-existent key
-  console.log(`memoryMap.get('nonexistent'): ${memoryMap.get('nonexistent')}`);
+  const nonExistent = memoryMap.get('nonexistent');
+  debug(`memoryMap.get('nonexistent'): ${nonExistent}`);
   
   // Delete a key
   const deleted = memoryMap.delete('counter');
-  console.log(`memoryMap.delete('counter'): ${deleted}`);
-  console.log(`memoryMap.get('counter') after delete: ${memoryMap.get('counter')}`);
-  
-  // Delete non-existent key
-  const deletedNonExistent = memoryMap.delete('nonexistent');
-  console.log(`memoryMap.delete('nonexistent'): ${deletedNonExistent}`);
+  const counterAfterDelete = memoryMap.get('counter');
+  debug(`memoryMap.delete('counter'): ${deleted}`);
+  debug(`memoryMap.get('counter') after delete: ${counterAfterDelete}`);
   
   // Clear all
   memoryMap.clear();
-  console.log(`After clear, memoryMap.get('user'): ${memoryMap.get('user')}`);
+  const userAfterClear = memoryMap.get('user');
+  debug(`After clear, memoryMap.get('user'): ${userAfterClear}`);
   
-  console.log('');
-}
-
-// =============================================================================
-// Interactive Tests (require GPUI)
-// =============================================================================
-
-async function testDatabaseInteractive() {
-  console.log('=== Testing Database (requires GPUI) ===\n');
+  const checks = [
+    counter === 42,
+    user.name === 'John',
+    tags.length === 3,
+    nonExistent === undefined,
+    deleted === true,
+    counterAfterDelete === undefined,
+    userAfterClear === undefined,
+  ];
   
-  // Create/load a database
-  const database = await db({ 
-    count: 0, 
-    items: [] 
-  });
-  
-  console.log('Initial database data:', JSON.stringify(database.data, null, 2));
-  
-  // Modify the data
-  if (typeof database.data === 'object' && database.data !== null) {
-    const data = database.data as { count: number; items: string[] };
-    data.count += 1;
-    data.items.push(`Item ${Date.now()}`);
-  }
-  
-  // Write changes
-  await database.write();
-  console.log('Database saved!');
-}
-
-async function testStoreInteractive() {
-  console.log('=== Testing Store (requires GPUI) ===\n');
-  
-  // Set a value
-  await store.set('lastRun', new Date().toISOString());
-  console.log('Set lastRun to current time');
-  
-  // Get a value
-  const lastRun = await store.get('lastRun');
-  console.log(`store.get('lastRun'): ${lastRun}`);
-  
-  // Get non-existent key
-  const nonExistent = await store.get('nonexistent');
-  console.log(`store.get('nonexistent'): ${nonExistent}`);
-}
-
-async function testBrowserAppInteractive() {
-  console.log('=== Testing Browser/App Utilities (requires GPUI) ===\n');
-  
-  // Open URL in browser
-  await browse('https://scriptkit.com');
-  console.log('Opened https://scriptkit.com in browser');
-  
-  // Open file in editor
-  // await editFile(home('.zshrc'));
-  // console.log('Opened ~/.zshrc in editor');
-  
-  // Inspect data
-  await inspect({
-    test: 'This is a test object',
-    nested: {
-      value: 42,
-      array: [1, 2, 3]
-    }
-  });
-  console.log('Sent data to inspect');
-}
-
-// =============================================================================
-// Main
-// =============================================================================
-
-async function main() {
-  console.log('TIER 5B: Storage and Path Utilities Test\n');
-  console.log('=========================================\n');
-  
-  // These tests run without GPUI (pure JS)
-  await testPathUtilities();
-  await testFileUtilities();
-  await testMemoryMap();
-  
-  // Check if we're running in GPUI context
-  const args = process.argv.slice(2);
-  if (args.includes('--interactive')) {
-    console.log('Running interactive tests (requires GPUI)...\n');
-    await testDatabaseInteractive();
-    await testStoreInteractive();
-    await testBrowserAppInteractive();
+  if (checks.every(Boolean)) {
+    logTest(test7, 'pass', { result: 'memoryMap works correctly', duration_ms: Date.now() - start7 });
   } else {
-    console.log('Skipping interactive tests (pass --interactive to run them)\n');
-    console.log('Interactive tests require GPUI connection for:');
-    console.log('  - db() - JSON file database');
-    console.log('  - store.get/set() - Key-value store');
-    console.log('  - browse() - Open URL in browser');
-    console.log('  - editFile() - Open file in editor');
-    console.log('  - run() - Run another script');
-    console.log('  - inspect() - Pretty-print data');
+    logTest(test7, 'fail', { 
+      error: 'memoryMap did not behave as expected',
+      duration_ms: Date.now() - start7 
+    });
   }
-  
-  console.log('\nAll non-interactive tests completed!');
+} catch (err) {
+  logTest(test7, 'fail', { error: String(err), duration_ms: Date.now() - start7 });
 }
 
-main().catch(console.error);
+// -----------------------------------------------------------------------------
+// Show Summary
+// -----------------------------------------------------------------------------
+debug('test-storage.ts completed!');
+
+await div(md(`# Storage and Path Tests Complete
+
+All storage and path utility tests have been executed.
+
+## Test Cases Run
+1. **path-home**: home() path function
+2. **path-kenv**: kenvPath() function
+3. **path-kit**: kitPath() function
+4. **path-tmp**: tmpPath() function
+5. **file-isFile**: isFile() check
+6. **file-isDir**: isDir() check
+7. **memoryMap-operations**: memoryMap get/set/delete/clear
+
+---
+
+*Check the JSONL output for detailed results*
+
+Press Escape or click to exit.`));
+
+debug('test-storage.ts exiting...');

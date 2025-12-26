@@ -1,10 +1,89 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Child, ChildStdin, ChildStdout, Stdio};
 use std::io::{Write, BufReader};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use crate::protocol::{Message, JsonlReader, serialize_message};
 use crate::logging;
 use tracing::{info, error, debug, warn, instrument};
+
+// ============================================================================
+// AUTO_SUBMIT Mode for Autonomous Testing
+// ============================================================================
+//
+// These functions are used by the UI layer (main.rs) to enable autonomous
+// testing of prompts. The #[allow(dead_code)] is temporary until integration
+// is complete.
+
+/// Check if AUTO_SUBMIT mode is enabled via environment variable.
+/// 
+/// When AUTO_SUBMIT=true or AUTO_SUBMIT=1, prompts will be automatically
+/// submitted after a configurable delay for autonomous testing.
+/// 
+/// # Environment Variables
+/// - `AUTO_SUBMIT` - Set to "true" or "1" to enable auto-submit mode
+/// 
+/// # Example
+/// ```bash
+/// AUTO_SUBMIT=true ./target/debug/script-kit-gpui tests/sdk/test-arg.ts
+/// ```
+#[allow(dead_code)]
+pub fn is_auto_submit_enabled() -> bool {
+    std::env::var("AUTO_SUBMIT")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false)
+}
+
+/// Get the delay before auto-submitting a prompt.
+/// 
+/// This allows the UI to render before automatically submitting,
+/// useful for visual testing or debugging.
+/// 
+/// # Environment Variables
+/// - `AUTO_SUBMIT_DELAY_MS` - Delay in milliseconds (default: 100)
+/// 
+/// # Returns
+/// Duration for the delay, defaults to 100ms if not specified or invalid.
+#[allow(dead_code)]
+pub fn get_auto_submit_delay() -> Duration {
+    std::env::var("AUTO_SUBMIT_DELAY_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(Duration::from_millis(100))
+}
+
+/// Get the value to auto-submit for prompts.
+/// 
+/// If set, this value will be submitted instead of selecting from choices.
+/// Useful for testing specific input scenarios.
+/// 
+/// # Environment Variables
+/// - `AUTO_SUBMIT_VALUE` - The value to submit (optional)
+/// 
+/// # Returns
+/// Some(value) if AUTO_SUBMIT_VALUE is set, None otherwise.
+#[allow(dead_code)]
+pub fn get_auto_submit_value() -> Option<String> {
+    std::env::var("AUTO_SUBMIT_VALUE").ok()
+}
+
+/// Get the index of the choice to auto-select.
+/// 
+/// If set, this index will be used to select from the choices array.
+/// If the index is out of bounds, defaults to 0.
+/// 
+/// # Environment Variables
+/// - `AUTO_SUBMIT_INDEX` - The 0-based index to select (default: 0)
+/// 
+/// # Returns
+/// The index to select, defaults to 0 if not specified or invalid.
+#[allow(dead_code)]
+pub fn get_auto_submit_index() -> usize {
+    std::env::var("AUTO_SUBMIT_INDEX")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0)
+}
 
 // Conditionally import selected_text for macOS only
 #[cfg(target_os = "macos")]
@@ -1116,5 +1195,107 @@ mod tests {
         let msg1 = Message::Submit { id: "req-x".to_string(), value: Some("text".to_string()) };
         
         assert!(matches!(handle_selected_text_message(&msg1), SelectedTextHandleResult::NotHandled));
+    }
+
+    // ============================================================
+    // AUTO_SUBMIT Mode Tests
+    // ============================================================
+    // 
+    // Note: These tests verify the AUTO_SUBMIT environment variable parsing.
+    // Since env vars are global and tests run in parallel, we use a single
+    // comprehensive test that exercises all cases sequentially to avoid races.
+    
+    use super::{is_auto_submit_enabled, get_auto_submit_delay, get_auto_submit_value, get_auto_submit_index};
+    use std::time::Duration;
+
+    /// Comprehensive test for is_auto_submit_enabled() function.
+    /// Tests all cases in sequence to avoid env var race conditions.
+    #[test]
+    fn test_is_auto_submit_enabled_all_cases() {
+        // Test "true" value
+        std::env::set_var("AUTO_SUBMIT", "true");
+        assert!(is_auto_submit_enabled(), "AUTO_SUBMIT=true should enable auto-submit");
+        
+        // Test "1" value
+        std::env::set_var("AUTO_SUBMIT", "1");
+        assert!(is_auto_submit_enabled(), "AUTO_SUBMIT=1 should enable auto-submit");
+        
+        // Test "false" value
+        std::env::set_var("AUTO_SUBMIT", "false");
+        assert!(!is_auto_submit_enabled(), "AUTO_SUBMIT=false should NOT enable auto-submit");
+        
+        // Test "0" value
+        std::env::set_var("AUTO_SUBMIT", "0");
+        assert!(!is_auto_submit_enabled(), "AUTO_SUBMIT=0 should NOT enable auto-submit");
+        
+        // Test other value
+        std::env::set_var("AUTO_SUBMIT", "yes");
+        assert!(!is_auto_submit_enabled(), "AUTO_SUBMIT=yes should NOT enable auto-submit");
+        
+        // Test unset (default)
+        std::env::remove_var("AUTO_SUBMIT");
+        assert!(!is_auto_submit_enabled(), "Unset AUTO_SUBMIT should NOT enable auto-submit");
+    }
+
+    /// Comprehensive test for get_auto_submit_delay() function.
+    #[test]
+    fn test_get_auto_submit_delay_all_cases() {
+        // Test custom value
+        std::env::set_var("AUTO_SUBMIT_DELAY_MS", "500");
+        assert_eq!(get_auto_submit_delay(), Duration::from_millis(500), 
+            "AUTO_SUBMIT_DELAY_MS=500 should return 500ms");
+        
+        // Test invalid value (falls back to default)
+        std::env::set_var("AUTO_SUBMIT_DELAY_MS", "not_a_number");
+        assert_eq!(get_auto_submit_delay(), Duration::from_millis(100),
+            "Invalid AUTO_SUBMIT_DELAY_MS should default to 100ms");
+        
+        // Test unset (default)
+        std::env::remove_var("AUTO_SUBMIT_DELAY_MS");
+        assert_eq!(get_auto_submit_delay(), Duration::from_millis(100),
+            "Unset AUTO_SUBMIT_DELAY_MS should default to 100ms");
+    }
+
+    /// Comprehensive test for get_auto_submit_value() function.
+    #[test]
+    fn test_get_auto_submit_value_all_cases() {
+        // Test set value
+        std::env::set_var("AUTO_SUBMIT_VALUE", "test_value");
+        assert_eq!(get_auto_submit_value(), Some("test_value".to_string()),
+            "AUTO_SUBMIT_VALUE=test_value should return Some(test_value)");
+        
+        // Test empty value
+        std::env::set_var("AUTO_SUBMIT_VALUE", "");
+        assert_eq!(get_auto_submit_value(), Some("".to_string()),
+            "AUTO_SUBMIT_VALUE='' should return Some('')");
+        
+        // Test unset (None)
+        std::env::remove_var("AUTO_SUBMIT_VALUE");
+        assert_eq!(get_auto_submit_value(), None,
+            "Unset AUTO_SUBMIT_VALUE should return None");
+    }
+
+    /// Comprehensive test for get_auto_submit_index() function.
+    #[test]
+    fn test_get_auto_submit_index_all_cases() {
+        // Test custom value
+        std::env::set_var("AUTO_SUBMIT_INDEX", "5");
+        assert_eq!(get_auto_submit_index(), 5,
+            "AUTO_SUBMIT_INDEX=5 should return 5");
+        
+        // Test invalid value (falls back to default)
+        std::env::set_var("AUTO_SUBMIT_INDEX", "invalid");
+        assert_eq!(get_auto_submit_index(), 0,
+            "Invalid AUTO_SUBMIT_INDEX should default to 0");
+        
+        // Test negative value (falls back to default since usize can't be negative)
+        std::env::set_var("AUTO_SUBMIT_INDEX", "-1");
+        assert_eq!(get_auto_submit_index(), 0,
+            "Negative AUTO_SUBMIT_INDEX should default to 0");
+        
+        // Test unset (default)
+        std::env::remove_var("AUTO_SUBMIT_INDEX");
+        assert_eq!(get_auto_submit_index(), 0,
+            "Unset AUTO_SUBMIT_INDEX should default to 0");
     }
 }
