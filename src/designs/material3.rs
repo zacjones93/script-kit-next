@@ -329,6 +329,172 @@ impl<App> DesignRenderer<App> for Material3Renderer {
     }
 }
 
+// ============================================================================
+// Standalone render functions for window components
+// ============================================================================
+
+/// Render Material 3-styled header
+///
+/// M3 top app bar with elevation and tonal colors.
+pub fn render_material3_header(title: &str) -> impl IntoElement {
+    div()
+        .w_full()
+        .h(px(64.))
+        .px(px(16.))
+        .bg(rgb(colors::SURFACE))
+        .shadow(vec![BoxShadow {
+            color: hsla(0., 0., 0., 0.1),
+            offset: point(px(0.), px(2.)),
+            blur_radius: px(4.),
+            spread_radius: px(0.),
+        }])
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .child(
+            div()
+                .text_size(px(22.))
+                .font_weight(FontWeight::NORMAL)
+                .text_color(rgb(colors::ON_SURFACE))
+                .child(title.to_string()),
+        )
+        .child(
+            // M3 action icon placeholder
+            div()
+                .w(px(40.))
+                .h(px(40.))
+                .rounded(px(corners::FULL))
+                .bg(rgb(colors::PRIMARY))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(rgb(colors::ON_PRIMARY))
+                .text_size(px(14.))
+                .child("M3"),
+        )
+}
+
+/// Render Material 3-styled preview panel
+///
+/// Elevated surface with M3 shape and tonal container.
+pub fn render_material3_preview_panel(content: Option<&str>) -> impl IntoElement {
+    let display_content = content.unwrap_or("Select an item to preview");
+    let text_color = if content.is_some() {
+        rgb(colors::ON_SURFACE)
+    } else {
+        rgb(colors::ON_SURFACE_VARIANT)
+    };
+
+    div()
+        .w_full()
+        .h_full()
+        .p(px(16.))
+        .child(
+            div()
+                .w_full()
+                .h_full()
+                .p(px(20.))
+                .bg(rgb(colors::SURFACE_CONTAINER))
+                .rounded(px(corners::MD))
+                .shadow(vec![BoxShadow {
+                    color: hsla(0., 0., 0., 0.1),
+                    offset: point(px(0.), px(elevation::LEVEL1)),
+                    blur_radius: px(3.),
+                    spread_radius: px(0.),
+                }])
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(colors::ON_SURFACE_VARIANT))
+                        .mb(px(16.))
+                        .child("Preview"),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(14.))
+                        .text_color(text_color)
+                        .overflow_hidden()
+                        .child(display_content.to_string()),
+                ),
+        )
+}
+
+/// Render Material 3-styled log panel
+///
+/// Tonal surface container with M3 typography.
+pub fn render_material3_log_panel(logs: &[String]) -> impl IntoElement {
+    div()
+        .w_full()
+        .h(px(160.))
+        .px(px(16.))
+        .pb(px(16.))
+        .child(
+            div()
+                .w_full()
+                .h_full()
+                .p(px(16.))
+                .bg(rgb(colors::SURFACE_CONTAINER_HIGH))
+                .rounded(px(corners::MD))
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(colors::ON_SURFACE_VARIANT))
+                        .mb(px(12.))
+                        .child("Console Output"),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .overflow_hidden()
+                        .font_family("Roboto Mono")
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.))
+                        .children(logs.iter().map(|log| {
+                            div()
+                                .text_size(px(12.))
+                                .text_color(rgb(colors::ON_SURFACE_VARIANT))
+                                .child(log.clone())
+                        })),
+                ),
+        )
+}
+
+/// Render Material 3-styled window container
+///
+/// M3 surface with proper elevation and shape.
+pub fn render_material3_window_container(children: impl IntoElement) -> impl IntoElement {
+    div()
+        .w_full()
+        .h_full()
+        .bg(rgb(colors::SURFACE))
+        .rounded(px(corners::LG))
+        .overflow_hidden()
+        .shadow(vec![
+            BoxShadow {
+                color: hsla(0., 0., 0., 0.15),
+                offset: point(px(0.), px(elevation::LEVEL2)),
+                blur_radius: px(8.),
+                spread_radius: px(0.),
+            },
+            BoxShadow {
+                color: hsla(0., 0., 0., 0.08),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(3.),
+                spread_radius: px(0.),
+            },
+        ])
+        .child(children)
+}
+
 // Note: Tests omitted due to GPUI macro recursion limit issues.
 // Material 3 colors (M3 palette):
 // - SURFACE: 0xfef7ff

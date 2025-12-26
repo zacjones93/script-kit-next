@@ -15,6 +15,7 @@ use crate::logging;
 use crate::protocol::Choice;
 use crate::theme;
 use crate::utils::strip_html_tags;
+use crate::designs::{DesignVariant, get_tokens};
 
 /// Callback for prompt submission
 /// Signature: (id: String, value: Option<String>)
@@ -37,6 +38,8 @@ pub struct ArgPrompt {
     pub focus_handle: FocusHandle,
     pub on_submit: SubmitCallback,
     pub theme: Arc<theme::Theme>,
+    /// Design variant for styling (defaults to Default for theme-based styling)
+    pub design_variant: DesignVariant,
 }
 
 impl ArgPrompt {
@@ -48,8 +51,20 @@ impl ArgPrompt {
         on_submit: SubmitCallback,
         theme: Arc<theme::Theme>,
     ) -> Self {
-        logging::log("PROMPTS", &format!("ArgPrompt::new with theme colors: bg={:#x}, text={:#x}", 
-            theme.colors.background.main, theme.colors.text.primary));
+        Self::with_design(id, placeholder, choices, focus_handle, on_submit, theme, DesignVariant::Default)
+    }
+    
+    pub fn with_design(
+        id: String,
+        placeholder: String,
+        choices: Vec<Choice>,
+        focus_handle: FocusHandle,
+        on_submit: SubmitCallback,
+        theme: Arc<theme::Theme>,
+        design_variant: DesignVariant,
+    ) -> Self {
+        logging::log("PROMPTS", &format!("ArgPrompt::new with theme colors: bg={:#x}, text={:#x}, design: {:?}", 
+            theme.colors.background.main, theme.colors.text.primary, design_variant));
         let filtered_choices: Vec<usize> = (0..choices.len()).collect();
         ArgPrompt {
             id,
@@ -61,6 +76,7 @@ impl ArgPrompt {
             focus_handle,
             on_submit,
             theme,
+            design_variant,
         }
     }
 
@@ -134,6 +150,12 @@ impl Focusable for ArgPrompt {
 
 impl Render for ArgPrompt {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Get design tokens for the current design variant
+        let tokens = get_tokens(self.design_variant);
+        let colors = tokens.colors();
+        let spacing = tokens.spacing();
+        let visual = tokens.visual();
+        
         let handle_key = cx.listener(move |this: &mut Self, event: &gpui::KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
             let key_str = event.keystroke.key.to_lowercase();
             
@@ -163,25 +185,47 @@ impl Render for ArgPrompt {
             SharedString::from(self.input_text.clone())
         };
 
+        // Use design tokens for colors (with theme fallback for Default variant)
+        let (search_box_bg, border_color, muted_text, dimmed_text, secondary_text) = 
+            if self.design_variant == DesignVariant::Default {
+                // Use theme colors for default design
+                (
+                    rgb(self.theme.colors.background.search_box),
+                    rgb(self.theme.colors.ui.border),
+                    rgb(self.theme.colors.text.muted),
+                    rgb(self.theme.colors.text.dimmed),
+                    rgb(self.theme.colors.text.secondary),
+                )
+            } else {
+                // Use design tokens for non-default designs
+                (
+                    rgb(colors.background_secondary),
+                    rgb(colors.border),
+                    rgb(colors.text_muted),
+                    rgb(colors.text_dimmed),
+                    rgb(colors.text_secondary),
+                )
+            };
+
         let input_container = div()
             .w_full()
-            .px(px(16.))
-            .py(px(12.))
-            .bg(rgb(self.theme.colors.background.search_box))
+            .px(px(spacing.item_padding_x))
+            .py(px(spacing.padding_md))
+            .bg(search_box_bg)
             .border_b_1()
-            .border_color(rgb(self.theme.colors.ui.border))
+            .border_color(border_color)
             .flex()
             .flex_row()
             .gap_2()
             .items_center()
-            .child(div().text_color(rgb(self.theme.colors.text.muted)).child("🔍"))
+            .child(div().text_color(muted_text).child("🔍"))
             .child(
                 div()
                     .flex_1()
                     .text_color(if self.input_text.is_empty() {
-                        rgb(self.theme.colors.text.dimmed)
+                        dimmed_text
                     } else {
-                        rgb(self.theme.colors.text.secondary)
+                        secondary_text
                     })
                     .child(input_display),
             );
@@ -200,40 +244,63 @@ impl Render for ArgPrompt {
             choices_container = choices_container.child(
                 div()
                     .w_full()
-                    .py(px(32.))
-                    .px(px(16.))
-                    .text_color(rgb(self.theme.colors.text.dimmed))
+                    .py(px(spacing.padding_xl))
+                    .px(px(spacing.item_padding_x))
+                    .text_color(dimmed_text)
                     .child("No choices match your filter"),
             );
         } else {
             for (idx, &choice_idx) in self.filtered_choices.iter().enumerate() {
                 if let Some(choice) = self.choices.get(choice_idx) {
                     let is_selected = idx == self.selected_index;
-                    let bg = if is_selected {
-                        rgb(self.theme.colors.accent.selected)
+                    
+                    // Use design tokens for item colors (with theme fallback for Default)
+                    let (bg, name_color, desc_color) = if self.design_variant == DesignVariant::Default {
+                        (
+                            if is_selected {
+                                rgb(self.theme.colors.accent.selected)
+                            } else {
+                                rgb(self.theme.colors.background.main)
+                            },
+                            if is_selected {
+                                rgb(self.theme.colors.text.primary)
+                            } else {
+                                rgb(self.theme.colors.text.secondary)
+                            },
+                            if is_selected {
+                                rgb(self.theme.colors.text.tertiary)
+                            } else {
+                                rgb(self.theme.colors.text.muted)
+                            },
+                        )
                     } else {
-                        rgb(self.theme.colors.background.main)
-                    };
-
-                    let name_color = if is_selected {
-                        rgb(self.theme.colors.text.primary)
-                    } else {
-                        rgb(self.theme.colors.text.secondary)
-                    };
-
-                    let desc_color = if is_selected {
-                        rgb(self.theme.colors.text.tertiary)
-                    } else {
-                        rgb(self.theme.colors.text.muted)
+                        (
+                            if is_selected {
+                                rgb(colors.background_selected)
+                            } else {
+                                rgb(colors.background)
+                            },
+                            if is_selected {
+                                rgb(colors.text_on_accent)
+                            } else {
+                                rgb(colors.text_secondary)
+                            },
+                            if is_selected {
+                                rgb(colors.text_secondary)
+                            } else {
+                                rgb(colors.text_muted)
+                            },
+                        )
                     };
 
                     let mut choice_item = div()
                         .w_full()
-                        .px(px(16.))
-                        .py(px(10.))
+                        .px(px(spacing.item_padding_x))
+                        .py(px(spacing.item_padding_y))
                         .bg(bg)
                         .border_b_1()
-                        .border_color(rgb(self.theme.colors.ui.border))
+                        .border_color(border_color)
+                        .rounded(px(visual.radius_sm))
                         .flex()
                         .flex_col()
                         .gap_1();
@@ -261,6 +328,19 @@ impl Render for ArgPrompt {
             }
         }
 
+        // Main container colors (with theme fallback for Default)
+        let (main_bg, container_text) = if self.design_variant == DesignVariant::Default {
+            (
+                rgb(self.theme.colors.background.main),
+                rgb(self.theme.colors.text.secondary),
+            )
+        } else {
+            (
+                rgb(colors.background),
+                rgb(colors.text_secondary),
+            )
+        };
+
         // Main container - fills entire window height with no bottom gap
         // Layout: input_container (fixed height) + choices_container (flex_1 fills rest)
         div()
@@ -269,8 +349,8 @@ impl Render for ArgPrompt {
             .w_full()
             .h_full()            // Fill container height completely
             .min_h(px(0.))       // Allow proper flex behavior
-            .bg(rgb(self.theme.colors.background.main))
-            .text_color(rgb(self.theme.colors.text.secondary))
+            .bg(main_bg)
+            .text_color(container_text)
             .key_context("arg_prompt")
             .track_focus(&self.focus_handle)
             .on_key_down(handle_key)
@@ -292,6 +372,8 @@ pub struct DivPrompt {
     pub focus_handle: FocusHandle,
     pub on_submit: SubmitCallback,
     pub theme: Arc<theme::Theme>,
+    /// Design variant for styling (defaults to Default for theme-based styling)
+    pub design_variant: DesignVariant,
 }
 
 impl DivPrompt {
@@ -303,8 +385,20 @@ impl DivPrompt {
         on_submit: SubmitCallback,
         theme: Arc<theme::Theme>,
     ) -> Self {
-        logging::log("PROMPTS", &format!("DivPrompt::new with theme colors: bg={:#x}, text={:#x}", 
-            theme.colors.background.main, theme.colors.text.primary));
+        Self::with_design(id, html, tailwind, focus_handle, on_submit, theme, DesignVariant::Default)
+    }
+    
+    pub fn with_design(
+        id: String,
+        html: String,
+        tailwind: Option<String>,
+        focus_handle: FocusHandle,
+        on_submit: SubmitCallback,
+        theme: Arc<theme::Theme>,
+        design_variant: DesignVariant,
+    ) -> Self {
+        logging::log("PROMPTS", &format!("DivPrompt::new with theme colors: bg={:#x}, text={:#x}, design: {:?}", 
+            theme.colors.background.main, theme.colors.text.primary, design_variant));
         DivPrompt {
             id,
             html,
@@ -312,6 +406,7 @@ impl DivPrompt {
             focus_handle,
             on_submit,
             theme,
+            design_variant,
         }
     }
 
@@ -331,6 +426,11 @@ impl Focusable for DivPrompt {
 
 impl Render for DivPrompt {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Get design tokens for the current design variant
+        let tokens = get_tokens(self.design_variant);
+        let colors = tokens.colors();
+        let spacing = tokens.spacing();
+        
         let handle_key = cx.listener(move |this: &mut Self, event: &gpui::KeyDownEvent, _window: &mut Window, _cx: &mut Context<Self>| {
             let key_str = event.keystroke.key.to_lowercase();
             
@@ -343,6 +443,19 @@ impl Render for DivPrompt {
         // Extract and render text content using shared utility
         let display_text = strip_html_tags(&self.html);
 
+        // Use design tokens for colors (with theme fallback for Default variant)
+        let (main_bg, text_color) = if self.design_variant == DesignVariant::Default {
+            (
+                rgb(self.theme.colors.background.main),
+                rgb(self.theme.colors.text.secondary),
+            )
+        } else {
+            (
+                rgb(colors.background),
+                rgb(colors.text_secondary),
+            )
+        };
+
         // Main container - fills entire window height with no bottom gap
         // Content area uses flex_1 to fill all remaining space
         div()
@@ -351,9 +464,9 @@ impl Render for DivPrompt {
             .w_full()
             .h_full()            // Fill container height completely  
             .min_h(px(0.))       // Allow proper flex behavior
-            .bg(rgb(self.theme.colors.background.main))
-            .text_color(rgb(self.theme.colors.text.secondary))
-            .p(px(16.))
+            .bg(main_bg)
+            .text_color(text_color)
+            .p(px(spacing.padding_lg))
             .key_context("div_prompt")
             .track_focus(&self.focus_handle)
             .on_key_down(handle_key)

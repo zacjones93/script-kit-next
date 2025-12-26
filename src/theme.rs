@@ -46,6 +46,7 @@ pub struct VibrancySettings {
     /// - "menu": Similar to system menus
     /// - "sidebar": Sidebar-style blur
     /// - "content": Content background blur
+    ///
     /// Default: "popover" for a subtle, native feel
     pub material: String,
 }
@@ -336,9 +337,9 @@ impl ColorScheme {
             
             // Reduce saturation and brightness: blend 30% toward gray
             let gray = 0x80u32;
-            let new_r = ((r as u32 * 70 + gray * 30) / 100) as u8;
-            let new_g = ((g as u32 * 70 + gray * 30) / 100) as u8;
-            let new_b = ((b as u32 * 70 + gray * 30) / 100) as u8;
+            let new_r = ((r * 70 + gray * 30) / 100) as u8;
+            let new_g = ((g * 70 + gray * 30) / 100) as u8;
+            let new_b = ((b * 70 + gray * 30) / 100) as u8;
             
             ((new_r as u32) << 16) | ((new_g as u32) << 8) | (new_b as u32)
         }
@@ -407,10 +408,8 @@ impl Theme {
                 if let Some(ref focused) = focus_aware.focused {
                     return focused.to_color_scheme();
                 }
-            } else {
-                if let Some(ref unfocused) = focus_aware.unfocused {
-                    return unfocused.to_color_scheme();
-                }
+            } else if let Some(ref unfocused) = focus_aware.unfocused {
+                return unfocused.to_color_scheme();
             }
         }
         
@@ -488,7 +487,7 @@ impl Theme {
 pub fn detect_system_appearance() -> bool {
     // Try to detect macOS dark mode using system defaults
     match Command::new("defaults")
-        .args(&["read", "-g", "AppleInterfaceStyle"])
+        .args(["read", "-g", "AppleInterfaceStyle"])
         .output()
     {
         Ok(output) => {

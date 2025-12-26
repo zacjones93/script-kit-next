@@ -424,12 +424,73 @@ fn detect_output_mode(script: &Script) -> OutputMode {
 ## Success Criteria
 
 ### Tier 1 Success (Simple PTY)
-- [ ] Scripts can output colored text
-- [ ] Spinners and progress bars render correctly
-- [ ] Performance: <16ms frame time for typical output
-- [ ] Theme colors apply correctly
+- [x] Scripts can output colored text
+- [x] Spinners and progress bars render correctly
+- [x] Performance: <16ms frame time for typical output
+- [x] Theme colors apply correctly
 - [ ] Scroll-back works (1000+ lines)
 - [ ] Copy/paste works
+
+#### Tier 1 Implementation Notes (December 2025)
+
+**Completed Components:**
+- `src/terminal/mod.rs` - Terminal module with TerminalCell and CellAttributes
+- `src/terminal/pty.rs` - PTY process management with portable-pty
+- `src/terminal/alacritty.rs` - ANSI parser using alacritty_terminal
+- `src/terminal/theme_adapter.rs` - Theme color mapping
+- `src/term_prompt.rs` - Terminal UI with monospace grid rendering
+
+**Implemented Features:**
+- ANSI color codes (8 basic colors + bright variants)
+- 256-color palette support
+- True color (24-bit RGB) support
+- Text attributes: bold, dim, italic, underline, blink, inverse, strikethrough
+- Background colors (standard and extended)
+- Combined foreground + background styling
+- Unicode character rendering (box drawing, symbols)
+- Ctrl+key combinations (Ctrl+C, Ctrl+D, Ctrl+Z, Ctrl+L)
+- Cursor rendering with blinking support
+
+**Visual Test Script:**
+Run `scripts/test-terminal-visual.ts` to verify all color and attribute features.
+
+**Keyboard Shortcuts:**
+| Shortcut | Action |
+|----------|--------|
+| Ctrl+C | Send interrupt signal (SIGINT) |
+| Ctrl+D | Send EOF |
+| Ctrl+Z | Send suspend signal (SIGTSTP) |
+| Ctrl+L | Clear screen |
+| Enter | Submit/newline |
+| Escape | Close terminal |
+| Arrow Keys | Navigate in shell |
+
+**Architecture:**
+```
+┌──────────────────────────────────────────────────────────┐
+│                    term_prompt.rs                        │
+│  ┌─────────────────────────────────────────────────────┐ │
+│  │  TermPrompt (GPUI Entity)                          │ │
+│  │  - styled_lines: Vec<Vec<StyledChar>>              │ │
+│  │  - cursor_position: (row, col)                     │ │
+│  │  - terminal_colors: TerminalColors                 │ │
+│  └─────────────────────────────────────────────────────┘ │
+│                          ↑                               │
+│                   parse_output()                         │
+│                          ↑                               │
+│  ┌─────────────────────────────────────────────────────┐ │
+│  │  terminal/alacritty.rs                             │ │
+│  │  - AnsiParser (vte-based)                          │ │
+│  │  - TerminalCell, CellAttributes                    │ │
+│  └─────────────────────────────────────────────────────┘ │
+│                          ↑                               │
+│  ┌─────────────────────────────────────────────────────┐ │
+│  │  terminal/pty.rs                                   │ │
+│  │  - PtyProcess (portable-pty wrapper)               │ │
+│  │  - async read/write with child process             │ │
+│  └─────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────┘
+```
 
 ### Tier 2 Success (Alacritty)
 - [ ] `htop` runs correctly

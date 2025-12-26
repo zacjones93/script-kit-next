@@ -1,8 +1,10 @@
 //! Terminal integration module for Script Kit GPUI.
+//! Terminal module for Script Kit GPUI
 //!
 //! This module provides embedded terminal functionality using Alacritty's terminal
 //! emulator backend and portable-pty for cross-platform PTY support. It enables
 //! Script Kit to swap prompts into full terminal sessions via `await term("command")`.
+#![allow(dead_code)]
 //!
 //! # Architecture
 //!
@@ -51,9 +53,7 @@ pub mod pty;
 pub mod theme_adapter;
 
 // Re-export main types for convenient access
-pub use alacritty::TerminalHandle;
-pub use pty::PtyManager;
-pub use theme_adapter::ThemeAdapter;
+pub use alacritty::{CellAttributes, TerminalContent, TerminalHandle};
 
 /// Events emitted by the terminal for GPUI integration.
 ///
@@ -69,6 +69,7 @@ pub use theme_adapter::ThemeAdapter;
 /// The terminal continuously parses PTY output and emits these events
 /// which should be polled in the GPUI render loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum TerminalEvent {
     /// Terminal produced output that should be rendered.
     ///

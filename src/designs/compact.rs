@@ -203,5 +203,141 @@ impl RenderOnce for CompactListItem {
     }
 }
 
+// ============================================================================
+// Standalone render functions for window components
+// ============================================================================
+
+/// Render compact-styled header
+///
+/// Minimal height header with dense typography.
+pub fn render_compact_header(title: &str, colors: ListItemColors) -> impl IntoElement {
+    // Use text_dimmed for border color since ListItemColors doesn't have border field
+    let border_color = colors.text_dimmed;
+    
+    div()
+        .w_full()
+        .h(px(28.))
+        .px(px(8.))
+        .bg(rgb(colors.background))
+        .border_b_1()
+        .border_color(rgba((border_color << 8) | 0x60))
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .font_family("Menlo")
+        .text_xs()
+        .child(
+            div()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(colors.text_primary))
+                .child(title.to_string()),
+        )
+        .child(
+            div()
+                .text_color(rgb(colors.text_dimmed))
+                .child("compact"),
+        )
+}
+
+/// Render compact-styled preview panel
+///
+/// Dense preview with minimal padding and small font.
+pub fn render_compact_preview_panel(
+    content: Option<&str>,
+    colors: ListItemColors,
+) -> impl IntoElement {
+    let display_content = content.unwrap_or("No selection");
+    let text_color = if content.is_some() {
+        rgb(colors.text_primary)
+    } else {
+        rgb(colors.text_dimmed)
+    };
+
+    div()
+        .w_full()
+        .h_full()
+        .p(px(6.))
+        .bg(rgb(colors.background))
+        .border_1()
+        .border_color(rgba((colors.text_dimmed << 8) | 0x40))
+        .rounded(px(4.))
+        .flex()
+        .flex_col()
+        .font_family("Menlo")
+        .text_xs()
+        .child(
+            div()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(colors.text_muted))
+                .mb(px(4.))
+                .child("PREVIEW"),
+        )
+        .child(
+            div()
+                .flex_1()
+                .text_color(text_color)
+                .overflow_hidden()
+                .child(display_content.to_string()),
+        )
+}
+
+/// Render compact-styled log panel
+///
+/// Maximum density log output with tight line spacing.
+pub fn render_compact_log_panel(logs: &[String], colors: ListItemColors) -> impl IntoElement {
+    div()
+        .w_full()
+        .h(px(100.))
+        .p(px(4.))
+        .bg(rgb(colors.background))
+        .border_1()
+        .border_color(rgba((colors.text_dimmed << 8) | 0x40))
+        .rounded(px(2.))
+        .flex()
+        .flex_col()
+        .font_family("Menlo")
+        .child(
+            div()
+                .text_size(px(9.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(colors.text_dimmed))
+                .mb(px(2.))
+                .child("LOG"),
+        )
+        .child(
+            div()
+                .flex_1()
+                .overflow_hidden()
+                .flex()
+                .flex_col()
+                .children(logs.iter().map(|log| {
+                    div()
+                        .text_size(px(9.))
+                        .text_color(rgb(colors.text_secondary))
+                        .line_height(px(12.))
+                        .child(log.clone())
+                })),
+        )
+}
+
+/// Render compact-styled window container
+///
+/// Minimal chrome, maximum content area.
+pub fn render_compact_window_container(
+    colors: ListItemColors,
+    children: impl IntoElement,
+) -> impl IntoElement {
+    div()
+        .w_full()
+        .h_full()
+        .bg(rgb(colors.background))
+        .border_1()
+        .border_color(rgba((colors.text_dimmed << 8) | 0x40))
+        .rounded(px(4.))
+        .overflow_hidden()
+        .child(children)
+}
+
 // Note: Tests omitted due to GPUI macro recursion limit issues.
 // COMPACT_ITEM_HEIGHT = 24.0 (less than half of standard 52px)

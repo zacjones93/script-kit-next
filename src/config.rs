@@ -75,7 +75,7 @@ pub fn load_config() -> Config {
     match json_output {
         Err(e) => {
             warn!(error = %e, "Failed to execute bun to extract JSON, using defaults");
-            return Config::default();
+            Config::default()
         }
         Ok(output) => {
             if !output.status.success() {
@@ -83,23 +83,23 @@ pub fn load_config() -> Config {
                     stderr = %String::from_utf8_lossy(&output.stderr),
                     "bun execution failed, using defaults"
                 );
-                return Config::default();
-            }
-
-            // Step 3: Parse the JSON output into Config struct
-            let json_str = String::from_utf8_lossy(&output.stdout);
-            match serde_json::from_str::<Config>(json_str.trim()) {
-                Ok(config) => {
-                    info!(path = %config_path.display(), "Successfully loaded config");
-                    config
-                }
-                Err(e) => {
-                    warn!(
-                        error = %e,
-                        json_output = %json_str,
-                        "Failed to parse config JSON, using defaults"
-                    );
-                    Config::default()
+                Config::default()
+            } else {
+                // Step 3: Parse the JSON output into Config struct
+                let json_str = String::from_utf8_lossy(&output.stdout);
+                match serde_json::from_str::<Config>(json_str.trim()) {
+                    Ok(config) => {
+                        info!(path = %config_path.display(), "Successfully loaded config");
+                        config
+                    }
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            json_output = %json_str,
+                            "Failed to parse config JSON, using defaults"
+                        );
+                        Config::default()
+                    }
                 }
             }
         }

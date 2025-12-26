@@ -337,6 +337,154 @@ impl<App> DesignRenderer<App> for AppleHIGRenderer {
     }
 }
 
+// ============================================================================
+// Standalone render functions for window components
+// ============================================================================
+
+/// Render Apple HIG-styled header
+///
+/// iOS-style navigation bar with SF Pro font and system colors.
+pub fn render_apple_hig_header(title: &str) -> impl IntoElement {
+    div()
+        .w_full()
+        .h(px(44.))
+        .px(px(16.))
+        .bg(rgb(colors::CARD_BG))
+        .border_b_1()
+        .border_color(rgb(colors::SEPARATOR))
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_center()
+        .font_family(".AppleSystemUIFont")
+        .child(
+            div()
+                .text_base()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(colors::TEXT_PRIMARY))
+                .child(title.to_string()),
+        )
+}
+
+/// Render Apple HIG-styled preview panel
+///
+/// iOS grouped card with clean white background and subtle borders.
+pub fn render_apple_hig_preview_panel(content: Option<&str>) -> impl IntoElement {
+    let display_content = content.unwrap_or("Select an item to see details");
+    let text_color = if content.is_some() {
+        rgb(colors::TEXT_PRIMARY)
+    } else {
+        rgb(colors::TEXT_TERTIARY)
+    };
+
+    div()
+        .w_full()
+        .h_full()
+        .p(px(16.))
+        .child(
+            div()
+                .w_full()
+                .h_full()
+                .p(px(16.))
+                .bg(rgb(colors::CARD_BG))
+                .rounded(px(GROUP_RADIUS))
+                .shadow(vec![BoxShadow {
+                    color: hsla(0., 0., 0., 0.05),
+                    offset: point(px(0.), px(1.)),
+                    blur_radius: px(3.),
+                    spread_radius: px(0.),
+                }])
+                .flex()
+                .flex_col()
+                .font_family(".AppleSystemUIFont")
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(colors::TEXT_TERTIARY))
+                        .mb(px(12.))
+                        .child("PREVIEW"),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .text_sm()
+                        .text_color(text_color)
+                        .overflow_hidden()
+                        .child(display_content.to_string()),
+                ),
+        )
+}
+
+/// Render Apple HIG-styled log panel
+///
+/// iOS-style console with monospace font and grouped appearance.
+pub fn render_apple_hig_log_panel(logs: &[String]) -> impl IntoElement {
+    div()
+        .w_full()
+        .h(px(150.))
+        .px(px(16.))
+        .pb(px(16.))
+        .child(
+            div()
+                .w_full()
+                .h_full()
+                .p(px(12.))
+                .bg(rgb(colors::CARD_BG))
+                .rounded(px(GROUP_RADIUS))
+                .shadow(vec![BoxShadow {
+                    color: hsla(0., 0., 0., 0.05),
+                    offset: point(px(0.), px(1.)),
+                    blur_radius: px(3.),
+                    spread_radius: px(0.),
+                }])
+                .flex()
+                .flex_col()
+                .font_family("SF Mono")
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(colors::TEXT_TERTIARY))
+                        .mb(px(8.))
+                        .child("CONSOLE"),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .overflow_hidden()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.))
+                        .children(logs.iter().map(|log| {
+                            div()
+                                .text_xs()
+                                .text_color(rgb(colors::TEXT_SECONDARY))
+                                .child(log.clone())
+                        })),
+                ),
+        )
+}
+
+/// Render Apple HIG-styled window container
+///
+/// iOS grouped table view background with system appearance.
+pub fn render_apple_hig_window_container(children: impl IntoElement) -> impl IntoElement {
+    div()
+        .w_full()
+        .h_full()
+        .bg(rgb(colors::BACKGROUND))
+        .rounded(px(GROUP_RADIUS))
+        .overflow_hidden()
+        .shadow(vec![BoxShadow {
+            color: hsla(0., 0., 0., 0.15),
+            offset: point(px(0.), px(4.)),
+            blur_radius: px(12.),
+            spread_radius: px(0.),
+        }])
+        .child(children)
+}
+
 // Note: Tests omitted due to GPUI macro recursion limit issues.
 // Apple HIG colors (iOS specs):
 // - BACKGROUND: 0xf2f2f7

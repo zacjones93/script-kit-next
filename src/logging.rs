@@ -7,17 +7,15 @@
 //!
 //! # Usage
 //!
-//! ```rust
+//! ```rust,ignore
 //! use script_kit_gpui::logging;
 //!
-//! fn main() {
-//!     // Initialize logging - MUST keep guard alive for duration of program
-//!     let _guard = logging::init();
+//! // Initialize logging - MUST keep guard alive for duration of program
+//! let _guard = logging::init();
 //!     
-//!     // Use tracing macros directly
-//!     tracing::info!(event_type = "app_start", "Application started");
-//!     tracing::error!(error_code = 42, "Something went wrong");
-//! }
+//! // Use tracing macros directly
+//! tracing::info!(event_type = "app_start", "Application started");
+//! tracing::error!(error_code = 42, "Something went wrong");
 //! ```
 //!
 //! # JSONL Output Format
@@ -59,11 +57,10 @@ pub struct LoggingGuard {
 ///
 /// # Example
 ///
-/// ```rust
-/// fn main() {
-///     let _guard = logging::init();
-///     // ... rest of program
-/// } // guard dropped here, logs flushed
+/// ```rust,ignore
+/// let _guard = logging::init();
+/// // ... rest of program
+/// // guard dropped here, logs flushed
 /// ```
 pub fn init() -> LoggingGuard {
     // Initialize legacy log buffer for UI display

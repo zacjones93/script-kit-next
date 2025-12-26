@@ -2059,7 +2059,7 @@ code here
 
         // Query with space - will be treated as literal string
         let results = fuzzy_search_scripts(&scripts, "open file");
-        assert!(results.len() > 0);
+        assert!(!results.is_empty());
     }
 
     #[test]

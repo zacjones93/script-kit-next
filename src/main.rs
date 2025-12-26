@@ -38,7 +38,7 @@ mod terminal;
 use list_item::{ListItem, ListItemColors, LIST_ITEM_HEIGHT};
 use utils::strip_html_tags;
 use error::ErrorSeverity;
-use designs::{DesignVariant, render_design_item};
+use designs::{DesignVariant, render_design_item, get_tokens};
 
 use std::sync::{Arc, Mutex, mpsc};
 use protocol::{Message, Choice};
@@ -107,13 +107,11 @@ fn get_macos_displays() -> Vec<DisplayBounds> {
 
 /// Move the key window (focused window) to a new position using native macOS APIs.
 /// Position is specified as origin (top-left corner) in screen coordinates.
-/// 
+///
 /// IMPORTANT: macOS uses a global coordinate space where Y=0 is at the BOTTOM of the
 /// PRIMARY screen, and Y increases upward. The primary screen's origin is always (0,0)
 /// at its bottom-left corner. Secondary displays have their own position in this space.
-/// 
-
-
+///
 /// Move the application's first window to new bounds, regardless of keyWindow status.
 /// This is the reliable way to move the window because we don't depend on keyWindow
 /// being set (which has timing issues with macOS window activation).
@@ -313,6 +311,7 @@ enum AppView {
     },
     /// Showing a terminal prompt from a script
     TermPrompt {
+        #[allow(dead_code)]
         id: String,
         entity: Entity<term_prompt::TermPrompt>,
     },
@@ -330,6 +329,63 @@ enum PromptMessage {
     HideWindow,
     OpenBrowser { url: String },
     ScriptExit,
+    /// External command to run a script by path
+    RunScript { path: String },
+}
+
+/// External commands that can be sent to the app via stdin
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum ExternalCommand {
+    /// Run a script by path
+    Run { path: String },
+    /// Show the window
+    Show,
+    /// Hide the window  
+    Hide,
+}
+
+/// Start a thread that listens on stdin for external JSONL commands.
+/// Returns an async_channel::Receiver that can be awaited without polling.
+fn start_stdin_listener() -> async_channel::Receiver<ExternalCommand> {
+    use std::io::BufRead;
+    
+    let (tx, rx) = async_channel::unbounded();
+    
+    std::thread::spawn(move || {
+        logging::log("STDIN", "External command listener started");
+        let stdin = std::io::stdin();
+        let reader = stdin.lock();
+        
+        for line in reader.lines() {
+            match line {
+                Ok(line) if !line.trim().is_empty() => {
+                    logging::log("STDIN", &format!("Received: {}", line));
+                    match serde_json::from_str::<ExternalCommand>(&line) {
+                        Ok(cmd) => {
+                            logging::log("STDIN", &format!("Parsed command: {:?}", cmd));
+                            // send_blocking is used since we're in a sync thread
+                            if tx.send_blocking(cmd).is_err() {
+                                logging::log("STDIN", "Command channel closed, exiting");
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            logging::log("STDIN", &format!("Failed to parse command: {}", e));
+                        }
+                    }
+                }
+                Ok(_) => {} // Empty line, ignore
+                Err(e) => {
+                    logging::log("STDIN", &format!("Error reading stdin: {}", e));
+                    break;
+                }
+            }
+        }
+        logging::log("STDIN", "External command listener exiting");
+    });
+    
+    rx
 }
 
 /// A simple model that polls for hotkey triggers
@@ -343,7 +399,7 @@ impl HotkeyPoller {
     }
     
     fn start_polling(&self, cx: &mut Context<Self>) {
-        let window = self.window.clone();
+        let window = self.window;
         cx.spawn(async move |_this, cx: &mut gpui::AsyncApp| {
             loop {
                 Timer::after(std::time::Duration::from_millis(100)).await;
@@ -367,7 +423,7 @@ impl HotkeyPoller {
                         logging::log("VISIBILITY", "WINDOW_VISIBLE set to: false");
                         
                         // Window is visible - check if in prompt mode
-                        let window_clone = window.clone();
+                        let window_clone = window;
                         
                         // First check if we're in a prompt - if so, cancel and hide
                         let mut in_prompt = false;
@@ -398,7 +454,7 @@ impl HotkeyPoller {
                         WINDOW_VISIBLE.store(true, Ordering::SeqCst);
                         logging::log("VISIBILITY", "WINDOW_VISIBLE set to: true");
                         
-                        let window_clone = window.clone();
+                        let window_clone = window;
                         let _ = cx.update(move |cx: &mut App| {
                             // Step 1: Calculate new bounds on display with mouse, at eye-line height
                             let window_size = size(px(750.), px(500.0));
@@ -619,13 +675,15 @@ impl ScriptListApp {
         let old_design = self.current_design;
         let new_design = old_design.next();
         let all_designs = DesignVariant::all();
-        let current_idx = all_designs.iter().position(|&v| v == new_design).unwrap_or(0);
+        let old_idx = all_designs.iter().position(|&v| v == old_design).unwrap_or(0);
+        let new_idx = all_designs.iter().position(|&v| v == new_design).unwrap_or(0);
         
         logging::log("DESIGN", &format!(
-            "Cycling design: {} -> {} ({}/{})",
+            "Cycling design: {} ({}) -> {} ({}) [total: {}]",
             old_design.name(),
+            old_idx,
             new_design.name(),
-            current_idx + 1,
+            new_idx,
             all_designs.len()
         ));
         logging::log("DESIGN", &format!(
@@ -635,6 +693,10 @@ impl ScriptListApp {
         ));
         
         self.current_design = new_design;
+        logging::log("DESIGN", &format!(
+            "self.current_design is now: {:?}",
+            self.current_design
+        ));
         cx.notify();
     }
     
@@ -1254,6 +1316,32 @@ impl ScriptListApp {
                     }
                 }
             }
+            PromptMessage::RunScript { path } => {
+                logging::log("EXEC", &format!("RunScript command received: {}", path));
+                
+                // Create a Script struct from the path
+                let script_path = std::path::PathBuf::from(&path);
+                let script_name = script_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let extension = script_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("ts")
+                    .to_string();
+                
+                let script = scripts::Script {
+                    name: script_name.clone(),
+                    description: Some(format!("External script: {}", path)),
+                    path: script_path,
+                    extension,
+                };
+                
+                logging::log("EXEC", &format!("Executing script: {}", script_name));
+                self.execute_interactive(&script, cx);
+            }
          }
       }
       
@@ -1592,13 +1680,22 @@ impl ScriptListApp {
         let filtered = self.filtered_results();
         let selected_result = filtered.get(self.selected_index).cloned();
         
-        // Pre-extract all theme colors before any mutable borrows
-        let bg_main = self.theme.colors.background.main;
-        let ui_border = self.theme.colors.ui.border;
-        let text_primary = self.theme.colors.text.primary;
-        let text_muted = self.theme.colors.text.muted;
-        let text_secondary = self.theme.colors.text.secondary;
-        let bg_search_box = self.theme.colors.background.search_box;
+        // Use design tokens for GLOBAL theming - design applies to ALL components
+        let tokens = get_tokens(self.current_design);
+        let colors = tokens.colors();
+        let spacing = tokens.spacing();
+        let typography = tokens.typography();
+        let visual = tokens.visual();
+        
+        // Map design tokens to local variables (all designs use tokens now)
+        let bg_main = colors.background;
+        let ui_border = colors.border;
+        let text_primary = colors.text_primary;
+        let text_muted = colors.text_muted;
+        let text_secondary = colors.text_secondary;
+        let bg_search_box = colors.background_tertiary;
+        let border_radius = visual.radius_md;
+        let font_family = typography.font_family;
         
         // Preview panel container with left border separator
         let mut panel = div()
@@ -1607,11 +1704,11 @@ impl ScriptListApp {
             .bg(rgb(bg_main))
             .border_l_1()
             .border_color(rgba((ui_border << 8) | 0x80))
-            .p(px(16.))
+            .p(px(spacing.padding_lg))
             .flex()
             .flex_col()
             .overflow_y_hidden()
-            .font_family(".AppleSystemUIFont");
+            .font_family(font_family);
         
         match selected_result {
             Some(ref result) => {
@@ -1698,8 +1795,8 @@ impl ScriptListApp {
                         let mut code_container = div()
                             .w_full()
                             .min_w(px(280.))
-                            .p(px(12.))
-                            .rounded(px(6.))
+                            .p(px(spacing.padding_md))
+                            .rounded(px(border_radius))
                             .bg(rgba((bg_search_box << 8) | 0x80))
                             .overflow_hidden()
                             .flex()
@@ -1711,7 +1808,7 @@ impl ScriptListApp {
                                 .flex()
                                 .flex_row()
                                 .w_full()
-                                .font_family("Menlo")
+                                .font_family(typography.font_family_mono)
                                 .text_xs()
                                 .min_h(px(16.)); // Line height
                             
@@ -1859,8 +1956,8 @@ impl ScriptListApp {
                         let mut code_container = div()
                             .w_full()
                             .min_w(px(280.))
-                            .p(px(12.))
-                            .rounded(px(6.))
+                            .p(px(spacing.padding_md))
+                            .rounded(px(border_radius))
                             .bg(rgba((bg_search_box << 8) | 0x80))
                             .overflow_hidden()
                             .flex()
@@ -1872,7 +1969,7 @@ impl ScriptListApp {
                                 .flex()
                                 .flex_row()
                                 .w_full()
-                                .font_family("Menlo")
+                                .font_family(typography.font_family_mono)
                                 .text_xs()
                                 .min_h(px(16.)); // Line height
                             
@@ -1948,6 +2045,17 @@ impl ScriptListApp {
         let _total_len = self.scripts.len() + self.scriptlets.len();
         let theme = &self.theme;
         
+        // Get design tokens for current design variant
+        let tokens = get_tokens(self.current_design);
+        let design_colors = tokens.colors();
+        let design_spacing = tokens.spacing();
+        let design_visual = tokens.visual();
+        let design_typography = tokens.typography();
+        
+        // For Default design, use theme.colors for backward compatibility
+        // For other designs, use design tokens
+        let is_default_design = self.current_design == DesignVariant::Default;
+        
         // Handle edge cases - keep selected_index in valid bounds
         if self.selected_index >= filtered_len && filtered_len > 0 {
             self.selected_index = filtered_len.saturating_sub(1);
@@ -1960,6 +2068,10 @@ impl ScriptListApp {
         logging::log_debug("PERF", "P4: Using ListItemColors for render closure");
 
         // Build script list using uniform_list for proper virtualized scrolling
+        // Use design tokens for empty state styling
+        let empty_text_color = if is_default_design { theme.colors.text.muted } else { design_colors.text_muted };
+        let empty_font_family = if is_default_design { ".AppleSystemUIFont" } else { design_typography.font_family };
+        
         let list_element: AnyElement = if filtered_len == 0 {
             div()
                 .w_full()
@@ -1967,8 +2079,8 @@ impl ScriptListApp {
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_color(rgb(theme.colors.text.muted))
-                .font_family(".AppleSystemUIFont")
+                .text_color(rgb(empty_text_color))
+                .font_family(empty_font_family)
                 .child(if self.filter_text.is_empty() {
                     "No scripts or snippets found".to_string()
                 } else {
@@ -2134,11 +2246,38 @@ impl ScriptListApp {
         // Main container with system font and transparency
         // Use theme opacity settings for background transparency
         let opacity = self.theme.get_opacity();
-        let bg_hex = theme.colors.background.main;
+        
+        // Use design tokens for background color (or theme for Default design)
+        let bg_hex = if is_default_design {
+            theme.colors.background.main
+        } else {
+            design_colors.background
+        };
         let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
         
         // Create box shadows from theme
         let box_shadows = self.create_box_shadows();
+        
+        // Use design tokens for border radius
+        let border_radius = if is_default_design {
+            12.0 // Default radius
+        } else {
+            design_visual.radius_lg
+        };
+        
+        // Use design tokens for text color
+        let text_primary = if is_default_design {
+            theme.colors.text.primary
+        } else {
+            design_colors.text_primary
+        };
+        
+        // Use design tokens for font family
+        let font_family = if is_default_design {
+            ".AppleSystemUIFont"
+        } else {
+            design_typography.font_family
+        };
         
         let mut main_div = div()
             .flex()
@@ -2147,22 +2286,31 @@ impl ScriptListApp {
             .shadow(box_shadows)
             .w_full()
             .h_full()
-            .rounded(px(12.))
-            .text_color(rgb(theme.colors.text.primary))
-            .font_family(".AppleSystemUIFont")
+            .rounded(px(border_radius))
+            .text_color(rgb(text_primary))
+            .font_family(font_family)
             .key_context("script_list")
             .track_focus(&self.focus_handle)
             .on_key_down(handle_key)
             // Header: Search Input + Run + Actions + Logo
-            .child(
+            // Use design tokens for spacing and colors
+            .child({
+                // Design token values for header
+                let header_padding_x = if is_default_design { 16.0 } else { design_spacing.padding_lg };
+                let header_padding_y = if is_default_design { 14.0 } else { design_spacing.padding_md };
+                let header_gap = if is_default_design { 12.0 } else { design_spacing.gap_md };
+                let text_muted = if is_default_design { theme.colors.text.muted } else { design_colors.text_muted };
+                let text_dimmed = if is_default_design { theme.colors.text.dimmed } else { design_colors.text_dimmed };
+                let accent_color = if is_default_design { theme.colors.accent.selected } else { design_colors.accent };
+                
                 div()
                     .w_full()
-                    .px(px(16.))
-                    .py(px(14.))
+                    .px(px(header_padding_x))
+                    .py(px(header_padding_y))
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap_3()
+                    .gap(px(header_gap))
                     // Search input with blinking cursor
                     // Cursor appears at LEFT when input is empty (before placeholder text)
                     .child(
@@ -2172,40 +2320,45 @@ impl ScriptListApp {
                             .flex_row()
                             .items_center()
                             .text_xl()
-                            .text_color(if filter_is_empty { rgb(theme.colors.text.muted) } else { rgb(theme.colors.text.primary) })
+                            .text_color(if filter_is_empty { rgb(text_muted) } else { rgb(text_primary) })
                             // When empty: cursor FIRST (at left), then placeholder
                             // When typing: text, then cursor at end
-                            .when(filter_is_empty, |d| d.child(div().w(px(2.)).h(px(24.)).mr(px(4.)).when(self.cursor_visible, |d| d.bg(rgb(theme.colors.text.primary)))))
+                            .when(filter_is_empty, |d| d.child(div().w(px(2.)).h(px(24.)).mr(px(4.)).when(self.cursor_visible, |d| d.bg(rgb(text_primary)))))
                             .child(filter_display)
-                            .when(!filter_is_empty, |d| d.child(div().w(px(2.)).h(px(24.)).ml(px(2.)).when(self.cursor_visible, |d| d.bg(rgb(theme.colors.text.primary)))))
+                            .when(!filter_is_empty, |d| d.child(div().w(px(2.)).h(px(24.)).ml(px(2.)).when(self.cursor_visible, |d| d.bg(rgb(text_primary)))))
                     )
-                    // Run button - all text in accent.selected color (gold/yellow)
+                    // Run button - all text in accent color
                     .child(
-                        div().flex().flex_row().items_center().gap_1().text_sm().text_color(rgb(theme.colors.accent.selected))
+                        div().flex().flex_row().items_center().gap_1().text_sm().text_color(rgb(accent_color))
                             .child("Run").child("↵")
                     )
-                    .child(div().text_color(rgb(theme.colors.text.dimmed)).child("|"))
-                    // Actions button - all text in accent.selected color (gold/yellow)
+                    .child(div().text_color(rgb(text_dimmed)).child("|"))
+                    // Actions button - all text in accent color
                     .child(
-                        div().flex().flex_row().items_center().gap_1().text_sm().text_color(rgb(theme.colors.accent.selected))
+                        div().flex().flex_row().items_center().gap_1().text_sm().text_color(rgb(accent_color))
                             .child("Actions").child("⌘ K")
                     )
-                    .child(div().text_color(rgb(theme.colors.text.dimmed)).child("|"))
+                    .child(div().text_color(rgb(text_dimmed)).child("|"))
                     // Script Kit Logo - actual SVG file loaded from filesystem
                     .child(
                         svg()
                             .external_path(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/logo.svg"))
                             .size(px(20.))
-                            .text_color(rgb(theme.colors.accent.selected))
-                    ),
-            )
+                            .text_color(rgb(accent_color))
+                    )
+            })
             // Subtle divider - semi-transparent
-            .child(
+            // Use design tokens for border color and spacing
+            .child({
+                let divider_margin = if is_default_design { 16.0 } else { design_spacing.margin_lg };
+                let border_color = if is_default_design { theme.colors.ui.border } else { design_colors.border };
+                let border_width = if is_default_design { 1.0 } else { design_visual.border_thin };
+                
                 div()
-                    .mx(px(16.))
-                    .h(px(1.))
-                    .bg(rgba((theme.colors.ui.border << 8) | 0x60))
-            );
+                    .mx(px(divider_margin))
+                    .h(px(border_width))
+                    .bg(rgba((border_color << 8) | 0x60))
+            });
         
         // Add error notification if present (at the top of the content area)
         if let Some(notification) = self.render_error_notification() {
@@ -2271,9 +2424,15 @@ impl ScriptListApp {
     }
     
     fn render_arg_prompt(&mut self, id: String, placeholder: String, choices: Vec<Choice>, cx: &mut Context<Self>) -> AnyElement {
-        let theme = &self.theme;
-        let filtered = self.filtered_arg_choices();
-        let _filtered_len = filtered.len();
+        let _theme = &self.theme;
+        let _filtered = self.filtered_arg_choices();
+        
+        // Use design tokens for GLOBAL theming - all prompts use current design
+        let tokens = get_tokens(self.current_design);
+        let design_colors = tokens.colors();
+        let design_spacing = tokens.spacing();
+        let design_typography = tokens.typography();
+        let design_visual = tokens.visual();
         
         // Key handler for arg prompt
         let prompt_id = id.clone();
@@ -2342,11 +2501,11 @@ impl ScriptListApp {
         };
         let input_is_empty = self.arg_input_text.is_empty();
         
-        // P4: Pre-compute theme values for arg prompt using ListItemColors
-        let arg_list_colors = ListItemColors::from_theme(theme);
-        let accent_selected = theme.colors.accent.selected;
-        let text_primary = theme.colors.text.primary;
-        let text_muted = theme.colors.text.muted;
+        // P4: Pre-compute theme values for arg prompt using design tokens for GLOBAL theming
+        let arg_list_colors = ListItemColors::from_design(&design_colors);
+        let accent_selected = design_colors.accent;
+        let text_primary = design_colors.text_primary;
+        let text_muted = design_colors.text_muted;
         
         // P0: Clone data needed for uniform_list closure
         let arg_selected_index = self.arg_selected_index;
@@ -2358,9 +2517,10 @@ impl ScriptListApp {
         let list_element: AnyElement = if filtered_choices_len == 0 {
             div()
                 .w_full()
-                .py(px(24.))
+                .py(px(design_spacing.padding_xl))
                 .text_center()
-                .text_color(rgb(theme.colors.text.muted))
+                .text_color(rgb(design_colors.text_muted))
+                .font_family(design_typography.font_family)
                 .child("No choices match your filter")
                 .into_any_element()
         } else {
@@ -2394,15 +2554,15 @@ impl ScriptListApp {
             .into_any_element()
         };
         
-        // Use theme opacity and shadow settings
+        // Use design tokens for global theming
         let opacity = self.theme.get_opacity();
-        let bg_hex = theme.colors.background.main;
+        let bg_hex = design_colors.background;
         let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
         let box_shadows = self.create_box_shadows();
         
-        // P4: Pre-compute more theme values for the main container
-        let ui_border = theme.colors.ui.border;
-        let text_dimmed = theme.colors.text.dimmed;
+        // P4: Pre-compute more theme values for the main container using design tokens
+        let ui_border = design_colors.border;
+        let text_dimmed = design_colors.text_dimmed;
         
         div()
             .flex()
@@ -2411,9 +2571,9 @@ impl ScriptListApp {
             .shadow(box_shadows)
             .w_full()
             .h_full()
-            .rounded(px(12.))
+            .rounded(px(design_visual.radius_lg))
             .text_color(rgb(text_primary))
-            .font_family(".AppleSystemUIFont")
+            .font_family(design_typography.font_family)
             .key_context("arg_prompt")
             .track_focus(&self.focus_handle)
             .on_key_down(handle_key)
@@ -2421,8 +2581,8 @@ impl ScriptListApp {
             .child(
                 div()
                     .w_full()
-                    .px(px(16.))
-                    .py(px(14.))
+                    .px(px(design_spacing.padding_lg))
+                    .py(px(design_spacing.padding_md))
                     .flex()
                     .flex_row()
                     .items_center()
@@ -2486,7 +2646,12 @@ impl ScriptListApp {
     }
     
     fn render_div_prompt(&mut self, id: String, html: String, _tailwind: Option<String>, cx: &mut Context<Self>) -> AnyElement {
-        let theme = &self.theme;
+        // Use design tokens for GLOBAL theming
+        let tokens = get_tokens(self.current_design);
+        let design_colors = tokens.colors();
+        let design_spacing = tokens.spacing();
+        let design_typography = tokens.typography();
+        let design_visual = tokens.visual();
         
         // Strip HTML tags for plain text display
         let display_text = strip_html_tags(&html);
@@ -2512,9 +2677,9 @@ impl ScriptListApp {
             }
         });
         
-        // Use theme opacity and shadow settings
+        // Use design tokens for global theming
         let opacity = self.theme.get_opacity();
-        let bg_hex = theme.colors.background.main;
+        let bg_hex = design_colors.background;
         let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
         let box_shadows = self.create_box_shadows();
         
@@ -2525,9 +2690,9 @@ impl ScriptListApp {
             .shadow(box_shadows)
             .w_full()
             .h_full()
-            .rounded(px(12.))
-            .text_color(rgb(theme.colors.text.primary))
-            .font_family(".AppleSystemUIFont")
+            .rounded(px(design_visual.radius_lg))
+            .text_color(rgb(design_colors.text_primary))
+            .font_family(design_typography.font_family)
             .key_context("div_prompt")
             .track_focus(&self.focus_handle)
             .on_key_down(handle_key)
@@ -2536,7 +2701,7 @@ impl ScriptListApp {
                 div()
                     .flex_1()
                     .w_full()
-                    .p(px(24.))
+                    .p(px(design_spacing.padding_xl))
                     .text_lg()
                     .child(display_text)
             )
@@ -2544,23 +2709,26 @@ impl ScriptListApp {
             .child(
                 div()
                     .w_full()
-                    .px(px(16.))
-                    .py(px(10.))
+                    .px(px(design_spacing.padding_lg))
+                    .py(px(design_spacing.padding_md))
                     .border_t_1()
-                    .border_color(rgba((theme.colors.ui.border << 8) | 0x60))
+                    .border_color(rgba((design_colors.border << 8) | 0x60))
                     .text_xs()
-                    .text_color(rgb(theme.colors.text.muted))
+                    .text_color(rgb(design_colors.text_muted))
                     .child("Press Enter or Escape to continue")
             )
             .into_any_element()
     }
     
     fn render_term_prompt(&mut self, entity: Entity<term_prompt::TermPrompt>, _cx: &mut Context<Self>) -> AnyElement {
-        let theme = &self.theme;
+        // Use design tokens for GLOBAL theming
+        let tokens = get_tokens(self.current_design);
+        let design_colors = tokens.colors();
+        let design_visual = tokens.visual();
         
-        // Use theme opacity and shadow settings
+        // Use design tokens for global theming
         let opacity = self.theme.get_opacity();
-        let bg_hex = theme.colors.background.main;
+        let bg_hex = design_colors.background;
         let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
         let box_shadows = self.create_box_shadows();
         
@@ -2571,17 +2739,22 @@ impl ScriptListApp {
             .shadow(box_shadows)
             .w_full()
             .h_full()
-            .rounded(px(12.))
+            .rounded(px(design_visual.radius_lg))
             .child(entity)
             .into_any_element()
     }
     
     fn render_actions_dialog(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = &self.theme;
+        // Use design tokens for GLOBAL theming
+        let tokens = get_tokens(self.current_design);
+        let design_colors = tokens.colors();
+        let design_spacing = tokens.spacing();
+        let design_typography = tokens.typography();
+        let design_visual = tokens.visual();
         
-        // Use theme opacity and shadow settings
+        // Use design tokens for global theming
         let opacity = self.theme.get_opacity();
-        let bg_hex = theme.colors.background.main;
+        let bg_hex = design_colors.background;
         let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
         let box_shadows = self.create_box_shadows();
         
@@ -2590,17 +2763,14 @@ impl ScriptListApp {
             let key_str = event.keystroke.key.to_lowercase();
             logging::log("KEY", &format!("ActionsDialog key: '{}'", key_str));
             
-            match key_str.as_str() {
-                "escape" => {
-                    logging::log("KEY", "ESC in ActionsDialog - returning to script list");
-                    this.current_view = AppView::ScriptList;
-                    cx.notify();
-                }
-                _ => {}
+            if key_str.as_str() == "escape" {
+                logging::log("KEY", "ESC in ActionsDialog - returning to script list");
+                this.current_view = AppView::ScriptList;
+                cx.notify();
             }
         });
         
-        // Simple actions dialog stub
+        // Simple actions dialog stub with design tokens
         div()
             .flex()
             .flex_col()
@@ -2608,10 +2778,10 @@ impl ScriptListApp {
             .h_full()
             .bg(rgba(bg_with_alpha))
             .shadow(box_shadows)
-            .rounded(px(12.))
-            .p(px(24.))
-            .text_color(rgb(theme.colors.text.primary))
-            .font_family(".AppleSystemUIFont")
+            .rounded(px(design_visual.radius_lg))
+            .p(px(design_spacing.padding_xl))
+            .text_color(rgb(design_colors.text_primary))
+            .font_family(design_typography.font_family)
             .key_context("actions_dialog")
             .track_focus(&self.focus_handle)
             .on_key_down(handle_key)
@@ -2623,15 +2793,15 @@ impl ScriptListApp {
             .child(
                 div()
                     .text_sm()
-                    .text_color(rgb(theme.colors.text.muted))
-                    .mt(px(12.))
+                    .text_color(rgb(design_colors.text_muted))
+                    .mt(px(design_spacing.margin_md))
                     .child("• Create script\n• Edit script\n• Reload\n• Settings\n• Quit")
             )
             .child(
                 div()
-                    .mt(px(16.))
+                    .mt(px(design_spacing.margin_lg))
                     .text_xs()
-                    .text_color(rgb(theme.colors.text.dimmed))
+                    .text_color(rgb(design_colors.text_dimmed))
                     .child("Press Esc to close")
             )
             .into_any_element()
@@ -2830,7 +3000,7 @@ fn main() {
             },
             |_, cx| {
                 logging::log("APP", "Window opened, creating ScriptListApp");
-                cx.new(|cx| ScriptListApp::new(cx))
+                cx.new(ScriptListApp::new)
             },
         )
         .unwrap();
@@ -2852,14 +3022,14 @@ fn main() {
         WINDOW_VISIBLE.store(true, Ordering::SeqCst);
         logging::log("HOTKEY", "Window visibility state set to true (window now visible)");
         
-        start_hotkey_poller(cx, window.clone());
+        start_hotkey_poller(cx, window);
         
-        let window_for_appearance = window.clone();
+        let window_for_appearance = window;
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {
             loop {
                 Timer::after(std::time::Duration::from_millis(200)).await;
                 
-                if let Ok(_) = appearance_rx.try_recv() {
+                if appearance_rx.try_recv().is_ok() {
                     logging::log("APP", "System appearance changed, updating theme");
                     let _ = cx.update(|cx| {
                         let _ = window_for_appearance.update(cx, |view: &mut ScriptListApp, _window: &mut Window, ctx: &mut Context<ScriptListApp>| {
@@ -2871,12 +3041,12 @@ fn main() {
         }).detach();
         
         // Config reload watcher - watches ~/.kit/config.ts for changes
-        let window_for_config = window.clone();
+        let window_for_config = window;
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {
             loop {
                 Timer::after(std::time::Duration::from_millis(200)).await;
                 
-                if let Ok(_) = config_rx.try_recv() {
+                if config_rx.try_recv().is_ok() {
                     logging::log("APP", "Config file changed, reloading");
                     let _ = cx.update(|cx| {
                         let _ = window_for_config.update(cx, |view: &mut ScriptListApp, _window: &mut Window, ctx: &mut Context<ScriptListApp>| {
@@ -2888,7 +3058,7 @@ fn main() {
         }).detach();
         
         // Prompt message poller - checks for script messages and triggers re-render
-        let window_for_prompts = window.clone();
+        let window_for_prompts = window;
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {
             loop {
                 Timer::after(std::time::Duration::from_millis(50)).await;
@@ -2903,7 +3073,7 @@ fn main() {
         }).detach();
         
         // Test command file watcher - allows smoke tests to trigger script execution
-        let window_for_test = window.clone();
+        let window_for_test = window;
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {
             let cmd_file = std::path::PathBuf::from("/tmp/script-kit-gpui-cmd.txt");
             loop {
@@ -2935,6 +3105,53 @@ fn main() {
                     }
                 }
             }
+        }).detach();
+        
+        // External command listener - receives commands via stdin (event-driven, no polling)
+        let stdin_rx = start_stdin_listener();
+        let window_for_stdin = window;
+        cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+            logging::log("STDIN", "Async stdin command handler started");
+            
+            // Event-driven: recv().await yields until a command arrives
+            while let Ok(cmd) = stdin_rx.recv().await {
+                logging::log("STDIN", &format!("Processing external command: {:?}", cmd));
+                
+                let _ = cx.update(|cx| {
+                    let _ = window_for_stdin.update(cx, |view: &mut ScriptListApp, window: &mut Window, ctx: &mut Context<ScriptListApp>| {
+                        match cmd {
+                            ExternalCommand::Run { ref path } => {
+                                logging::log("STDIN", &format!("Executing script: {}", path));
+                                // Show and focus window first
+                                WINDOW_VISIBLE.store(true, Ordering::SeqCst);
+                                ctx.activate(true);
+                                window.activate_window();
+                                let focus_handle = view.focus_handle(ctx);
+                                window.focus(&focus_handle, ctx);
+                                
+                                // Send RunScript message to be handled
+                                view.handle_prompt_message(PromptMessage::RunScript { path: path.clone() }, ctx);
+                            }
+                            ExternalCommand::Show => {
+                                logging::log("STDIN", "Showing window");
+                                WINDOW_VISIBLE.store(true, Ordering::SeqCst);
+                                ctx.activate(true);
+                                window.activate_window();
+                                let focus_handle = view.focus_handle(ctx);
+                                window.focus(&focus_handle, ctx);
+                            }
+                            ExternalCommand::Hide => {
+                                logging::log("STDIN", "Hiding window");
+                                WINDOW_VISIBLE.store(false, Ordering::SeqCst);
+                                ctx.hide();
+                            }
+                        }
+                        ctx.notify();
+                    });
+                });
+            }
+            
+            logging::log("STDIN", "Async stdin command handler exiting");
         }).detach();
         
         logging::log("APP", "Application ready - Cmd+; to show, Esc to hide, Cmd+K for actions");

@@ -51,10 +51,12 @@ use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event as AlacrittyEvent, EventListener};
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::term::cell::Flags as AlacrittyFlags;
 use alacritty_terminal::term::{Config as TermConfig, Term};
 use anyhow::{Context, Result};
+use bitflags::bitflags;
 use tracing::{debug, info, instrument, trace, warn};
-use vte::ansi::Processor;
+use vte::ansi::{Color, NamedColor, Processor, Rgb};
 
 use crate::terminal::pty::PtyManager;
 use crate::terminal::theme_adapter::ThemeAdapter;
@@ -195,6 +197,109 @@ impl Dimensions for TerminalSize {
 
     fn columns(&self) -> usize {
         self.cols
+    }
+}
+
+bitflags! {
+    /// Cell attributes for text styling.
+    ///
+    /// These flags represent visual attributes that can be applied to
+    /// terminal cells, such as bold, italic, and underline.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct CellAttributes: u16 {
+        /// Bold text (typically rendered with brighter colors or heavier font weight).
+        const BOLD = 0b0000_0000_0000_0001;
+        /// Italic text.
+        const ITALIC = 0b0000_0000_0000_0010;
+        /// Underlined text.
+        const UNDERLINE = 0b0000_0000_0000_0100;
+        /// Double underline.
+        const DOUBLE_UNDERLINE = 0b0000_0000_0000_1000;
+        /// Curly/wavy underline.
+        const UNDERCURL = 0b0000_0000_0001_0000;
+        /// Dotted underline.
+        const DOTTED_UNDERLINE = 0b0000_0000_0010_0000;
+        /// Dashed underline.
+        const DASHED_UNDERLINE = 0b0000_0000_0100_0000;
+        /// Strikethrough text.
+        const STRIKEOUT = 0b0000_0000_1000_0000;
+        /// Inverse/reverse video (swap fg/bg).
+        const INVERSE = 0b0000_0001_0000_0000;
+        /// Hidden/invisible text.
+        const HIDDEN = 0b0000_0010_0000_0000;
+        /// Dim/faint text.
+        const DIM = 0b0000_0100_0000_0000;
+    }
+}
+
+impl CellAttributes {
+    /// Convert from Alacritty's cell Flags to CellAttributes.
+    pub fn from_alacritty_flags(flags: AlacrittyFlags) -> Self {
+        let mut attrs = Self::empty();
+        
+        if flags.contains(AlacrittyFlags::BOLD) {
+            attrs.insert(Self::BOLD);
+        }
+        if flags.contains(AlacrittyFlags::ITALIC) {
+            attrs.insert(Self::ITALIC);
+        }
+        if flags.contains(AlacrittyFlags::UNDERLINE) {
+            attrs.insert(Self::UNDERLINE);
+        }
+        if flags.contains(AlacrittyFlags::DOUBLE_UNDERLINE) {
+            attrs.insert(Self::DOUBLE_UNDERLINE);
+        }
+        if flags.contains(AlacrittyFlags::UNDERCURL) {
+            attrs.insert(Self::UNDERCURL);
+        }
+        if flags.contains(AlacrittyFlags::DOTTED_UNDERLINE) {
+            attrs.insert(Self::DOTTED_UNDERLINE);
+        }
+        if flags.contains(AlacrittyFlags::DASHED_UNDERLINE) {
+            attrs.insert(Self::DASHED_UNDERLINE);
+        }
+        if flags.contains(AlacrittyFlags::STRIKEOUT) {
+            attrs.insert(Self::STRIKEOUT);
+        }
+        if flags.contains(AlacrittyFlags::INVERSE) {
+            attrs.insert(Self::INVERSE);
+        }
+        if flags.contains(AlacrittyFlags::HIDDEN) {
+            attrs.insert(Self::HIDDEN);
+        }
+        if flags.contains(AlacrittyFlags::DIM) {
+            attrs.insert(Self::DIM);
+        }
+        
+        attrs
+    }
+}
+
+/// A single styled terminal cell with character, colors, and attributes.
+///
+/// This struct represents the complete visual state of a single cell
+/// in the terminal grid, including the character, foreground and background
+/// colors (resolved to actual RGB values), and text attributes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalCell {
+    /// The character in this cell.
+    pub c: char,
+    /// Foreground (text) color as RGB.
+    pub fg: Rgb,
+    /// Background color as RGB.
+    pub bg: Rgb,
+    /// Cell attributes (bold, italic, underline, etc.).
+    pub attrs: CellAttributes,
+}
+
+impl Default for TerminalCell {
+    fn default() -> Self {
+        Self {
+            c: ' ',
+            fg: Rgb { r: 212, g: 212, b: 212 }, // Default foreground (light gray)
+            bg: Rgb { r: 30, g: 30, b: 30 },     // Default background (dark gray)
+            attrs: CellAttributes::empty(),
+        }
     }
 }
 
@@ -502,32 +607,47 @@ impl TerminalHandle {
     /// Gets the current terminal content for rendering.
     ///
     /// This method creates a snapshot of the visible terminal content,
-    /// including the cursor position. It's designed to be called from
-    /// the render loop.
+    /// including the cursor position, styled cells with colors and attributes.
+    /// It's designed to be called from the render loop.
     ///
     /// # Returns
     ///
-    /// A `TerminalContent` struct containing lines and cursor info.
+    /// A `TerminalContent` struct containing lines, styled cells, and cursor info.
     #[instrument(level = "trace", skip(self))]
     pub fn content(&self) -> TerminalContent {
         let state = self.state.lock().unwrap();
         let grid = state.term.grid();
 
         let mut lines = Vec::with_capacity(state.term.screen_lines());
+        let mut styled_lines = Vec::with_capacity(state.term.screen_lines());
 
         // Iterate over visible lines
         for line_idx in 0..state.term.screen_lines() {
             let row = &grid[alacritty_terminal::index::Line(line_idx as i32)];
             let mut line_str = String::with_capacity(state.term.columns());
+            let mut styled_row = Vec::with_capacity(state.term.columns());
 
             for col_idx in 0..state.term.columns() {
                 let cell = &row[alacritty_terminal::index::Column(col_idx)];
                 line_str.push(cell.c);
+                
+                // Resolve colors using theme adapter
+                let fg = resolve_color(&cell.fg, &self.theme);
+                let bg = resolve_color(&cell.bg, &self.theme);
+                let attrs = CellAttributes::from_alacritty_flags(cell.flags);
+                
+                styled_row.push(TerminalCell {
+                    c: cell.c,
+                    fg,
+                    bg,
+                    attrs,
+                });
             }
 
-            // Trim trailing spaces for cleaner output
+            // Trim trailing spaces for cleaner plain text output
             let trimmed = line_str.trim_end();
             lines.push(trimmed.to_string());
+            styled_lines.push(styled_row);
         }
 
         // Get cursor position
@@ -535,6 +655,7 @@ impl TerminalHandle {
 
         TerminalContent {
             lines,
+            styled_lines,
             cursor_line: cursor.line.0 as usize,
             cursor_col: cursor.column.0,
         }
@@ -594,14 +715,122 @@ impl TerminalHandle {
     }
 }
 
+/// Resolve a terminal Color to an actual Rgb value using the theme adapter.
+///
+/// Terminal colors can be:
+/// - Named colors (Foreground, Background, Red, Green, etc.)
+/// - Indexed colors (0-255 palette)
+/// - Spec colors (direct RGB values)
+///
+/// This function converts all of these to actual Rgb values using the
+/// theme adapter for consistent theming.
+pub fn resolve_color(color: &Color, theme: &ThemeAdapter) -> Rgb {
+    match color {
+        Color::Named(named) => resolve_named_color(*named, theme),
+        Color::Indexed(index) => resolve_indexed_color(*index, theme),
+        Color::Spec(rgb) => *rgb,
+    }
+}
+
+/// Resolve a named color to Rgb.
+fn resolve_named_color(named: NamedColor, theme: &ThemeAdapter) -> Rgb {
+    match named {
+        NamedColor::Foreground | NamedColor::BrightForeground => theme.foreground(),
+        NamedColor::Background => theme.background(),
+        NamedColor::Cursor => theme.cursor(),
+        
+        // Standard ANSI colors (0-7)
+        NamedColor::Black => theme.ansi_color(0),
+        NamedColor::Red => theme.ansi_color(1),
+        NamedColor::Green => theme.ansi_color(2),
+        NamedColor::Yellow => theme.ansi_color(3),
+        NamedColor::Blue => theme.ansi_color(4),
+        NamedColor::Magenta => theme.ansi_color(5),
+        NamedColor::Cyan => theme.ansi_color(6),
+        NamedColor::White => theme.ansi_color(7),
+        
+        // Bright ANSI colors (8-15)
+        NamedColor::BrightBlack => theme.ansi_color(8),
+        NamedColor::BrightRed => theme.ansi_color(9),
+        NamedColor::BrightGreen => theme.ansi_color(10),
+        NamedColor::BrightYellow => theme.ansi_color(11),
+        NamedColor::BrightBlue => theme.ansi_color(12),
+        NamedColor::BrightMagenta => theme.ansi_color(13),
+        NamedColor::BrightCyan => theme.ansi_color(14),
+        NamedColor::BrightWhite => theme.ansi_color(15),
+        
+        // Dim colors - use normal with reduced intensity
+        NamedColor::DimBlack => dim_rgb(theme.ansi_color(0)),
+        NamedColor::DimRed => dim_rgb(theme.ansi_color(1)),
+        NamedColor::DimGreen => dim_rgb(theme.ansi_color(2)),
+        NamedColor::DimYellow => dim_rgb(theme.ansi_color(3)),
+        NamedColor::DimBlue => dim_rgb(theme.ansi_color(4)),
+        NamedColor::DimMagenta => dim_rgb(theme.ansi_color(5)),
+        NamedColor::DimCyan => dim_rgb(theme.ansi_color(6)),
+        NamedColor::DimWhite => dim_rgb(theme.ansi_color(7)),
+        NamedColor::DimForeground => dim_rgb(theme.foreground()),
+    }
+}
+
+/// Resolve an indexed color (0-255) to Rgb.
+///
+/// The 256-color palette is organized as:
+/// - 0-15: Standard ANSI colors
+/// - 16-231: 6x6x6 color cube
+/// - 232-255: 24 grayscale shades
+fn resolve_indexed_color(index: u8, theme: &ThemeAdapter) -> Rgb {
+    match index {
+        // Standard ANSI colors (0-15)
+        0..=15 => theme.ansi_color(index),
+        
+        // 6x6x6 color cube (16-231)
+        16..=231 => {
+            let index = index - 16;
+            let r = (index / 36) % 6;
+            let g = (index / 6) % 6;
+            let b = index % 6;
+            
+            // Each component maps 0-5 to 0, 95, 135, 175, 215, 255
+            let to_component = |v: u8| -> u8 {
+                if v == 0 { 0 } else { 55 + v * 40 }
+            };
+            
+            Rgb {
+                r: to_component(r),
+                g: to_component(g),
+                b: to_component(b),
+            }
+        }
+        
+        // Grayscale (232-255)
+        232..=255 => {
+            let shade = index - 232;
+            // Maps 0-23 to 8, 18, 28, ... 238
+            let gray = 8 + shade * 10;
+            Rgb { r: gray, g: gray, b: gray }
+        }
+    }
+}
+
+/// Dim an RGB color (reduce intensity by ~30%).
+fn dim_rgb(color: Rgb) -> Rgb {
+    Rgb {
+        r: (color.r as f32 * 0.7) as u8,
+        g: (color.g as f32 * 0.7) as u8,
+        b: (color.b as f32 * 0.7) as u8,
+    }
+}
+
 /// Content snapshot for rendering.
 ///
 /// This struct contains a snapshot of the terminal content at a point
 /// in time, suitable for rendering in GPUI.
 #[derive(Debug, Clone)]
 pub struct TerminalContent {
-    /// Lines of text in the terminal.
+    /// Lines of text in the terminal (plain text, backward compatible).
     pub lines: Vec<String>,
+    /// Styled lines with per-cell color and attribute information.
+    pub styled_lines: Vec<Vec<TerminalCell>>,
     /// Cursor line position (0-indexed from top).
     pub cursor_line: usize,
     /// Cursor column position (0-indexed from left).
@@ -617,6 +846,14 @@ impl TerminalContent {
     /// Returns the number of non-empty lines.
     pub fn line_count(&self) -> usize {
         self.lines.iter().filter(|l| !l.is_empty()).count()
+    }
+    
+    /// Returns plain text lines (backward compatible accessor).
+    ///
+    /// This method provides backward compatibility for code that only
+    /// needs the plain text content without styling information.
+    pub fn lines_plain(&self) -> &[String] {
+        &self.lines
     }
 }
 
@@ -641,6 +878,169 @@ impl From<&TerminalContent> for CursorPosition {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ========================================================================
+    // TerminalCell and Styled Content Tests (TDD - RED)
+    // ========================================================================
+
+    #[test]
+    fn test_terminal_cell_default() {
+        let cell = TerminalCell::default();
+        assert_eq!(cell.c, ' ');
+        // Default colors should be theme defaults (foreground/background)
+        assert_eq!(cell.attrs, CellAttributes::empty());
+    }
+
+    #[test]
+    fn test_cell_attributes_bitflags() {
+        let mut attrs = CellAttributes::empty();
+        assert!(!attrs.contains(CellAttributes::BOLD));
+        assert!(!attrs.contains(CellAttributes::ITALIC));
+        assert!(!attrs.contains(CellAttributes::UNDERLINE));
+
+        attrs.insert(CellAttributes::BOLD);
+        assert!(attrs.contains(CellAttributes::BOLD));
+
+        attrs.insert(CellAttributes::ITALIC);
+        assert!(attrs.contains(CellAttributes::BOLD | CellAttributes::ITALIC));
+    }
+
+    #[test]
+    fn test_terminal_content_styled_lines() {
+        let content = TerminalContent {
+            lines: vec!["hello".to_string()],
+            styled_lines: vec![vec![
+                TerminalCell { c: 'h', fg: Rgb { r: 255, g: 255, b: 255 }, bg: Rgb { r: 0, g: 0, b: 0 }, attrs: CellAttributes::empty() },
+                TerminalCell { c: 'e', fg: Rgb { r: 255, g: 255, b: 255 }, bg: Rgb { r: 0, g: 0, b: 0 }, attrs: CellAttributes::empty() },
+                TerminalCell { c: 'l', fg: Rgb { r: 255, g: 255, b: 255 }, bg: Rgb { r: 0, g: 0, b: 0 }, attrs: CellAttributes::empty() },
+                TerminalCell { c: 'l', fg: Rgb { r: 255, g: 255, b: 255 }, bg: Rgb { r: 0, g: 0, b: 0 }, attrs: CellAttributes::empty() },
+                TerminalCell { c: 'o', fg: Rgb { r: 255, g: 255, b: 255 }, bg: Rgb { r: 0, g: 0, b: 0 }, attrs: CellAttributes::empty() },
+            ]],
+            cursor_line: 0,
+            cursor_col: 5,
+        };
+        assert_eq!(content.styled_lines.len(), 1);
+        assert_eq!(content.styled_lines[0].len(), 5);
+        assert_eq!(content.styled_lines[0][0].c, 'h');
+    }
+
+    #[test]
+    fn test_terminal_content_lines_plain_backward_compat() {
+        let content = TerminalContent {
+            lines: vec!["hello".to_string(), "world".to_string()],
+            styled_lines: vec![],
+            cursor_line: 0,
+            cursor_col: 0,
+        };
+        let plain = content.lines_plain();
+        assert_eq!(plain.len(), 2);
+        assert_eq!(plain[0], "hello");
+        assert_eq!(plain[1], "world");
+    }
+
+    // ========================================================================
+    // Color Resolution Tests
+    // ========================================================================
+
+    #[test]
+    fn test_resolve_color_named_foreground() {
+        use vte::ansi::{Color, NamedColor};
+        
+        let theme = ThemeAdapter::dark_default();
+        let color = Color::Named(NamedColor::Foreground);
+        let resolved = resolve_color(&color, &theme);
+        
+        // Should resolve to theme's foreground color
+        assert_eq!(resolved, theme.foreground());
+    }
+
+    #[test]
+    fn test_resolve_color_named_background() {
+        use vte::ansi::{Color, NamedColor};
+        
+        let theme = ThemeAdapter::dark_default();
+        let color = Color::Named(NamedColor::Background);
+        let resolved = resolve_color(&color, &theme);
+        
+        // Should resolve to theme's background color
+        assert_eq!(resolved, theme.background());
+    }
+
+    #[test]
+    fn test_resolve_color_named_ansi_red() {
+        use vte::ansi::{Color, NamedColor};
+        
+        let theme = ThemeAdapter::dark_default();
+        let color = Color::Named(NamedColor::Red);
+        let resolved = resolve_color(&color, &theme);
+        
+        // Should resolve to ANSI red (index 1)
+        assert_eq!(resolved, theme.ansi_color(1));
+    }
+
+    #[test]
+    fn test_resolve_color_indexed() {
+        use vte::ansi::Color;
+        
+        let theme = ThemeAdapter::dark_default();
+        
+        // Index 0-15 are the 16 ANSI colors
+        let color = Color::Indexed(4); // Blue
+        let resolved = resolve_color(&color, &theme);
+        assert_eq!(resolved, theme.ansi_color(4));
+    }
+
+    #[test]
+    fn test_resolve_color_indexed_216_cube() {
+        use vte::ansi::Color;
+        
+        let theme = ThemeAdapter::dark_default();
+        
+        // Index 16-231 are the 216-color cube
+        // Index 16 = rgb(0, 0, 0) in the cube
+        let color = Color::Indexed(16);
+        let resolved = resolve_color(&color, &theme);
+        assert_eq!(resolved, Rgb { r: 0, g: 0, b: 0 });
+        
+        // Index 231 = rgb(255, 255, 255) in the cube
+        let color = Color::Indexed(231);
+        let resolved = resolve_color(&color, &theme);
+        assert_eq!(resolved, Rgb { r: 255, g: 255, b: 255 });
+    }
+
+    #[test]
+    fn test_resolve_color_indexed_grayscale() {
+        use vte::ansi::Color;
+        
+        let theme = ThemeAdapter::dark_default();
+        
+        // Index 232-255 are grayscale (24 shades)
+        // Index 232 = darkest gray (8, 8, 8)
+        let color = Color::Indexed(232);
+        let resolved = resolve_color(&color, &theme);
+        assert_eq!(resolved, Rgb { r: 8, g: 8, b: 8 });
+        
+        // Index 255 = lightest gray (238, 238, 238)
+        let color = Color::Indexed(255);
+        let resolved = resolve_color(&color, &theme);
+        assert_eq!(resolved, Rgb { r: 238, g: 238, b: 238 });
+    }
+
+    #[test]
+    fn test_resolve_color_spec_direct() {
+        use vte::ansi::Color;
+        
+        let theme = ThemeAdapter::dark_default();
+        
+        // Spec is a direct RGB color
+        let color = Color::Spec(Rgb { r: 128, g: 64, b: 32 });
+        let resolved = resolve_color(&color, &theme);
+        assert_eq!(resolved, Rgb { r: 128, g: 64, b: 32 });
+    }
+
+    // ========================================================================
+    // Existing Tests
+    // ========================================================================
 
     #[test]
     fn test_event_proxy_creation() {
@@ -677,6 +1077,7 @@ mod tests {
     fn test_terminal_content_is_empty() {
         let empty_content = TerminalContent {
             lines: vec![],
+            styled_lines: vec![],
             cursor_line: 0,
             cursor_col: 0,
         };
@@ -684,6 +1085,7 @@ mod tests {
 
         let whitespace_content = TerminalContent {
             lines: vec!["".to_string(), "".to_string()],
+            styled_lines: vec![],
             cursor_line: 0,
             cursor_col: 0,
         };
@@ -691,6 +1093,7 @@ mod tests {
 
         let content_with_text = TerminalContent {
             lines: vec!["hello".to_string()],
+            styled_lines: vec![],
             cursor_line: 0,
             cursor_col: 5,
         };
@@ -701,6 +1104,7 @@ mod tests {
     fn test_terminal_content_line_count() {
         let content = TerminalContent {
             lines: vec!["hello".to_string(), "".to_string(), "world".to_string()],
+            styled_lines: vec![],
             cursor_line: 0,
             cursor_col: 0,
         };
@@ -711,6 +1115,7 @@ mod tests {
     fn test_cursor_position_from_content() {
         let content = TerminalContent {
             lines: vec!["hello world".to_string()],
+            styled_lines: vec![],
             cursor_line: 0,
             cursor_col: 6,
         };

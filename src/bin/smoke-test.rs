@@ -70,9 +70,7 @@ fn main() {
         .map(|h| h.join(".kenv/scripts/demo-arg-div.ts"))
         .unwrap();
     
-    if demo_script.exists() && sdk_path.is_some() && bun_path.is_some() {
-        let bun = bun_path.as_ref().unwrap();
-        let sdk = sdk_path.as_ref().unwrap();
+    if let (true, Some(bun), Some(sdk)) = (demo_script.exists(), bun_path.as_ref(), sdk_path.as_ref()) {
         
         match run_interactive_with_timeout(
             bun,
@@ -165,7 +163,7 @@ fn run_with_timeout(cmd: &PathBuf, args: &[&str], timeout: Duration) -> Result<S
             Ok(Some(status)) => {
                 let stdout = child.stdout.take().map(|s| {
                     let reader = BufReader::new(s);
-                    reader.lines().filter_map(|l| l.ok()).collect::<Vec<_>>().join("\n")
+                    reader.lines().map_while(Result::ok).collect::<Vec<_>>().join("\n")
                 }).unwrap_or_default();
                 
                 if status.success() {

@@ -19,6 +19,7 @@ use gpui::{
 use std::sync::Arc;
 use crate::logging;
 use crate::theme;
+use crate::designs::{DesignVariant, get_tokens};
 
 /// Callback for action selection
 /// Signature: (action_id: String)
@@ -173,6 +174,8 @@ pub struct ActionsDialog {
     pub scroll_handle: UniformListScrollHandle,
     /// Theme for consistent color styling
     pub theme: Arc<theme::Theme>,
+    /// Design variant for styling (defaults to Default for theme-based styling)
+    pub design_variant: DesignVariant,
 }
 
 /// Helper function to combine a hex color with an alpha value
@@ -188,7 +191,7 @@ impl ActionsDialog {
         on_select: ActionCallback,
         theme: Arc<theme::Theme>,
     ) -> Self {
-        Self::with_script(focus_handle, on_select, None, theme)
+        Self::with_script_and_design(focus_handle, on_select, None, theme, DesignVariant::Default)
     }
 
     pub fn with_script(
@@ -197,13 +200,33 @@ impl ActionsDialog {
         focused_script: Option<ScriptInfo>,
         theme: Arc<theme::Theme>,
     ) -> Self {
+        Self::with_script_and_design(focus_handle, on_select, focused_script, theme, DesignVariant::Default)
+    }
+    
+    pub fn with_design(
+        focus_handle: FocusHandle,
+        on_select: ActionCallback,
+        theme: Arc<theme::Theme>,
+        design_variant: DesignVariant,
+    ) -> Self {
+        Self::with_script_and_design(focus_handle, on_select, None, theme, design_variant)
+    }
+
+    pub fn with_script_and_design(
+        focus_handle: FocusHandle,
+        on_select: ActionCallback,
+        focused_script: Option<ScriptInfo>,
+        theme: Arc<theme::Theme>,
+        design_variant: DesignVariant,
+    ) -> Self {
         let actions = Self::build_actions(&focused_script);
         let filtered_actions: Vec<usize> = (0..actions.len()).collect();
         
         logging::log("ACTIONS", &format!(
-            "ActionsDialog created with {} actions, script: {:?}", 
+            "ActionsDialog created with {} actions, script: {:?}, design: {:?}", 
             actions.len(),
-            focused_script.as_ref().map(|s| &s.name)
+            focused_script.as_ref().map(|s| &s.name),
+            design_variant
         ));
         
         // Log theme color configuration for debugging
@@ -225,6 +248,7 @@ impl ActionsDialog {
             focused_script,
             scroll_handle: UniformListScrollHandle::new(),
             theme,
+            design_variant,
         }
     }
 
@@ -356,6 +380,12 @@ impl Focusable for ActionsDialog {
 
 impl Render for ActionsDialog {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Get design tokens for the current design variant
+        let tokens = get_tokens(self.design_variant);
+        let colors = tokens.colors();
+        let spacing = tokens.spacing();
+        let visual = tokens.visual();
+        
         let handle_key = cx.listener(move |this: &mut Self, event: &gpui::KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
             let key_str = event.keystroke.key.to_lowercase();
             
@@ -385,17 +415,32 @@ impl Render for ActionsDialog {
             SharedString::from(self.search_text.clone())
         };
 
-        // Extract theme colors for input container
-        let search_box_bg = rgba(hex_with_alpha(self.theme.colors.background.search_box, 0xcc));
-        let border_color = rgba(hex_with_alpha(self.theme.colors.ui.border, 0x80));
-        let muted_text = rgb(self.theme.colors.text.muted);
-        let dimmed_text = rgb(self.theme.colors.text.dimmed);
-        let secondary_text = rgb(self.theme.colors.text.secondary);
+        // Use design tokens for colors (with theme fallback for Default variant)
+        let (search_box_bg, border_color, muted_text, dimmed_text, secondary_text) = 
+            if self.design_variant == DesignVariant::Default {
+                // Use theme colors for default design
+                (
+                    rgba(hex_with_alpha(self.theme.colors.background.search_box, 0xcc)),
+                    rgba(hex_with_alpha(self.theme.colors.ui.border, 0x80)),
+                    rgb(self.theme.colors.text.muted),
+                    rgb(self.theme.colors.text.dimmed),
+                    rgb(self.theme.colors.text.secondary),
+                )
+            } else {
+                // Use design tokens for non-default designs
+                (
+                    rgba(hex_with_alpha(colors.background_secondary, 0xcc)),
+                    rgba(hex_with_alpha(colors.border, 0x80)),
+                    rgb(colors.text_muted),
+                    rgb(colors.text_dimmed),
+                    rgb(colors.text_secondary),
+                )
+            };
         
         let input_container = div()
             .w_full()
-            .px(px(ITEM_PADDING_X))
-            .py(px(ITEM_PADDING_Y))
+            .px(px(spacing.item_padding_x))
+            .py(px(spacing.item_padding_y))
             .bg(search_box_bg)
             .border_b_1()
             .border_color(border_color)
@@ -426,8 +471,8 @@ impl Render for ActionsDialog {
                 .child(
                     div()
                         .w_full()
-                        .py(px(16.))
-                        .px(px(ITEM_PADDING_X))
+                        .py(px(spacing.padding_lg))
+                        .px(px(spacing.item_padding_x))
                         .text_color(dimmed_text)
                         .text_sm()
                         .child("No actions match your search"),
@@ -437,6 +482,7 @@ impl Render for ActionsDialog {
             // Clone data needed for the uniform_list closure
             let selected_index = self.selected_index;
             let filtered_len = self.filtered_actions.len();
+            let design_variant = self.design_variant;
             
             logging::log_debug("ACTIONS_SCROLL", &format!(
                 "Rendering uniform_list: {} items, selected={}",
@@ -452,11 +498,31 @@ impl Render for ActionsDialog {
                         visible_range, this.filtered_actions.len()
                     ));
                     
-                    // Extract theme colors for list items
-                    let selected_bg = rgba(hex_with_alpha(this.theme.colors.accent.selected, 0xcc));
-                    let primary_text = rgb(this.theme.colors.text.primary);
-                    let tertiary_alpha = rgba(hex_with_alpha(this.theme.colors.text.tertiary, 0x99));
-                    let dimmed_alpha = rgba(hex_with_alpha(this.theme.colors.text.dimmed, 0x99));
+                    // Get tokens for list item rendering
+                    let item_tokens = get_tokens(design_variant);
+                    let item_colors = item_tokens.colors();
+                    let item_spacing = item_tokens.spacing();
+                    let item_visual = item_tokens.visual();
+                    
+                    // Extract colors for list items (with theme fallback for Default)
+                    let (selected_bg, primary_text, tertiary_alpha, dimmed_alpha, text_on_accent) = 
+                        if design_variant == DesignVariant::Default {
+                            (
+                                rgba(hex_with_alpha(this.theme.colors.accent.selected, 0xcc)),
+                                rgb(this.theme.colors.text.primary),
+                                rgba(hex_with_alpha(this.theme.colors.text.tertiary, 0x99)),
+                                rgba(hex_with_alpha(this.theme.colors.text.dimmed, 0x99)),
+                                rgb(0xffffff),
+                            )
+                        } else {
+                            (
+                                rgba(hex_with_alpha(item_colors.background_selected, 0xcc)),
+                                rgb(item_colors.text_primary),
+                                rgba(hex_with_alpha(item_colors.text_secondary, 0x99)),
+                                rgba(hex_with_alpha(item_colors.text_dimmed, 0x99)),
+                                rgb(item_colors.text_on_accent),
+                            )
+                        };
                     
                     let mut items = Vec::new();
                     
@@ -472,7 +538,7 @@ impl Render for ActionsDialog {
                                 };
 
                                 let title_color = if is_selected {
-                                    rgb(0xffffff) // White when selected
+                                    text_on_accent
                                 } else {
                                     primary_text
                                 };
@@ -491,10 +557,10 @@ impl Render for ActionsDialog {
                                     .id(idx)
                                     .w_full()
                                     .h(px(ACTION_ITEM_HEIGHT)) // Fixed height for uniform_list
-                                    .px(px(ITEM_PADDING_X))
+                                    .px(px(item_spacing.item_padding_x))
                                     .bg(bg)
-                                    .rounded(px(6.))
-                                    .mx(px(4.))
+                                    .rounded(px(item_visual.radius_sm))
+                                    .mx(px(item_spacing.margin_sm))
                                     .flex()
                                     .flex_row()
                                     .items_center()
@@ -531,10 +597,21 @@ impl Render for ActionsDialog {
             .into_any_element()
         };
 
-        // Extract theme colors for main container
-        let main_bg = rgba(hex_with_alpha(self.theme.colors.background.main, 0xe6));
-        let container_border = rgba(hex_with_alpha(self.theme.colors.ui.border, 0x80));
-        let container_text = rgb(self.theme.colors.text.secondary);
+        // Extract theme/design colors for main container
+        let (main_bg, container_border, container_text) = 
+            if self.design_variant == DesignVariant::Default {
+                (
+                    rgba(hex_with_alpha(self.theme.colors.background.main, 0xe6)),
+                    rgba(hex_with_alpha(self.theme.colors.ui.border, 0x80)),
+                    rgb(self.theme.colors.text.secondary),
+                )
+            } else {
+                (
+                    rgba(hex_with_alpha(colors.background, 0xe6)),
+                    rgba(hex_with_alpha(colors.border, 0x80)),
+                    rgb(colors.text_secondary),
+                )
+            };
         
         // Main overlay popup container
         // Fixed width, max height, rounded corners, shadow, semi-transparent bg
@@ -544,7 +621,7 @@ impl Render for ActionsDialog {
             .w(px(POPUP_WIDTH))
             .max_h(px(POPUP_MAX_HEIGHT))
             .bg(main_bg)
-            .rounded(px(POPUP_CORNER_RADIUS))
+            .rounded(px(visual.radius_lg))
             .shadow(Self::create_popup_shadow())
             .border_1()
             .border_color(container_border)
@@ -612,8 +689,8 @@ mod tests {
         // Fixed height is required for uniform_list virtualization
         assert_eq!(ACTION_ITEM_HEIGHT, 36.0);
         // Ensure item height is positive and reasonable
-        assert!(ACTION_ITEM_HEIGHT > 0.0);
-        assert!(ACTION_ITEM_HEIGHT < POPUP_MAX_HEIGHT);
+        const _: () = assert!(ACTION_ITEM_HEIGHT > 0.0);
+        const _: () = assert!(ACTION_ITEM_HEIGHT < POPUP_MAX_HEIGHT);
     }
 
     #[test]

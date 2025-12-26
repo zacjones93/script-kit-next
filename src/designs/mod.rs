@@ -30,16 +30,62 @@ pub mod neon_cyberpunk;
 
 // Re-export the trait and types
 pub use traits::{DesignRenderer, DesignRendererBox};
-pub use minimal::{MinimalRenderer, MinimalColors, MinimalConstants, render_minimal_search_bar, render_minimal_empty_state, render_minimal_list, MINIMAL_ITEM_HEIGHT};
-pub use glassmorphism::GlassmorphismRenderer;
-pub use brutalist::{BrutalistRenderer, BrutalistColors, render_brutalist_list};
-pub use compact::{CompactRenderer, CompactListItem, COMPACT_ITEM_HEIGHT};
-pub use material3::Material3Renderer;
+pub use traits::{
+    DesignTokens, DesignTokensBox,
+    DesignColors, DesignSpacing, DesignTypography, DesignVisual,
+    DefaultDesignTokens, MinimalDesignTokens, RetroTerminalDesignTokens,
+    GlassmorphismDesignTokens, BrutalistDesignTokens, CompactDesignTokens,
+    NeonCyberpunkDesignTokens, PaperDesignTokens, AppleHIGDesignTokens,
+    Material3DesignTokens, PlayfulDesignTokens,
+};
+pub use minimal::{
+    MinimalRenderer, MinimalColors, MinimalConstants, MinimalWindowConfig,
+    render_minimal_search_bar, render_minimal_empty_state, render_minimal_list,
+    render_minimal_header, render_minimal_preview_panel, render_minimal_log_panel,
+    render_minimal_window_container, render_minimal_divider, render_minimal_action_button,
+    render_minimal_status, MINIMAL_ITEM_HEIGHT,
+};
+pub use glassmorphism::{
+    GlassmorphismRenderer, GlassColors,
+    render_glassmorphism_header, render_glassmorphism_preview_panel,
+    render_glassmorphism_log_panel, render_glassmorphism_window_container,
+};
+pub use brutalist::{
+    BrutalistRenderer, BrutalistColors, render_brutalist_list,
+    render_brutalist_header, render_brutalist_preview_panel,
+    render_brutalist_log_panel, render_brutalist_window_container,
+};
+pub use compact::{
+    CompactRenderer, CompactListItem, COMPACT_ITEM_HEIGHT,
+    render_compact_header, render_compact_preview_panel,
+    render_compact_log_panel, render_compact_window_container,
+};
+pub use material3::{
+    Material3Renderer,
+    render_material3_header, render_material3_preview_panel,
+    render_material3_log_panel, render_material3_window_container,
+};
 pub use retro_terminal::{RetroTerminalRenderer, TerminalColors, TERMINAL_ITEM_HEIGHT};
-pub use playful::PlayfulRenderer;
-pub use paper::PaperRenderer;
-pub use apple_hig::{AppleHIGRenderer, ITEM_HEIGHT as APPLE_HIG_ITEM_HEIGHT};
-pub use neon_cyberpunk::NeonCyberpunkRenderer;
+pub use playful::{
+    PlayfulRenderer, PlayfulColors,
+    render_playful_header, render_playful_preview_panel,
+    render_playful_log_panel, render_playful_window_container,
+};
+pub use paper::{
+    PaperRenderer,
+    render_paper_header, render_paper_preview_panel,
+    render_paper_log_panel, render_paper_window_container,
+};
+pub use apple_hig::{
+    AppleHIGRenderer, ITEM_HEIGHT as APPLE_HIG_ITEM_HEIGHT,
+    render_apple_hig_header, render_apple_hig_preview_panel,
+    render_apple_hig_log_panel, render_apple_hig_window_container,
+};
+pub use neon_cyberpunk::{
+    NeonCyberpunkRenderer,
+    render_neon_cyberpunk_header, render_neon_cyberpunk_preview_panel,
+    render_neon_cyberpunk_log_panel, render_neon_cyberpunk_window_container,
+};
 
 /// Design variant enumeration
 ///
@@ -96,7 +142,6 @@ pub enum DesignVariant {
 
 impl DesignVariant {
     /// Get all available design variants
-    #[allow(dead_code)]
     pub fn all() -> &'static [DesignVariant] {
         &[
             DesignVariant::Default,
@@ -111,6 +156,25 @@ impl DesignVariant {
             DesignVariant::Compact,
             DesignVariant::Playful,
         ]
+    }
+    
+    /// Get the next design variant in the cycle
+    /// 
+    /// Cycles through all designs: Default -> Minimal -> RetroTerminal -> ... -> Playful -> Default
+    pub fn next(self) -> DesignVariant {
+        let all = Self::all();
+        let current_idx = all.iter().position(|&v| v == self).unwrap_or(0);
+        let next_idx = (current_idx + 1) % all.len();
+        all[next_idx]
+    }
+    
+    /// Get the previous design variant in the cycle
+    #[allow(dead_code)]
+    pub fn prev(self) -> DesignVariant {
+        let all = Self::all();
+        let current_idx = all.iter().position(|&v| v == self).unwrap_or(0);
+        let prev_idx = if current_idx == 0 { all.len() - 1 } else { current_idx - 1 };
+        all[prev_idx]
     }
 
     /// Get the display name for this variant
@@ -149,6 +213,7 @@ impl DesignVariant {
     }
 
     /// Create a variant from a keyboard number (1-9, 0 for 10)
+    #[allow(dead_code)]
     pub fn from_keyboard_number(num: u8) -> Option<DesignVariant> {
         match num {
             1 => Some(DesignVariant::Default),
@@ -190,6 +255,7 @@ impl DesignVariant {
 ///
 /// Currently all variants use the default renderer until custom implementations
 /// are added. In the future, only DesignVariant::Default will return true here.
+#[allow(dead_code)]
 pub fn uses_default_renderer(variant: DesignVariant) -> bool {
     // When a custom renderer is added for a variant, remove it from this match
     // Minimal, RetroTerminal now have custom renderers
@@ -211,13 +277,63 @@ pub fn uses_default_renderer(variant: DesignVariant) -> bool {
 /// 
 /// Different designs use different item heights for their aesthetic.
 /// This should be used when setting up uniform_list.
+///
+/// Note: This function now uses the DesignTokens system for consistency.
+/// The constants MINIMAL_ITEM_HEIGHT, TERMINAL_ITEM_HEIGHT, etc. are
+/// kept for backward compatibility with existing renderers.
+#[allow(dead_code)]
 pub fn get_item_height(variant: DesignVariant) -> f32 {
+    // Use tokens for authoritative item heights
+    get_tokens(variant).item_height()
+}
+
+/// Get design tokens for a design variant
+///
+/// Returns a boxed trait object that provides the complete design token set
+/// for the specified variant. Use this when you need dynamic dispatch.
+///
+/// # Example
+///
+/// ```ignore
+/// use designs::{DesignVariant, get_tokens};
+///
+/// let tokens = get_tokens(DesignVariant::Minimal);
+/// let bg_color = gpui::rgb(tokens.colors().background);
+/// let item_height = tokens.item_height();
+/// ```
+pub fn get_tokens(variant: DesignVariant) -> Box<dyn DesignTokens> {
     match variant {
-        DesignVariant::Minimal => MINIMAL_ITEM_HEIGHT,
-        DesignVariant::RetroTerminal => TERMINAL_ITEM_HEIGHT,
-        DesignVariant::Compact => COMPACT_ITEM_HEIGHT,
-        _ => crate::list_item::LIST_ITEM_HEIGHT,
+        DesignVariant::Default => Box::new(DefaultDesignTokens),
+        DesignVariant::Minimal => Box::new(MinimalDesignTokens),
+        DesignVariant::RetroTerminal => Box::new(RetroTerminalDesignTokens),
+        DesignVariant::Glassmorphism => Box::new(GlassmorphismDesignTokens),
+        DesignVariant::Brutalist => Box::new(BrutalistDesignTokens),
+        DesignVariant::NeonCyberpunk => Box::new(NeonCyberpunkDesignTokens),
+        DesignVariant::Paper => Box::new(PaperDesignTokens),
+        DesignVariant::AppleHIG => Box::new(AppleHIGDesignTokens),
+        DesignVariant::Material3 => Box::new(Material3DesignTokens),
+        DesignVariant::Compact => Box::new(CompactDesignTokens),
+        DesignVariant::Playful => Box::new(PlayfulDesignTokens),
     }
+}
+
+/// Get design tokens for a design variant (static dispatch version)
+///
+/// Returns the concrete token type for the specified variant.
+/// Use this when you know the variant at compile time for better performance.
+///
+/// # Example
+///
+/// ```ignore
+/// use designs::{DesignVariant, get_tokens_static, MinimalDesignTokens};
+///
+/// // Get tokens with static dispatch
+/// let tokens = MinimalDesignTokens;
+/// let bg_color = gpui::rgb(tokens.colors().background);
+/// ```
+#[allow(dead_code)]
+pub fn get_tokens_static<T: DesignTokens + Copy + Default>() -> T {
+    T::default()
 }
 
 use crate::scripts::SearchResult;
@@ -402,5 +518,167 @@ mod tests {
         unique.sort_by_key(|v| *v as u8);
         unique.dedup_by_key(|v| *v as u8);
         assert_eq!(unique.len(), 10, "All keyboard mappings should be unique");
+    }
+    
+    #[test]
+    fn test_design_cycling() {
+        // Test that next() cycles through all designs
+        let all = DesignVariant::all();
+        let mut current = DesignVariant::Default;
+        
+        // Cycle through all designs
+        for (i, expected) in all.iter().enumerate() {
+            assert_eq!(current, *expected, "Cycle iteration {} should be {:?}", i, expected);
+            current = current.next();
+        }
+        
+        // After cycling through all, we should be back at Default
+        assert_eq!(current, DesignVariant::Default, "Should cycle back to Default");
+    }
+    
+    #[test]
+    fn test_design_prev() {
+        // Test that prev() goes backwards
+        let current = DesignVariant::Default;
+        let prev = current.prev();
+        
+        // Default.prev() should be Playful (last in list)
+        assert_eq!(prev, DesignVariant::Playful);
+        
+        // And prev of that should be Compact
+        assert_eq!(prev.prev(), DesignVariant::Compact);
+    }
+    
+    // =========================================================================
+    // DesignTokens Tests
+    // =========================================================================
+    
+    #[test]
+    fn test_get_tokens_returns_correct_variant() {
+        // Verify get_tokens returns tokens with matching variant
+        for variant in DesignVariant::all() {
+            let tokens = get_tokens(*variant);
+            assert_eq!(tokens.variant(), *variant, 
+                "get_tokens({:?}) returned tokens for {:?}", variant, tokens.variant());
+        }
+    }
+    
+    #[test]
+    fn test_get_tokens_item_height_matches() {
+        // Verify token item_height matches get_item_height function
+        for variant in DesignVariant::all() {
+            let tokens = get_tokens(*variant);
+            let fn_height = get_item_height(*variant);
+            let token_height = tokens.item_height();
+            
+            assert_eq!(fn_height, token_height,
+                "Item height mismatch for {:?}: get_item_height={}, tokens.item_height={}",
+                variant, fn_height, token_height);
+        }
+    }
+    
+    #[test]
+    fn test_design_colors_defaults() {
+        let colors = DesignColors::default();
+        
+        // Verify expected defaults
+        assert_eq!(colors.background, 0x1e1e1e);
+        assert_eq!(colors.text_primary, 0xffffff);
+        assert_eq!(colors.accent, 0xfbbf24);
+        assert_eq!(colors.border, 0x464647);
+    }
+    
+    #[test]
+    fn test_design_spacing_defaults() {
+        let spacing = DesignSpacing::default();
+        
+        // Verify expected defaults
+        assert_eq!(spacing.padding_xs, 4.0);
+        assert_eq!(spacing.padding_md, 12.0);
+        assert_eq!(spacing.gap_md, 8.0);
+        assert_eq!(spacing.item_padding_x, 16.0);
+    }
+    
+    #[test]
+    fn test_design_typography_defaults() {
+        let typography = DesignTypography::default();
+        
+        // Verify expected defaults
+        assert_eq!(typography.font_family, ".AppleSystemUIFont");
+        assert_eq!(typography.font_family_mono, "Menlo");
+        assert_eq!(typography.font_size_md, 14.0);
+    }
+    
+    #[test]
+    fn test_design_visual_defaults() {
+        let visual = DesignVisual::default();
+        
+        // Verify expected defaults
+        assert_eq!(visual.radius_sm, 4.0);
+        assert_eq!(visual.radius_md, 8.0);
+        assert_eq!(visual.shadow_opacity, 0.25);
+        assert_eq!(visual.border_thin, 1.0);
+    }
+    
+    #[test]
+    fn test_design_tokens_are_copy() {
+        // Verify all token structs are Copy (needed for closure efficiency)
+        fn assert_copy<T: Copy>() {}
+        
+        assert_copy::<DesignColors>();
+        assert_copy::<DesignSpacing>();
+        assert_copy::<DesignTypography>();
+        assert_copy::<DesignVisual>();
+    }
+    
+    #[test]
+    fn test_minimal_tokens_distinctive() {
+        let tokens = MinimalDesignTokens;
+        
+        // Minimal should have taller items and more generous padding
+        assert_eq!(tokens.item_height(), 64.0);
+        assert_eq!(tokens.spacing().item_padding_x, 80.0);
+        assert_eq!(tokens.visual().radius_md, 0.0); // No borders
+    }
+    
+    #[test]
+    fn test_retro_terminal_tokens_distinctive() {
+        let tokens = RetroTerminalDesignTokens;
+        
+        // Terminal should have dense items and phosphor green colors
+        assert_eq!(tokens.item_height(), 28.0);
+        assert_eq!(tokens.colors().text_primary, 0x00ff00); // Phosphor green
+        assert_eq!(tokens.colors().background, 0x000000); // Pure black
+        assert_eq!(tokens.typography().font_family, "Menlo");
+    }
+    
+    #[test]
+    fn test_compact_tokens_distinctive() {
+        let tokens = CompactDesignTokens;
+        
+        // Compact should have smallest items
+        assert_eq!(tokens.item_height(), 24.0);
+        assert!(tokens.spacing().padding_md < DesignSpacing::default().padding_md);
+    }
+    
+    #[test]
+    fn test_all_variants_have_positive_item_height() {
+        for variant in DesignVariant::all() {
+            let tokens = get_tokens(*variant);
+            assert!(tokens.item_height() > 0.0, 
+                "Variant {:?} has non-positive item height", variant);
+        }
+    }
+    
+    #[test]
+    fn test_all_variants_have_valid_colors() {
+        for variant in DesignVariant::all() {
+            let tokens = get_tokens(*variant);
+            let colors = tokens.colors();
+            
+            // Background should be different from text (for contrast)
+            assert_ne!(colors.background, colors.text_primary,
+                "Variant {:?} has no contrast between bg and text", variant);
+        }
     }
 }

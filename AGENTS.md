@@ -1,6 +1,29 @@
-# Script Kit GPUI - Agent Knowledge Base
+# Script Kit GPUI
 
-> **Auto-loaded at conversation start.** This file contains project-specific GPUI patterns, gotchas, and best practices discovered during development.
+Script KIT GPUI is a complete rewrite of Script Kit into the GPUI framework. The goal is for backwards compatibility with Script Kit scripts, but using a completely new architecture and design principles: GPUI for the app shell and bun for running script with our new SDK.
+
+---
+
+## Agent Quick Start Checklist
+
+**MANDATORY for all AI agents working on this codebase:**
+
+```
+□ 1. Read this file completely before making changes
+□ 2. Check .hive/issues.jsonl for existing tasks and context
+□ 3. Run verification BEFORE committing: cargo check && cargo clippy && cargo test
+□ 4. Update bead status when starting/completing work
+□ 5. Write tests FIRST (TDD) - see Section 14 for test patterns
+□ 6. Include correlation_id in all log entries
+□ 7. Run smoke tests after UI changes: ./target/debug/script-kit-gpui tests/smoke/hello-world.ts
+```
+
+### Quick Verification Command
+
+```bash
+# Run this before every commit
+cargo check && cargo clippy --all-targets -- -D warnings && cargo test
+```
 
 ---
 
@@ -17,6 +40,11 @@
 | **Window Positioning** | Use `Bounds::centered(Some(display_id), size, cx)` for multi-monitor |
 | **Error Handling** | Use `anyhow::Result` + `.context()` for propagation, `NotifyResultExt` for user display |
 | **Logging** | Use `tracing` with JSONL format, typed fields, include `correlation_id` and `duration_ms` |
+| **TDD Workflow** | Read tests → Write failing test → Implement → Verify → Commit (Red-Green-Refactor) |
+| **Bead Protocol** | `hive_start` → Work → `swarm_progress` → `swarm_complete` (NOT `hive_close`) |
+| **Test Hierarchy** | `tests/smoke/` = E2E flows, `tests/sdk/` = individual SDK methods |
+| **Verification Gate** | Always run `cargo check && cargo clippy && cargo test` before commits |
+| **SDK Preload** | Scripts import `../../scripts/kit-sdk` for global functions (arg, div, md) |
 
 ---
 
@@ -892,6 +920,533 @@ Use consistent target names for easy filtering:
 | Non-blocking file writes | Use `tracing_appender::non_blocking` |
 | Dual output | JSONL to file, pretty to stdout |
 | Structured over interpolation | `info!(count = 5, "Items")` not `info!("Items: {}", 5)` |
+
+---
+
+## 13. Agent Workflow Protocol
+
+### TDD-First Development
+
+AI agents MUST follow Test-Driven Development (TDD) for all code changes:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    TDD CYCLE FOR AGENTS                     │
+├─────────────────────────────────────────────────────────────┤
+│  1. READ existing tests to understand expected behavior     │
+│  2. WRITE a failing test for the new feature/fix           │
+│  3. IMPLEMENT the minimum code to pass the test            │
+│  4. VERIFY with cargo check && cargo clippy && cargo test  │
+│  5. REFACTOR if needed (tests still pass)                  │
+│  6. COMMIT only after verification passes                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Red-Green-Refactor Pattern
+
+| Phase | Action | Verification |
+|-------|--------|--------------|
+| **Red** | Write failing test | `cargo test` shows failure |
+| **Green** | Implement minimum code | `cargo test` passes |
+| **Refactor** | Clean up code | `cargo test` still passes |
+
+### Verification Gate (MANDATORY)
+
+**Run this before EVERY commit:**
+
+```bash
+cargo check && cargo clippy --all-targets -- -D warnings && cargo test
+```
+
+| Check | Purpose | Failure Action |
+|-------|---------|----------------|
+| `cargo check` | Type errors, borrow checker | Fix compilation errors |
+| `cargo clippy` | Lints, anti-patterns | Address warnings |
+| `cargo test` | Unit + integration tests | Fix failing tests |
+
+### Agent Session Workflow
+
+```
+Session Start:
+  1. swarmmail_init(project_path, task_description)
+  2. Query semantic memory for past learnings
+  3. Load relevant skills (skills_list / skills_use)
+  4. Reserve files with swarmmail_reserve()
+
+During Work:
+  5. Read → Test → Implement → Verify cycle
+  6. Report progress at 25%, 50%, 75% with swarm_progress()
+  7. Use swarm_checkpoint() before risky operations
+
+Session End:
+  8. Store learnings in semantic memory
+  9. Complete with swarm_complete() (NOT hive_close)
+```
+
+### Progress Reporting
+
+Report progress at key milestones:
+
+```typescript
+swarm_progress({
+  project_key: "/Users/johnlindquist/dev/script-kit-gpui",
+  agent_name: "your-agent-name",
+  bead_id: "cell--xxxxx",
+  status: "in_progress",  // or "blocked", "completed"
+  progress_percent: 50,
+  message: "Completed X, now working on Y",
+  files_touched: ["src/main.rs", "src/theme.rs"]
+})
+```
+
+---
+
+## 14. Testing Infrastructure
+
+### Test Directory Structure
+
+```
+tests/
+├── smoke/                    # End-to-end integration tests
+│   ├── hello-world.ts        # Basic sanity check
+│   ├── hello-world-args.ts   # Interactive prompts
+│   ├── test-window-reset.ts  # Window state reset
+│   ├── test-process-cleanup.ts
+│   └── README.md
+├── sdk/                      # Individual SDK method tests
+│   ├── test-arg.ts           # arg() prompt tests
+│   ├── test-div.ts           # div() display tests
+│   ├── test-editor.ts        # editor() tests
+│   ├── test-fields.ts        # fields() form tests
+│   ├── test-hotkey.ts        # hotkey() capture tests
+│   └── README.md
+```
+
+### Test Types
+
+| Type | Location | Purpose | Run Command |
+|------|----------|---------|-------------|
+| **Smoke Tests** | `tests/smoke/` | Full E2E flows | `./target/debug/script-kit-gpui tests/smoke/hello-world.ts` |
+| **SDK Tests** | `tests/sdk/` | Individual API methods | `bun run tests/sdk/test-arg.ts` |
+| **Rust Unit Tests** | `src/*.rs` | Internal Rust functions | `cargo test` |
+
+### SDK Preload Pattern
+
+All test scripts import the SDK for global functions:
+
+```typescript
+// At the top of every test file
+import '../../scripts/kit-sdk';
+
+// This makes these globals available:
+// - arg(placeholder, choices) -> Promise<string>
+// - div(html, tailwind?) -> Promise<void>
+// - md(markdown) -> string
+// - editor(content?, language?) -> Promise<string>
+// - fields(fieldDefs) -> Promise<string[]>
+// ... and more
+```
+
+### Test Output Format (JSONL)
+
+Tests output structured JSONL for machine parsing:
+
+```json
+{"test": "arg-string-choices", "status": "running", "timestamp": "2024-..."}
+{"test": "arg-string-choices", "status": "pass", "result": "Apple", "duration_ms": 45}
+```
+
+| Status | Meaning |
+|--------|---------|
+| `running` | Test started |
+| `pass` | Test completed successfully |
+| `fail` | Test failed (includes `error` field) |
+| `skip` | Test skipped (includes `reason` field) |
+
+### Writing New Tests
+
+Follow this pattern for SDK tests:
+
+```typescript
+// Name: SDK Test - myFunction()
+// Description: Tests myFunction() behavior
+
+import '../../scripts/kit-sdk';
+
+interface TestResult {
+  test: string;
+  status: 'running' | 'pass' | 'fail' | 'skip';
+  timestamp: string;
+  result?: unknown;
+  error?: string;
+  duration_ms?: number;
+}
+
+function logTest(name: string, status: TestResult['status'], extra?: Partial<TestResult>) {
+  const result: TestResult = {
+    test: name,
+    status,
+    timestamp: new Date().toISOString(),
+    ...extra
+  };
+  console.log(JSON.stringify(result));
+}
+
+// Test implementation
+const testName = 'my-function-basic';
+logTest(testName, 'running');
+const start = Date.now();
+
+try {
+  const result = await myFunction('input');
+  
+  if (result === expectedValue) {
+    logTest(testName, 'pass', { result, duration_ms: Date.now() - start });
+  } else {
+    logTest(testName, 'fail', { 
+      error: `Expected "${expectedValue}", got "${result}"`,
+      duration_ms: Date.now() - start 
+    });
+  }
+} catch (err) {
+  logTest(testName, 'fail', { error: String(err), duration_ms: Date.now() - start });
+}
+```
+
+### Running Tests
+
+```bash
+# Run all SDK tests
+bun run scripts/test-runner.ts
+
+# Run single SDK test
+bun run scripts/test-runner.ts tests/sdk/test-arg.ts
+
+# Run with full GPUI integration
+cargo build && ./target/debug/script-kit-gpui tests/sdk/test-arg.ts
+
+# Run smoke tests
+./target/debug/script-kit-gpui tests/smoke/hello-world.ts
+
+# Run Rust unit tests
+cargo test
+
+# Performance benchmark
+npx tsx scripts/scroll-bench.ts
+```
+
+### Performance Thresholds
+
+| Metric | Threshold | Test |
+|--------|-----------|------|
+| P95 Key Latency | < 50ms | `tests/sdk/test-scroll-perf.ts` |
+| Single Key Event | < 16.67ms (60fps) | Manual profiling |
+| Scroll Operation | < 8ms | `scripts/scroll-bench.ts` |
+
+---
+
+## 15. Hive/Beads Task Management
+
+### Overview
+
+The `.hive/` directory contains task tracking in JSONL format, designed for AI agent workflows.
+
+```
+.hive/
+├── issues.jsonl     # Task tracking (epics, tasks, bugs)
+└── memories.jsonl   # Semantic memory for learnings
+```
+
+### JSONL Format
+
+Each line in `issues.jsonl` is a JSON object:
+
+```json
+{
+  "id": "cell--9bnr5-mjjg2p0an0j",
+  "title": "GPUI Script Kit PoC",
+  "description": "Build a proof-of-concept...",
+  "status": "closed",
+  "priority": 1,
+  "issue_type": "epic",
+  "created_at": "2025-12-24T03:18:51.418Z",
+  "updated_at": "2025-12-24T03:32:06.214Z",
+  "closed_at": "2025-12-24T03:32:06.214Z",
+  "parent_id": null,
+  "dependencies": [],
+  "labels": [],
+  "comments": []
+}
+```
+
+### Issue Types
+
+| Type | Purpose |
+|------|---------|
+| `epic` | Large feature with subtasks |
+| `task` | Individual work item |
+| `bug` | Defect to fix |
+| `feature` | New functionality |
+| `chore` | Maintenance work |
+
+### Status Values
+
+| Status | Meaning |
+|--------|---------|
+| `open` | Not started |
+| `in_progress` | Currently being worked on |
+| `blocked` | Waiting on something |
+| `closed` | Completed |
+
+### Priority Levels
+
+| Priority | Meaning |
+|----------|---------|
+| 0 | Critical - do first |
+| 1 | High - important |
+| 2 | Medium - normal |
+| 3 | Low - nice to have |
+
+### Bead Management Commands
+
+**IMPORTANT: Use MCP tools, not CLI commands directly**
+
+```typescript
+// Query beads
+hive_query({ status: "open", type: "task" })
+hive_ready()  // Get next unblocked, highest priority
+
+// Create beads
+hive_create({ title: "Fix bug", type: "bug", priority: 1 })
+hive_create_epic({ 
+  epic_title: "New Feature",
+  subtasks: [{ title: "Subtask 1", files: ["src/main.rs"] }]
+})
+
+// Update beads
+hive_start({ id: "cell--xxxxx" })  // Mark as in_progress
+hive_update({ id: "cell--xxxxx", status: "blocked", description: "Waiting for X" })
+
+// Complete beads (MANDATORY pattern)
+swarm_complete({
+  project_key: "/path/to/project",
+  agent_name: "worker-name",
+  bead_id: "cell--xxxxx",
+  summary: "What was accomplished",
+  files_touched: ["src/main.rs"]
+})  // NOT hive_close!
+```
+
+### Epic/Subtask Pattern
+
+```typescript
+// Create epic with subtasks
+hive_create_epic({
+  epic_title: "Add search functionality",
+  epic_description: "Implement fuzzy search for script list",
+  subtasks: [
+    { title: "Add search input UI", files: ["src/main.rs"], priority: 0 },
+    { title: "Implement fuzzy matching", files: ["src/scripts.rs"], priority: 1 },
+    { title: "Add keyboard navigation", files: ["src/main.rs"], priority: 1 }
+  ]
+})
+```
+
+### Mandatory Bead Protocol for Agents
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    BEAD LIFECYCLE                           │
+├─────────────────────────────────────────────────────────────┤
+│  1. swarmmail_init()     - Register with coordination       │
+│  2. hive_start(id)       - Mark bead as in_progress        │
+│  3. swarm_progress()     - Report at 25/50/75%             │
+│  4. swarm_complete()     - Close bead + release resources  │
+├─────────────────────────────────────────────────────────────┤
+│  ⚠️  NEVER use hive_close() directly - use swarm_complete() │
+│      swarm_complete() handles: UBS scan, reservation        │
+│      release, learning signals, coordinator notification    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 16. Agent Observability
+
+### Correlation IDs
+
+Every agent session should use correlation IDs to track related operations:
+
+```rust
+use uuid::Uuid;
+
+fn handle_task(&mut self, task: Task, cx: &mut Context<Self>) {
+    let correlation_id = Uuid::new_v4().to_string();
+    
+    let span = info_span!("agent_task", 
+        correlation_id = %correlation_id,
+        task_id = %task.id,
+        task_type = %task.task_type
+    );
+    let _guard = span.enter();
+    
+    info!("Task started");
+    // All nested logs will include correlation_id
+    self.execute_task(&task)?;
+    info!("Task completed");
+}
+```
+
+### JSONL Log Format
+
+Logs are written to `~/.kit/logs/script-kit-gpui.jsonl`:
+
+```json
+{"timestamp":"2024-01-15T10:30:45.123Z","level":"INFO","target":"script_kit::executor","message":"Script executed","fields":{"correlation_id":"abc-123","script_name":"hello.ts","duration_ms":142}}
+```
+
+### Log Queries for Agents
+
+```bash
+# Find all logs for a correlation ID
+grep '"correlation_id":"abc-123"' ~/.kit/logs/script-kit-gpui.jsonl
+
+# Find slow operations (>100ms)
+grep '"duration_ms":' ~/.kit/logs/script-kit-gpui.jsonl | \
+  jq 'select(.fields.duration_ms > 100)'
+
+# Find errors in last hour
+grep '"level":"ERROR"' ~/.kit/logs/script-kit-gpui.jsonl | \
+  jq 'select(.timestamp > "2024-01-15T09:30:00")'
+
+# Extract timing metrics
+grep '"duration_ms":' ~/.kit/logs/script-kit-gpui.jsonl | \
+  jq -r '.fields.duration_ms' | sort -n | tail -10
+```
+
+### Performance Monitoring
+
+```rust
+use std::time::Instant;
+use tracing::{info, warn};
+
+const SLOW_THRESHOLD_MS: u64 = 100;
+
+fn monitored_operation(&self) {
+    let start = Instant::now();
+    
+    // ... do work ...
+    
+    let duration_ms = start.elapsed().as_millis() as u64;
+    
+    if duration_ms > SLOW_THRESHOLD_MS {
+        warn!(
+            duration_ms,
+            threshold_ms = SLOW_THRESHOLD_MS,
+            operation = "operation_name",
+            "Slow operation detected"
+        );
+    } else {
+        info!(duration_ms, "Operation completed");
+    }
+}
+```
+
+### Required Log Fields for Agent Tracing
+
+| Field | Purpose | Example |
+|-------|---------|---------|
+| `correlation_id` | Track related operations | `"abc-123-def"` |
+| `duration_ms` | Performance tracking | `142` |
+| `bead_id` | Link to task | `"cell--9bnr5-xxx"` |
+| `agent_name` | Identify worker | `"worker-theme"` |
+| `files_touched` | Track changes | `["src/main.rs"]` |
+
+---
+
+## 17. Agent Anti-Patterns and Gotchas
+
+### Common Mistakes
+
+| Anti-Pattern | Why It's Bad | Correct Approach |
+|--------------|--------------|------------------|
+| Skip `swarmmail_init()` | Work not tracked, completion fails | Always init first |
+| Use `hive_close()` directly | Doesn't release reservations | Use `swarm_complete()` |
+| Skip verification gate | Broken code gets committed | Run check/clippy/test before commit |
+| Edit unreserved files | Causes merge conflicts | Reserve files with `swarmmail_reserve()` |
+| No progress reports | Coordinator can't track work | Report at 25/50/75% |
+| Skip TDD | Harder to verify correctness | Write failing test first |
+| Hardcode correlation_id | Can't trace operations | Generate UUID per session |
+| Ignore blocked status | Work on wrong priorities | Use `hive_ready()` for next task |
+
+### File Reservation Protocol
+
+```typescript
+// CORRECT: Reserve before editing
+swarmmail_reserve({
+  paths: ["src/main.rs", "src/theme.rs"],
+  reason: "cell--xxxxx: Implement feature X",
+  exclusive: true
+})
+
+// Work on files...
+
+// Release happens automatically via swarm_complete()
+
+// WRONG: Edit without reservation
+// This causes conflicts if other agents are editing the same files!
+```
+
+### When Blocked
+
+```typescript
+// Report block immediately
+swarmmail_send({
+  to: ["coordinator"],
+  subject: "BLOCKED: cell--xxxxx",
+  body: "Cannot proceed because: <specific reason>",
+  importance: "high"
+})
+
+// Update bead status
+hive_update({
+  id: "cell--xxxxx",
+  status: "blocked",
+  description: "Blocked on: <reason>"
+})
+
+// Wait for coordinator response before continuing
+```
+
+### Scope Change Protocol
+
+If you discover additional work needed:
+
+```typescript
+// DON'T just expand scope - request first
+swarmmail_send({
+  to: ["coordinator"],
+  subject: "Scope change request: cell--xxxxx",
+  body: "Original task was X. Found that Y is also needed. Request permission to expand scope.",
+  importance: "high"
+})
+
+// Wait for approval before expanding beyond files_owned
+```
+
+### Pre-Commit Checklist
+
+```
+Before every commit, verify:
+□ cargo check passes
+□ cargo clippy --all-targets -- -D warnings passes
+□ cargo test passes
+□ Only reserved files were modified
+□ Bead status updated (in_progress → completed)
+□ Progress reported at milestones
+□ Correlation ID in relevant log entries
+□ Tests written for new functionality
+```
 
 ---
 

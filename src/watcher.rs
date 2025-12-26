@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
-use shellexpand;
+
 use std::process::Command;
 use tracing::{info, warn};
 
@@ -65,7 +65,7 @@ impl ConfigWatcher {
             .tx
             .take()
             .ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::Other, "watcher already started")
+                std::io::Error::other("watcher already started")
             })?;
 
         let thread_handle = thread::spawn(move || {
@@ -212,7 +212,7 @@ impl ThemeWatcher {
             .tx
             .take()
             .ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::Other, "watcher already started")
+                std::io::Error::other("watcher already started")
             })?;
 
         let thread_handle = thread::spawn(move || {
@@ -359,7 +359,7 @@ impl ScriptWatcher {
             .tx
             .take()
             .ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::Other, "watcher already started")
+                std::io::Error::other("watcher already started")
             })?;
 
         let thread_handle = thread::spawn(move || {
@@ -529,7 +529,7 @@ impl AppearanceWatcher {
                     "System appearance changed to: {}",
                     mode
                 );
-                if let Err(_) = tx.send(current_appearance.clone()) {
+                if tx.send(current_appearance.clone()).is_err() {
                     info!(watcher = "appearance", "Appearance watcher receiver dropped, shutting down");
                     eprintln!("Appearance watcher receiver dropped, shutting down");
                     break;
@@ -547,7 +547,7 @@ impl AppearanceWatcher {
     /// Detect the current system appearance
     fn detect_appearance() -> AppearanceChangeEvent {
         match Command::new("defaults")
-            .args(&["read", "-g", "AppleInterfaceStyle"])
+            .args(["read", "-g", "AppleInterfaceStyle"])
             .output()
         {
             Ok(output) => {
@@ -578,7 +578,6 @@ impl Drop for AppearanceWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     #[test]
     fn test_config_watcher_creation() {

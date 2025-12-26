@@ -184,6 +184,8 @@ impl PtyManager {
         #[cfg(unix)]
         {
             command.env("TERM", "xterm-256color");
+            command.env("COLORTERM", "truecolor"); // Enable 24-bit color support
+            command.env("CLICOLOR_FORCE", "1"); // Force colors even if not a TTY
             if let Ok(home) = std::env::var("HOME") {
                 command.env("HOME", home);
             }
@@ -192,6 +194,10 @@ impl PtyManager {
             }
             if let Ok(path) = std::env::var("PATH") {
                 command.env("PATH", path);
+            }
+            // Inherit other important env vars for shell tools
+            if let Ok(shell) = std::env::var("SHELL") {
+                command.env("SHELL", shell);
             }
         }
 

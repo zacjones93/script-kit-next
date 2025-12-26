@@ -304,6 +304,158 @@ impl<App: 'static> DesignRenderer<App> for PaperRenderer {
     }
 }
 
+// ============================================================================
+// Standalone render functions for window components
+// ============================================================================
+
+/// Render paper-styled header
+///
+/// Warm cream background with serif typography and subtle paper shadow.
+pub fn render_paper_header(title: &str) -> impl IntoElement {
+    div()
+        .w_full()
+        .h(px(52.))
+        .px(px(20.))
+        .bg(rgb(colors::CARD_BACKGROUND))
+        .border_b_1()
+        .border_color(rgb(colors::BORDER))
+        .shadow(PaperRenderer::create_card_shadow())
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .font_family("Georgia")
+        .child(
+            div()
+                .text_lg()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(colors::TEXT_PRIMARY))
+                .child(title.to_string()),
+        )
+        .child(
+            // Bookmark-like accent
+            div()
+                .w(px(4.))
+                .h(px(24.))
+                .bg(rgb(colors::ACCENT))
+                .rounded(px(2.)),
+        )
+}
+
+/// Render paper-styled preview panel
+///
+/// Card with warm shadow and sepia-toned text.
+pub fn render_paper_preview_panel(content: Option<&str>) -> impl IntoElement {
+    let display_content = content.unwrap_or("Select a script to preview its contents...");
+    let text_color = if content.is_some() {
+        rgb(colors::TEXT_PRIMARY)
+    } else {
+        rgb(colors::TEXT_MUTED)
+    };
+
+    div()
+        .w_full()
+        .h_full()
+        .p(px(20.))
+        .bg(rgb(colors::CARD_BACKGROUND))
+        .border_1()
+        .border_color(rgb(colors::BORDER))
+        .rounded(px(6.))
+        .shadow(PaperRenderer::create_card_shadow())
+        .flex()
+        .flex_col()
+        .font_family("Georgia")
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(colors::TEXT_SECONDARY))
+                .border_b_1()
+                .border_color(rgb(colors::BORDER))
+                .pb(px(8.))
+                .mb(px(16.))
+                .child("Preview"),
+        )
+        .child(
+            div()
+                .flex_1()
+                .text_sm()
+                .line_height(px(22.))
+                .text_color(text_color)
+                .overflow_hidden()
+                .child(display_content.to_string()),
+        )
+}
+
+/// Render paper-styled log panel
+///
+/// Inset paper effect for log output with warm tones.
+pub fn render_paper_log_panel(logs: &[String]) -> impl IntoElement {
+    div()
+        .w_full()
+        .h(px(150.))
+        .p(px(16.))
+        .bg(rgb(colors::SEARCH_BACKGROUND))
+        .border_1()
+        .border_color(rgb(colors::BORDER))
+        .rounded(px(4.))
+        .shadow(PaperRenderer::create_inset_shadow())
+        .flex()
+        .flex_col()
+        .font_family("Courier New")
+        .child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(colors::TEXT_MUTED))
+                .mb(px(8.))
+                .child("Console"),
+        )
+        .child(
+            div()
+                .flex_1()
+                .overflow_hidden()
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .children(logs.iter().map(|log| {
+                    div()
+                        .text_xs()
+                        .text_color(rgb(colors::TEXT_SECONDARY))
+                        .child(log.clone())
+                })),
+        )
+}
+
+/// Render paper-styled window container
+///
+/// Warm cream background with paper-like drop shadow.
+pub fn render_paper_window_container(children: impl IntoElement) -> impl IntoElement {
+    div()
+        .w_full()
+        .h_full()
+        .bg(rgb(colors::BACKGROUND_MAIN))
+        .rounded(px(8.))
+        .overflow_hidden()
+        .shadow(vec![
+            // Warm paper shadow
+            BoxShadow {
+                color: hsla(0.1, 0.3, 0.4, 0.2),
+                offset: point(px(0.), px(8.)),
+                blur_radius: px(24.),
+                spread_radius: px(-4.),
+            },
+            // Subtle edge highlight
+            BoxShadow {
+                color: hsla(0.1, 0.1, 0.95, 0.5),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+            },
+        ])
+        .child(children)
+}
+
 // Note: Tests omitted due to GPUI macro recursion limit issues.
 // Paper colors (warm palette):
 // - BACKGROUND_MAIN: 0xfaf8f0

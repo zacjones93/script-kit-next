@@ -41,6 +41,20 @@ impl ListItemColors {
             background_selected: theme.colors.accent.selected_subtle,
         }
     }
+    
+    /// Create from design colors for GLOBAL theming support
+    pub fn from_design(colors: &crate::designs::DesignColors) -> Self {
+        Self {
+            text_primary: colors.text_primary,
+            text_secondary: colors.text_secondary,
+            text_muted: colors.text_muted,
+            text_dimmed: colors.text_dimmed,
+            accent_selected: colors.accent,
+            accent_selected_subtle: colors.background_selected,
+            background: colors.background,
+            background_selected: colors.background_selected,
+        }
+    }
 }
 
 /// Callback type for hover events on list items.

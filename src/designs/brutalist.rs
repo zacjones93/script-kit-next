@@ -266,6 +266,134 @@ impl BrutalistColors {
     }
 }
 
+// ============================================================================
+// Standalone render functions for window components
+// ============================================================================
+
+/// Render brutalist-styled header
+///
+/// ALL CAPS, stark black/white contrast, thick borders.
+pub fn render_brutalist_header(title: &str) -> impl IntoElement {
+    div()
+        .w_full()
+        .h(px(56.))
+        .bg(rgb(colors::BLACK))
+        .border_b(px(BORDER_WIDTH))
+        .border_color(rgb(colors::BLACK))
+        .flex()
+        .items_center()
+        .justify_center()
+        .font_family("Georgia")
+        .child(
+            div()
+                .text_xl()
+                .font_weight(FontWeight::BLACK)
+                .text_color(rgb(colors::WHITE))
+                .child(title.to_uppercase()),
+        )
+}
+
+/// Render brutalist-styled preview panel
+///
+/// Raw white box with thick black border, no rounded corners.
+pub fn render_brutalist_preview_panel(content: Option<&str>) -> impl IntoElement {
+    let display_content = content.unwrap_or("NO SELECTION");
+
+    div()
+        .w_full()
+        .h_full()
+        .p(px(16.))
+        .bg(rgb(colors::WHITE))
+        .border(px(BORDER_WIDTH))
+        .border_color(rgb(colors::BLACK))
+        .font_family("Georgia")
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::BLACK)
+                .text_color(rgb(colors::BLACK))
+                .border_b(px(2.))
+                .border_color(rgb(colors::BLACK))
+                .pb(px(8.))
+                .mb(px(12.))
+                .child("PREVIEW"),
+        )
+        .child(
+            div()
+                .flex_1()
+                .text_base()
+                .text_color(rgb(colors::BLACK))
+                .overflow_hidden()
+                .child(display_content.to_uppercase()),
+        )
+}
+
+/// Render brutalist-styled log panel
+///
+/// Raw output with thick borders, monospace font.
+pub fn render_brutalist_log_panel(logs: &[String]) -> impl IntoElement {
+    div()
+        .w_full()
+        .h(px(150.))
+        .p(px(12.))
+        .bg(rgb(colors::WHITE))
+        .border(px(BORDER_WIDTH))
+        .border_color(rgb(colors::BLACK))
+        .font_family("Courier")
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::BLACK)
+                .text_color(rgb(colors::BLACK))
+                .border_b(px(2.))
+                .border_color(rgb(colors::BLACK))
+                .pb(px(4.))
+                .mb(px(8.))
+                .child("OUTPUT"),
+        )
+        .child(
+            div()
+                .flex_1()
+                .overflow_hidden()
+                .flex()
+                .flex_col()
+                .children(logs.iter().map(|log| {
+                    div()
+                        .text_xs()
+                        .text_color(rgb(colors::BLACK))
+                        .py(px(2.))
+                        .border_b_1()
+                        .border_color(rgba(0x00000020))
+                        .child(log.to_uppercase())
+                })),
+        )
+}
+
+/// Render brutalist-styled window container
+///
+/// White background, thick black border, no rounded corners.
+pub fn render_brutalist_window_container(children: impl IntoElement) -> impl IntoElement {
+    div()
+        .w_full()
+        .h_full()
+        .bg(rgb(colors::WHITE))
+        .border(px(BORDER_WIDTH))
+        .border_color(rgb(colors::BLACK))
+        // Hard shadow offset for brutalist depth
+        .shadow(vec![BoxShadow {
+            color: rgba(0x00000080).into(),
+            offset: point(px(4.), px(4.)),
+            blur_radius: px(0.),
+            spread_radius: px(0.),
+        }])
+        .overflow_hidden()
+        .child(children)
+}
+
 // Note: Tests omitted due to GPUI macro recursion limit issues.
 // BrutalistColors constants verified:
 // - background: 0xFFFFFF (white)

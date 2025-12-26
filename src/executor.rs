@@ -33,18 +33,16 @@ fn find_executable(name: &str) -> Option<PathBuf> {
         Some(PathBuf::from("/bin")),
     ];
     
-    for path_opt in common_paths.iter() {
-        if let Some(path) = path_opt {
-            let exe_path = path.join(name);
-            logging::log("EXEC", &format!("  Checking: {}", exe_path.display()));
-            if exe_path.exists() {
-                logging::log("EXEC", &format!("  FOUND: {}", exe_path.display()));
-                return Some(exe_path);
-            }
+    for path in common_paths.iter().flatten() {
+        let exe_path = path.join(name);
+        logging::log("EXEC", &format!("  Checking: {}", exe_path.display()));
+        if exe_path.exists() {
+            logging::log("EXEC", &format!("  FOUND: {}", exe_path.display()));
+            return Some(exe_path);
         }
     }
     
-    logging::log("EXEC", &format!("  NOT FOUND in common paths, will try PATH"));
+    logging::log("EXEC", "  NOT FOUND in common paths, will try PATH");
     None
 }
 

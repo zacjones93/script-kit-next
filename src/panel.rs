@@ -19,7 +19,7 @@
 /// 
 /// The blur shows through the transparent portions of the window background,
 /// creating the native macOS vibrancy effect similar to Spotlight and Raycast.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum WindowVibrancy {
     /// Solid, opaque background - no vibrancy effect
     Opaque,
@@ -27,14 +27,8 @@ pub enum WindowVibrancy {
     Transparent,
     /// macOS vibrancy/blur effect - the native feel
     /// This is the recommended setting for Spotlight/Raycast-like appearance
+    #[default]
     Blurred,
-}
-
-impl Default for WindowVibrancy {
-    fn default() -> Self {
-        // Default to Blurred for native macOS feel
-        WindowVibrancy::Blurred
-    }
 }
 
 impl WindowVibrancy {
