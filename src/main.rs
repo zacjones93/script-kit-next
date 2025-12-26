@@ -1149,7 +1149,8 @@ impl ScriptListApp {
                     let _keep_alive_child = _child;
                     
                     loop {
-                        match stdout_reader.next_message() {
+                        // Use next_message_graceful to skip non-JSON lines (e.g., console.log output)
+                        match stdout_reader.next_message_graceful() {
                             Ok(Some(msg)) => {
                                 logging::log("EXEC", &format!("Received message: {:?}", msg));
                                 
