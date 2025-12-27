@@ -432,6 +432,18 @@ enum AppView {
         /// Separate focus handle for the editor (not shared with parent)
         focus_handle: FocusHandle,
     },
+    /// Showing clipboard history
+    ClipboardHistoryView {
+        entries: Vec<clipboard_history::ClipboardEntry>,
+        filter: String,
+        selected_index: usize,
+    },
+    /// Showing app launcher
+    AppLauncherView {
+        apps: Vec<app_launcher::AppInfo>,
+        filter: String,
+        selected_index: usize,
+    },
 }
 
 /// Wrapper to hold a script session that can be shared across async boundaries
@@ -1147,6 +1159,25 @@ impl ScriptListApp {
             AppView::ActionsDialog => {
                 // Actions dialog is an overlay, don't resize
                 return;
+            }
+            // Clipboard history and app launcher use standard height (same as script list)
+            AppView::ClipboardHistoryView { entries, filter, .. } => {
+                let filtered_count = if filter.is_empty() {
+                    entries.len()
+                } else {
+                    let filter_lower = filter.to_lowercase();
+                    entries.iter().filter(|e| e.content.to_lowercase().contains(&filter_lower)).count()
+                };
+                (ViewType::ScriptList, filtered_count)
+            }
+            AppView::AppLauncherView { apps, filter, .. } => {
+                let filtered_count = if filter.is_empty() {
+                    apps.len()
+                } else {
+                    let filter_lower = filter.to_lowercase();
+                    apps.iter().filter(|a| a.name.to_lowercase().contains(&filter_lower)).count()
+                };
+                (ViewType::ScriptList, filtered_count)
             }
         };
         
@@ -1979,24 +2010,55 @@ impl ScriptListApp {
     }
     
     /// Execute a built-in feature
-    fn execute_builtin(&mut self, entry: &builtins::BuiltInEntry, _cx: &mut Context<Self>) {
+    fn execute_builtin(&mut self, entry: &builtins::BuiltInEntry, cx: &mut Context<Self>) {
         logging::log("EXEC", &format!("Executing built-in: {} (id: {})", entry.name, entry.id));
         
         match &entry.feature {
             builtins::BuiltInFeature::ClipboardHistory => {
                 logging::log("EXEC", "Opening Clipboard History");
-                // TODO: Switch to clipboard history view
-                self.last_output = Some(SharedString::from("Clipboard History (coming soon)"));
+                let entries = clipboard_history::get_clipboard_history(100);
+                logging::log("EXEC", &format!("Loaded {} clipboard entries", entries.len()));
+                self.current_view = AppView::ClipboardHistoryView {
+                    entries,
+                    filter: String::new(),
+                    selected_index: 0,
+                };
+                // Use standard height for clipboard history view
+                defer_resize_to_view(ViewType::ScriptList, 0, cx);
+                cx.notify();
             }
             builtins::BuiltInFeature::AppLauncher => {
                 logging::log("EXEC", "Opening App Launcher");
-                // TODO: Switch to app launcher view
-                self.last_output = Some(SharedString::from("App Launcher (coming soon)"));
+                let apps = app_launcher::scan_applications().clone();
+                logging::log("EXEC", &format!("Loaded {} applications", apps.len()));
+                self.current_view = AppView::AppLauncherView {
+                    apps,
+                    filter: String::new(),
+                    selected_index: 0,
+                };
+                // Use standard height for app launcher view
+                defer_resize_to_view(ViewType::ScriptList, 0, cx);
+                cx.notify();
             }
             builtins::BuiltInFeature::App(app_name) => {
                 logging::log("EXEC", &format!("Launching app: {}", app_name));
-                // TODO: Launch the specific application
-                self.last_output = Some(SharedString::from(format!("Launching: {}", app_name)));
+                // Find and launch the specific application
+                let apps = app_launcher::scan_applications();
+                if let Some(app) = apps.iter().find(|a| a.name == *app_name) {
+                    if let Err(e) = app_launcher::launch_application(app) {
+                        logging::log("ERROR", &format!("Failed to launch {}: {}", app_name, e));
+                        self.last_output = Some(SharedString::from(format!("Failed to launch: {}", app_name)));
+                    } else {
+                        logging::log("EXEC", &format!("Launched app: {}", app_name));
+                        // Hide window after launching app
+                        WINDOW_VISIBLE.store(false, Ordering::SeqCst);
+                        cx.hide();
+                    }
+                } else {
+                    logging::log("ERROR", &format!("App not found: {}", app_name));
+                    self.last_output = Some(SharedString::from(format!("App not found: {}", app_name)));
+                }
+                cx.notify();
             }
         }
     }
@@ -2300,6 +2362,8 @@ impl ScriptListApp {
             AppView::DivPrompt { .. } => "DivPrompt",
             AppView::TermPrompt { .. } => "TermPrompt",
             AppView::EditorPrompt { .. } => "EditorPrompt",
+            AppView::ClipboardHistoryView { .. } => "ClipboardHistoryView",
+            AppView::AppLauncherView { .. } => "AppLauncherView",
         };
         
         let old_focused_input = self.focused_input;
@@ -2361,7 +2425,14 @@ impl ScriptListApp {
     
     /// Check if we're currently in a prompt view (script is running)
     fn is_in_prompt(&self) -> bool {
-        matches!(self.current_view, AppView::ArgPrompt { .. } | AppView::DivPrompt { .. } | AppView::TermPrompt { .. } | AppView::EditorPrompt { .. })
+        matches!(self.current_view, 
+            AppView::ArgPrompt { .. } | 
+            AppView::DivPrompt { .. } | 
+            AppView::TermPrompt { .. } | 
+            AppView::EditorPrompt { .. } |
+            AppView::ClipboardHistoryView { .. } |
+            AppView::AppLauncherView { .. }
+        )
     }
       
       /// Submit a response to the current prompt
@@ -2515,6 +2586,12 @@ impl Render for ScriptListApp {
             AppView::DivPrompt { id, html, tailwind } => self.render_div_prompt(id, html, tailwind, cx),
             AppView::TermPrompt { entity, .. } => self.render_term_prompt(entity, cx),
             AppView::EditorPrompt { entity, .. } => self.render_editor_prompt(entity, cx),
+            AppView::ClipboardHistoryView { entries, filter, selected_index } => {
+                self.render_clipboard_history(entries, filter, selected_index, cx)
+            }
+            AppView::AppLauncherView { apps, filter, selected_index } => {
+                self.render_app_launcher(apps, filter, selected_index, cx)
+            }
         }
     }
 }
@@ -4051,6 +4128,571 @@ impl ScriptListApp {
                     .text_xs()
                     .text_color(rgb(design_colors.text_dimmed))
                     .child("Press Esc to close")
+            )
+            .into_any_element()
+    }
+    
+    /// Render clipboard history view
+    fn render_clipboard_history(
+        &mut self,
+        entries: Vec<clipboard_history::ClipboardEntry>,
+        filter: String,
+        selected_index: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        // Use design tokens for GLOBAL theming
+        let tokens = get_tokens(self.current_design);
+        let design_colors = tokens.colors();
+        let design_spacing = tokens.spacing();
+        let design_typography = tokens.typography();
+        let design_visual = tokens.visual();
+        
+        // Use design tokens for global theming
+        let opacity = self.theme.get_opacity();
+        let bg_hex = design_colors.background;
+        let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
+        let box_shadows = self.create_box_shadows();
+        
+        // Filter entries based on current filter
+        let filtered_entries: Vec<_> = if filter.is_empty() {
+            entries.iter().enumerate().collect()
+        } else {
+            let filter_lower = filter.to_lowercase();
+            entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| {
+                    e.content.to_lowercase().contains(&filter_lower)
+                })
+                .collect()
+        };
+        let filtered_len = filtered_entries.len();
+        
+        // Key handler for clipboard history
+        let handle_key = cx.listener(move |this: &mut Self, event: &gpui::KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+            let key_str = event.keystroke.key.to_lowercase();
+            logging::log("KEY", &format!("ClipboardHistory key: '{}'", key_str));
+            
+            if let AppView::ClipboardHistoryView { entries, filter, selected_index } = &mut this.current_view {
+                // Apply filter to get current filtered list
+                let filtered_entries: Vec<_> = if filter.is_empty() {
+                    entries.iter().enumerate().collect()
+                } else {
+                    let filter_lower = filter.to_lowercase();
+                    entries
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, e)| e.content.to_lowercase().contains(&filter_lower))
+                        .collect()
+                };
+                let filtered_len = filtered_entries.len();
+                
+                match key_str.as_str() {
+                    "up" | "arrowup" => {
+                        if *selected_index > 0 {
+                            *selected_index -= 1;
+                            cx.notify();
+                        }
+                    }
+                    "down" | "arrowdown" => {
+                        if *selected_index < filtered_len.saturating_sub(1) {
+                            *selected_index += 1;
+                            cx.notify();
+                        }
+                    }
+                    "enter" => {
+                        // Copy selected entry to clipboard and hide window
+                        if let Some((_, entry)) = filtered_entries.get(*selected_index) {
+                            logging::log("EXEC", &format!("Copying clipboard entry: {}", entry.id));
+                            if let Err(e) = clipboard_history::copy_entry_to_clipboard(&entry.id) {
+                                logging::log("ERROR", &format!("Failed to copy entry: {}", e));
+                            } else {
+                                logging::log("EXEC", "Entry copied to clipboard");
+                                // Hide window after pasting
+                                WINDOW_VISIBLE.store(false, Ordering::SeqCst);
+                                cx.hide();
+                                NEEDS_RESET.store(true, Ordering::SeqCst);
+                            }
+                        }
+                    }
+                    "escape" => {
+                        logging::log("KEY", "ESC in ClipboardHistory - returning to script list");
+                        this.reset_to_script_list(cx);
+                    }
+                    "backspace" => {
+                        if !filter.is_empty() {
+                            filter.pop();
+                            *selected_index = 0;
+                            cx.notify();
+                        }
+                    }
+                    _ => {
+                        if let Some(ref key_char) = event.keystroke.key_char {
+                            if let Some(ch) = key_char.chars().next() {
+                                if !ch.is_control() {
+                                    filter.push(ch);
+                                    *selected_index = 0;
+                                    cx.notify();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        
+        let input_display = if filter.is_empty() {
+            SharedString::from("Search clipboard history...")
+        } else {
+            SharedString::from(filter.clone())
+        };
+        let input_is_empty = filter.is_empty();
+        
+        // Pre-compute colors
+        let list_colors = ListItemColors::from_design(&design_colors);
+        let text_primary = design_colors.text_primary;
+        let text_muted = design_colors.text_muted;
+        let text_dimmed = design_colors.text_dimmed;
+        let ui_border = design_colors.border;
+        
+        // Build virtualized list
+        let list_element: AnyElement = if filtered_len == 0 {
+            div()
+                .w_full()
+                .py(px(design_spacing.padding_xl))
+                .text_center()
+                .text_color(rgb(design_colors.text_muted))
+                .font_family(design_typography.font_family)
+                .child(if filter.is_empty() { 
+                    "No clipboard history" 
+                } else { 
+                    "No entries match your filter" 
+                })
+                .into_any_element()
+        } else {
+            // Clone data for the closure
+            let entries_for_closure: Vec<_> = filtered_entries.iter().map(|(i, e)| (*i, (*e).clone())).collect();
+            let selected = selected_index;
+            
+            uniform_list(
+                "clipboard-history",
+                filtered_len,
+                move |visible_range, _window, _cx| {
+                    visible_range.map(|ix| {
+                        if let Some((_, entry)) = entries_for_closure.get(ix) {
+                            let is_selected = ix == selected;
+                            
+                            // Truncate content for display
+                            let display_content = match entry.content_type {
+                                clipboard_history::ContentType::Image => "[Image]".to_string(),
+                                clipboard_history::ContentType::Text => {
+                                    let truncated: String = entry.content.chars().take(50).collect();
+                                    if entry.content.len() > 50 {
+                                        format!("{}...", truncated)
+                                    } else {
+                                        truncated
+                                    }
+                                }
+                            };
+                            
+                            // Format relative time
+                            let now = chrono::Utc::now().timestamp();
+                            let age_secs = now - entry.timestamp;
+                            let relative_time = if age_secs < 60 {
+                                "just now".to_string()
+                            } else if age_secs < 3600 {
+                                format!("{}m ago", age_secs / 60)
+                            } else if age_secs < 86400 {
+                                format!("{}h ago", age_secs / 3600)
+                            } else {
+                                format!("{}d ago", age_secs / 86400)
+                            };
+                            
+                            // Add pin indicator
+                            let name = if entry.pinned {
+                                format!("📌 {}", display_content)
+                            } else {
+                                display_content
+                            };
+                            
+                            div()
+                                .id(ix)
+                                .child(
+                                    ListItem::new(name, list_colors)
+                                        .description_opt(Some(relative_time))
+                                        .selected(is_selected)
+                                )
+                        } else {
+                            div().id(ix).h(px(LIST_ITEM_HEIGHT))
+                        }
+                    }).collect()
+                },
+            )
+            .h_full()
+            .track_scroll(&self.list_scroll_handle)
+            .into_any_element()
+        };
+        
+        div()
+            .flex()
+            .flex_col()
+            .bg(rgba(bg_with_alpha))
+            .shadow(box_shadows)
+            .w_full()
+            .h_full()
+            .rounded(px(design_visual.radius_lg))
+            .text_color(rgb(text_primary))
+            .font_family(design_typography.font_family)
+            .key_context("clipboard_history")
+            .track_focus(&self.focus_handle)
+            .on_key_down(handle_key)
+            // Header with input
+            .child(
+                div()
+                    .w_full()
+                    .px(px(design_spacing.padding_lg))
+                    .py(px(design_spacing.padding_md))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_3()
+                    // Title
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(text_dimmed))
+                            .child("📋 Clipboard")
+                    )
+                    // Search input with blinking cursor
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .text_xl()
+                            .text_color(if input_is_empty { rgb(text_muted) } else { rgb(text_primary) })
+                            .when(input_is_empty, |d| d.child(
+                                div()
+                                    .w(px(design_visual.border_normal))
+                                    .h(px(design_spacing.padding_xl))
+                                    .mr(px(design_spacing.padding_xs))
+                                    .when(self.cursor_visible, |d| d.bg(rgb(text_primary)))
+                            ))
+                            .child(input_display)
+                            .when(!input_is_empty, |d| d.child(
+                                div()
+                                    .w(px(design_visual.border_normal))
+                                    .h(px(design_spacing.padding_xl))
+                                    .ml(px(design_visual.border_normal))
+                                    .when(self.cursor_visible, |d| d.bg(rgb(text_primary)))
+                            ))
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(text_dimmed))
+                            .child(format!("{} entries", entries.len()))
+                    ),
+            )
+            // Divider
+            .child(
+                div()
+                    .mx(px(design_spacing.padding_lg))
+                    .h(px(design_visual.border_thin))
+                    .bg(rgba((ui_border << 8) | 0x60))
+            )
+            // Entry list
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .w_full()
+                    .py(px(design_spacing.padding_xs))
+                    .child(list_element)
+            )
+            // Footer
+            .child(
+                div()
+                    .w_full()
+                    .px(px(design_spacing.padding_lg))
+                    .py(px(design_spacing.padding_sm + design_visual.border_normal))
+                    .border_t_1()
+                    .border_color(rgba((ui_border << 8) | 0x60))
+                    .text_xs()
+                    .text_color(rgb(text_muted))
+                    .child("↑↓ navigate • ⏎ paste • Esc back")
+            )
+            .into_any_element()
+    }
+    
+    /// Render app launcher view
+    fn render_app_launcher(
+        &mut self,
+        apps: Vec<app_launcher::AppInfo>,
+        filter: String,
+        selected_index: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        // Use design tokens for GLOBAL theming
+        let tokens = get_tokens(self.current_design);
+        let design_colors = tokens.colors();
+        let design_spacing = tokens.spacing();
+        let design_typography = tokens.typography();
+        let design_visual = tokens.visual();
+        
+        // Use design tokens for global theming
+        let opacity = self.theme.get_opacity();
+        let bg_hex = design_colors.background;
+        let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
+        let box_shadows = self.create_box_shadows();
+        
+        // Filter apps based on current filter
+        let filtered_apps: Vec<_> = if filter.is_empty() {
+            apps.iter().enumerate().collect()
+        } else {
+            let filter_lower = filter.to_lowercase();
+            apps
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| a.name.to_lowercase().contains(&filter_lower))
+                .collect()
+        };
+        let filtered_len = filtered_apps.len();
+        
+        // Key handler for app launcher
+        let handle_key = cx.listener(move |this: &mut Self, event: &gpui::KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+            let key_str = event.keystroke.key.to_lowercase();
+            logging::log("KEY", &format!("AppLauncher key: '{}'", key_str));
+            
+            if let AppView::AppLauncherView { apps, filter, selected_index } = &mut this.current_view {
+                // Apply filter to get current filtered list
+                let filtered_apps: Vec<_> = if filter.is_empty() {
+                    apps.iter().enumerate().collect()
+                } else {
+                    let filter_lower = filter.to_lowercase();
+                    apps
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, a)| a.name.to_lowercase().contains(&filter_lower))
+                        .collect()
+                };
+                let filtered_len = filtered_apps.len();
+                
+                match key_str.as_str() {
+                    "up" | "arrowup" => {
+                        if *selected_index > 0 {
+                            *selected_index -= 1;
+                            cx.notify();
+                        }
+                    }
+                    "down" | "arrowdown" => {
+                        if *selected_index < filtered_len.saturating_sub(1) {
+                            *selected_index += 1;
+                            cx.notify();
+                        }
+                    }
+                    "enter" => {
+                        // Launch selected app and hide window
+                        if let Some((_, app)) = filtered_apps.get(*selected_index) {
+                            logging::log("EXEC", &format!("Launching app: {}", app.name));
+                            if let Err(e) = app_launcher::launch_application(app) {
+                                logging::log("ERROR", &format!("Failed to launch app: {}", e));
+                            } else {
+                                logging::log("EXEC", &format!("Launched: {}", app.name));
+                                // Hide window after launching
+                                WINDOW_VISIBLE.store(false, Ordering::SeqCst);
+                                cx.hide();
+                                NEEDS_RESET.store(true, Ordering::SeqCst);
+                            }
+                        }
+                    }
+                    "escape" => {
+                        logging::log("KEY", "ESC in AppLauncher - returning to script list");
+                        this.reset_to_script_list(cx);
+                    }
+                    "backspace" => {
+                        if !filter.is_empty() {
+                            filter.pop();
+                            *selected_index = 0;
+                            cx.notify();
+                        }
+                    }
+                    _ => {
+                        if let Some(ref key_char) = event.keystroke.key_char {
+                            if let Some(ch) = key_char.chars().next() {
+                                if !ch.is_control() {
+                                    filter.push(ch);
+                                    *selected_index = 0;
+                                    cx.notify();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        
+        let input_display = if filter.is_empty() {
+            SharedString::from("Search applications...")
+        } else {
+            SharedString::from(filter.clone())
+        };
+        let input_is_empty = filter.is_empty();
+        
+        // Pre-compute colors
+        let list_colors = ListItemColors::from_design(&design_colors);
+        let text_primary = design_colors.text_primary;
+        let text_muted = design_colors.text_muted;
+        let text_dimmed = design_colors.text_dimmed;
+        let ui_border = design_colors.border;
+        
+        // Build virtualized list
+        let list_element: AnyElement = if filtered_len == 0 {
+            div()
+                .w_full()
+                .py(px(design_spacing.padding_xl))
+                .text_center()
+                .text_color(rgb(design_colors.text_muted))
+                .font_family(design_typography.font_family)
+                .child(if filter.is_empty() { 
+                    "No applications found" 
+                } else { 
+                    "No apps match your filter" 
+                })
+                .into_any_element()
+        } else {
+            // Clone data for the closure
+            let apps_for_closure: Vec<_> = filtered_apps.iter().map(|(i, a)| (*i, (*a).clone())).collect();
+            let selected = selected_index;
+            
+            uniform_list(
+                "app-launcher",
+                filtered_len,
+                move |visible_range, _window, _cx| {
+                    visible_range.map(|ix| {
+                        if let Some((_, app)) = apps_for_closure.get(ix) {
+                            let is_selected = ix == selected;
+                            
+                            // Format app path for description
+                            let path_str = app.path.to_string_lossy();
+                            let description = if path_str.starts_with("/Applications") {
+                                None // No need to show path for standard apps
+                            } else {
+                                Some(path_str.to_string())
+                            };
+                            
+                            div()
+                                .id(ix)
+                                .child(
+                                    ListItem::new(app.name.clone(), list_colors)
+                                        .description_opt(description)
+                                        .selected(is_selected)
+                                )
+                        } else {
+                            div().id(ix).h(px(LIST_ITEM_HEIGHT))
+                        }
+                    }).collect()
+                },
+            )
+            .h_full()
+            .track_scroll(&self.list_scroll_handle)
+            .into_any_element()
+        };
+        
+        div()
+            .flex()
+            .flex_col()
+            .bg(rgba(bg_with_alpha))
+            .shadow(box_shadows)
+            .w_full()
+            .h_full()
+            .rounded(px(design_visual.radius_lg))
+            .text_color(rgb(text_primary))
+            .font_family(design_typography.font_family)
+            .key_context("app_launcher")
+            .track_focus(&self.focus_handle)
+            .on_key_down(handle_key)
+            // Header with input
+            .child(
+                div()
+                    .w_full()
+                    .px(px(design_spacing.padding_lg))
+                    .py(px(design_spacing.padding_md))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_3()
+                    // Title
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(text_dimmed))
+                            .child("🚀 Apps")
+                    )
+                    // Search input with blinking cursor
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .text_xl()
+                            .text_color(if input_is_empty { rgb(text_muted) } else { rgb(text_primary) })
+                            .when(input_is_empty, |d| d.child(
+                                div()
+                                    .w(px(design_visual.border_normal))
+                                    .h(px(design_spacing.padding_xl))
+                                    .mr(px(design_spacing.padding_xs))
+                                    .when(self.cursor_visible, |d| d.bg(rgb(text_primary)))
+                            ))
+                            .child(input_display)
+                            .when(!input_is_empty, |d| d.child(
+                                div()
+                                    .w(px(design_visual.border_normal))
+                                    .h(px(design_spacing.padding_xl))
+                                    .ml(px(design_visual.border_normal))
+                                    .when(self.cursor_visible, |d| d.bg(rgb(text_primary)))
+                            ))
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(text_dimmed))
+                            .child(format!("{} apps", apps.len()))
+                    ),
+            )
+            // Divider
+            .child(
+                div()
+                    .mx(px(design_spacing.padding_lg))
+                    .h(px(design_visual.border_thin))
+                    .bg(rgba((ui_border << 8) | 0x60))
+            )
+            // App list
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .w_full()
+                    .py(px(design_spacing.padding_xs))
+                    .child(list_element)
+            )
+            // Footer
+            .child(
+                div()
+                    .w_full()
+                    .px(px(design_spacing.padding_lg))
+                    .py(px(design_spacing.padding_sm + design_visual.border_normal))
+                    .border_t_1()
+                    .border_color(rgba((ui_border << 8) | 0x60))
+                    .text_xs()
+                    .text_color(rgb(text_muted))
+                    .child("↑↓ navigate • ⏎ launch • Esc back")
             )
             .into_any_element()
     }
