@@ -35,6 +35,7 @@ mod error;
 mod designs;
 mod term_prompt;
 mod terminal;
+mod components;
 #[cfg(target_os = "macos")]
 mod selected_text;
 
@@ -42,6 +43,7 @@ use list_item::{ListItem, ListItemColors, LIST_ITEM_HEIGHT};
 use utils::strip_html_tags;
 use error::ErrorSeverity;
 use designs::{DesignVariant, render_design_item, get_tokens};
+use components::{Button, ButtonColors, ButtonVariant};
 
 use std::sync::{Arc, Mutex, mpsc};
 use protocol::{Message, Choice};
@@ -298,6 +300,7 @@ fn hotkey_channel() -> &'static (async_channel::Sender<()>, async_channel::Recei
 static HOTKEY_TRIGGER_COUNT: AtomicU64 = AtomicU64::new(0);
 static WINDOW_VISIBLE: AtomicBool = AtomicBool::new(false); // Track window visibility for toggle (starts hidden)
 static NEEDS_RESET: AtomicBool = AtomicBool::new(false); // Track if window needs reset to script list on next show
+static PANEL_CONFIGURED: AtomicBool = AtomicBool::new(false); // Track if floating panel has been configured (one-time setup on first show)
 
 /// Application state - what view are we currently showing
 #[derive(Debug, Clone)]
@@ -329,6 +332,19 @@ enum AppView {
 
 /// Wrapper to hold a script session that can be shared across async boundaries
 type SharedSession = Arc<Mutex<Option<executor::ScriptSession>>>;
+
+/// Tracks which input field currently has focus for cursor display
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FocusedInput {
+    /// Main script list filter input
+    MainFilter,
+    /// Actions dialog search input
+    ActionsSearch,
+    /// Arg prompt input (when running a script)
+    ArgPrompt,
+    /// No input focused (e.g., terminal prompt)
+    None,
+}
 
 /// Messages sent from the prompt poller back to the main app
 #[derive(Debug, Clone)]
@@ -487,6 +503,12 @@ impl HotkeyPoller {
                         cx.activate(true);
                         logging::log("HOTKEY", "App activated (window now visible)");
                         
+                        // Step 3.5: Configure as floating panel on first show only
+                        if !PANEL_CONFIGURED.swap(true, Ordering::SeqCst) {
+                            configure_as_floating_panel();
+                            logging::log("HOTKEY", "Configured window as floating panel (first show)");
+                        }
+                        
                         // Step 4: Activate the specific window and focus it
                         let _ = window_clone.update(cx, |view: &mut ScriptListApp, win: &mut Window, cx: &mut Context<ScriptListApp>| {
                             win.activate_window();
@@ -557,8 +579,10 @@ struct ScriptListApp {
     show_actions_popup: bool,
     // ActionsDialog entity for focus management
     actions_dialog: Option<Entity<ActionsDialog>>,
-    // Cursor blink state
+    // Cursor blink state and focus tracking
     cursor_visible: bool,
+    /// Which input currently has focus (for cursor display)
+    focused_input: FocusedInput,
     // Current script process PID for explicit cleanup (belt-and-suspenders)
     current_script_pid: Option<u32>,
     // P1: Cache for filtered_results() - invalidate on filter_text change only
@@ -605,13 +629,19 @@ impl ScriptListApp {
             config.hotkey.modifiers, config.hotkey.key, config.bun_path));
         logging::log("UI", "Script Kit logo SVG loaded for header rendering");
         
-        // Start cursor blink timer
+        // Start cursor blink timer - updates all inputs that track cursor visibility
         cx.spawn(async move |this, cx| {
             loop {
                 Timer::after(std::time::Duration::from_millis(530)).await;
                 let _ = cx.update(|cx| {
                     this.update(cx, |app, cx| {
                         app.cursor_visible = !app.cursor_visible;
+                        // Also update ActionsDialog cursor if it exists
+                        if let Some(ref dialog) = app.actions_dialog {
+                            dialog.update(cx, |d, _cx| {
+                                d.set_cursor_visible(app.cursor_visible);
+                            });
+                        }
                         cx.notify();
                     })
                 });
@@ -639,6 +669,7 @@ impl ScriptListApp {
             show_actions_popup: false,
             actions_dialog: None,
             cursor_visible: true,
+            focused_input: FocusedInput::MainFilter,
             current_script_pid: None,
             // P1: Initialize filter cache
             cached_filtered_results: Vec::new(),
@@ -950,34 +981,39 @@ impl ScriptListApp {
     fn toggle_actions(&mut self, cx: &mut Context<Self>, window: &mut Window) {
         logging::log("KEY", "Toggling actions popup");
         if self.show_actions_popup {
-            // Close
+            // Close - return focus to main filter
             self.show_actions_popup = false;
             self.actions_dialog = None;
+            self.focused_input = FocusedInput::MainFilter;
             window.focus(&self.focus_handle, cx);
+            logging::log("FOCUS", "Actions closed, focus returned to MainFilter");
         } else {
             // Open - create dialog entity
             self.show_actions_popup = true;
+            self.focused_input = FocusedInput::ActionsSearch;
             let script_info = self.get_focused_script_info();
-            let focus_handle = cx.focus_handle();
             
             let theme_arc = std::sync::Arc::new(self.theme.clone());
-            let dialog = cx.new(|_cx| {
+            let dialog = cx.new(|cx| {
+                let focus_handle = cx.focus_handle();
                 ActionsDialog::with_script(
-                    focus_handle.clone(),
-                    std::sync::Arc::new(|_action_id| {}), // Empty callback - we handle via key events
+                    focus_handle,
+                    std::sync::Arc::new(|_action_id| {}), // Callback handled separately
                     script_info,
                     theme_arc,
                 )
             });
             
+            // Focus the dialog's internal focus handle
+            let dialog_focus_handle = dialog.read(cx).focus_handle.clone();
             self.actions_dialog = Some(dialog.clone());
-            window.focus(&focus_handle, cx);
+            window.focus(&dialog_focus_handle, cx);
+            logging::log("FOCUS", "Actions opened, focus moved to ActionsSearch");
         }
         cx.notify();
     }
     
     /// Handle action selection from the actions dialog
-    #[allow(dead_code)]
     fn handle_action(&mut self, action_id: String, cx: &mut Context<Self>) {
         logging::log("UI", &format!("Action selected: {}", action_id));
         
@@ -1030,12 +1066,11 @@ impl ScriptListApp {
         cx.notify();
     }
     
-    /// Edit a script in $EDITOR
+    /// Edit a script in configured editor (config.editor > $EDITOR > "code")
     #[allow(dead_code)]
     fn edit_script(&mut self, path: &std::path::Path) {
-        logging::log("UI", &format!("Opening script in editor: {}", path.display()));
-        
-        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+        let editor = self.config.get_editor();
+        logging::log("UI", &format!("Opening script in editor '{}': {}", editor, path.display()));
         let path_str = path.to_string_lossy().to_string();
         
         std::thread::spawn(move || {
@@ -2223,18 +2258,63 @@ impl ScriptListApp {
                 }
             }
             
+            // If actions popup is open, route keyboard events to it
+            if this.show_actions_popup {
+                if let Some(ref dialog) = this.actions_dialog {
+                    match key_str.as_str() {
+                        "up" | "arrowup" => {
+                            dialog.update(cx, |d, cx| d.move_up(cx));
+                            return;
+                        }
+                        "down" | "arrowdown" => {
+                            dialog.update(cx, |d, cx| d.move_down(cx));
+                            return;
+                        }
+                        "enter" => {
+                            // Get the selected action and execute it
+                            let action_id = dialog.read(cx).get_selected_action_id();
+                            if let Some(action_id) = action_id {
+                                logging::log("ACTIONS", &format!("Executing action: {}", action_id));
+                                this.show_actions_popup = false;
+                                this.actions_dialog = None;
+                                this.focused_input = FocusedInput::MainFilter;
+                                window.focus(&this.focus_handle, cx);
+                                this.handle_action(action_id, cx);
+                            }
+                            return;
+                        }
+                        "escape" => {
+                            this.show_actions_popup = false;
+                            this.actions_dialog = None;
+                            this.focused_input = FocusedInput::MainFilter;
+                            window.focus(&this.focus_handle, cx);
+                            cx.notify();
+                            return;
+                        }
+                        "backspace" => {
+                            dialog.update(cx, |d, cx| d.handle_backspace(cx));
+                            return;
+                        }
+                        _ => {
+                            // Route character input to the dialog for search
+                            if let Some(ref key_char) = event.keystroke.key_char {
+                                if let Some(ch) = key_char.chars().next() {
+                                    if !ch.is_control() {
+                                        dialog.update(cx, |d, cx| d.handle_char(ch, cx));
+                                    }
+                                }
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+            
             match key_str.as_str() {
                 "up" | "arrowup" => this.move_selection_up(cx),
                 "down" | "arrowdown" => this.move_selection_down(cx),
                 "enter" => this.execute_selected(cx),
                 "escape" => {
-                    // If actions popup is open, close it first
-                    if this.show_actions_popup {
-                        this.show_actions_popup = false;
-                        this.actions_dialog = None;
-                        cx.notify();
-                        return;
-                    }
                     if !this.filter_text.is_empty() {
                         this.update_filter(None, false, true, cx);
                     } else {
@@ -2344,21 +2424,54 @@ impl ScriptListApp {
                             .text_color(if filter_is_empty { rgb(text_muted) } else { rgb(text_primary) })
                             // When empty: cursor FIRST (at left), then placeholder
                             // When typing: text, then cursor at end
-                            .when(filter_is_empty, |d| d.child(div().w(px(2.)).h(px(24.)).mr(px(4.)).when(self.cursor_visible, |d| d.bg(rgb(text_primary)))))
+                            // ALWAYS render cursor div to prevent layout shift, but only show bg when focused + visible
+                            .when(filter_is_empty, |d| d.child(
+                                div()
+                                    .w(px(2.))
+                                    .h(px(24.))
+                                    .mr(px(4.))
+                                    .when(self.focused_input == FocusedInput::MainFilter && self.cursor_visible, |d| d.bg(rgb(text_primary)))
+                            ))
                             .child(filter_display)
-                            .when(!filter_is_empty, |d| d.child(div().w(px(2.)).h(px(24.)).ml(px(2.)).when(self.cursor_visible, |d| d.bg(rgb(text_primary)))))
+                            .when(!filter_is_empty, |d| d.child(
+                                div()
+                                    .w(px(2.))
+                                    .h(px(24.))
+                                    .ml(px(2.))
+                                    .when(self.focused_input == FocusedInput::MainFilter && self.cursor_visible, |d| d.bg(rgb(text_primary)))
+                            ))
                     )
-                    // Run button - all text in accent color
-                    .child(
-                        div().flex().flex_row().items_center().gap_1().text_sm().text_color(rgb(accent_color))
-                            .child("Run").child("↵")
-                    )
+                    // Run button with click handler
+                    .child({
+                        let button_colors = ButtonColors::from_theme(&self.theme);
+                        let handle = cx.entity().downgrade();
+                        Button::new("Run", button_colors)
+                            .variant(ButtonVariant::Ghost)
+                            .shortcut("↵")
+                            .on_click(Box::new(move |_, _window, cx| {
+                                if let Some(app) = handle.upgrade() {
+                                    app.update(cx, |this, cx| {
+                                        this.execute_selected(cx);
+                                    });
+                                }
+                            }))
+                    })
                     .child(div().text_color(rgb(text_dimmed)).child("|"))
-                    // Actions button - all text in accent color
-                    .child(
-                        div().flex().flex_row().items_center().gap_1().text_sm().text_color(rgb(accent_color))
-                            .child("Actions").child("⌘ K")
-                    )
+                    // Actions button with click handler
+                    .child({
+                        let button_colors = ButtonColors::from_theme(&self.theme);
+                        let handle = cx.entity().downgrade();
+                        Button::new("Actions", button_colors)
+                            .variant(ButtonVariant::Ghost)
+                            .shortcut("⌘ K")
+                            .on_click(Box::new(move |_, window, cx| {
+                                if let Some(app) = handle.upgrade() {
+                                    app.update(cx, |this, cx| {
+                                        this.toggle_actions(cx, window);
+                                    });
+                                }
+                            }))
+                    })
                     .child(div().text_color(rgb(text_dimmed)).child("|"))
                     // Script Kit Logo - actual SVG file loaded from filesystem
                     .child(
@@ -3041,18 +3154,10 @@ fn main() {
             })
             .unwrap();
         
-        // Configure window as floating panel on macOS (do this before hiding)
-        // We need to briefly activate to configure the panel, then hide
-        cx.activate(true);
-        configure_as_floating_panel();
-        
-        // DEV MODE: Start hidden to prevent window from re-opening on hot reload
-        // The window will appear when the user presses the hotkey
-        cx.hide();
-        
-        // IMPORTANT: Window starts hidden, waiting for hotkey to show
-        WINDOW_VISIBLE.store(false, Ordering::SeqCst);
-        logging::log("HOTKEY", "Window starts hidden (use hotkey to show)");
+        // Window starts hidden - no activation, no panel configuration yet
+        // Panel will be configured on first show via hotkey
+        // WINDOW_VISIBLE is already false by default (static initializer)
+        logging::log("HOTKEY", "Window created but not shown (use hotkey to show)");
         
         start_hotkey_event_handler(cx, window);
         

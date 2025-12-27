@@ -176,6 +176,8 @@ pub struct ActionsDialog {
     pub theme: Arc<theme::Theme>,
     /// Design variant for styling (defaults to Default for theme-based styling)
     pub design_variant: DesignVariant,
+    /// Cursor visibility for blinking (controlled externally)
+    pub cursor_visible: bool,
 }
 
 /// Helper function to combine a hex color with an alpha value
@@ -249,7 +251,13 @@ impl ActionsDialog {
             scroll_handle: UniformListScrollHandle::new(),
             theme,
             design_variant,
+            cursor_visible: true,
         }
+    }
+    
+    /// Update cursor visibility (called from parent's blink timer)
+    pub fn set_cursor_visible(&mut self, visible: bool) {
+        self.cursor_visible = visible;
     }
 
     /// Build the complete actions list based on focused script
@@ -302,14 +310,14 @@ impl ActionsDialog {
     }
 
     /// Handle character input
-    fn handle_char(&mut self, ch: char, cx: &mut Context<Self>) {
+    pub fn handle_char(&mut self, ch: char, cx: &mut Context<Self>) {
         self.search_text.push(ch);
         self.refilter();
         cx.notify();
     }
 
     /// Handle backspace
-    fn handle_backspace(&mut self, cx: &mut Context<Self>) {
+    pub fn handle_backspace(&mut self, cx: &mut Context<Self>) {
         if !self.search_text.is_empty() {
             self.search_text.pop();
             self.refilter();
@@ -318,7 +326,7 @@ impl ActionsDialog {
     }
 
     /// Move selection up
-    fn move_up(&mut self, cx: &mut Context<Self>) {
+    pub fn move_up(&mut self, cx: &mut Context<Self>) {
         if self.selected_index > 0 {
             self.selected_index -= 1;
             self.scroll_handle.scroll_to_item(self.selected_index, ScrollStrategy::Nearest);
@@ -328,13 +336,23 @@ impl ActionsDialog {
     }
 
     /// Move selection down
-    fn move_down(&mut self, cx: &mut Context<Self>) {
+    pub fn move_down(&mut self, cx: &mut Context<Self>) {
         if self.selected_index < self.filtered_actions.len().saturating_sub(1) {
             self.selected_index += 1;
             self.scroll_handle.scroll_to_item(self.selected_index, ScrollStrategy::Nearest);
             logging::log_debug("ACTIONS_SCROLL", &format!("Down: selected_index={}", self.selected_index));
             cx.notify();
         }
+    }
+
+    /// Get the currently selected action ID (for external handling)
+    pub fn get_selected_action_id(&self) -> Option<String> {
+        if let Some(&action_idx) = self.filtered_actions.get(self.selected_index) {
+            if let Some(action) = self.actions.get(action_idx) {
+                return Some(action.id.clone());
+            }
+        }
+        None
     }
 
     /// Submit the selected action
@@ -458,31 +476,58 @@ impl Render for ActionsDialog {
         };
 
         // Use helper method for design/theme color extraction
-        let (search_box_bg, border_color, muted_text, dimmed_text, secondary_text) = 
+        let (search_box_bg, border_color, _muted_text, dimmed_text, _secondary_text) = 
             self.get_search_colors(&colors);
+        
+        // Get primary text color for cursor (matches main list styling)
+        let primary_text = if self.design_variant == DesignVariant::Default {
+            rgb(self.theme.colors.text.primary)
+        } else {
+            rgb(colors.text_primary)
+        };
         
         let input_container = div()
             .w_full()
             .px(px(spacing.item_padding_x))
             .py(px(spacing.item_padding_y))
             .bg(search_box_bg)
-            .border_b_1()
+            .border_t_1()  // Border on top since input is now at bottom
             .border_color(border_color)
             .flex()
             .flex_row()
-            .gap_2()
             .items_center()
-            .child(div().text_color(muted_text).text_sm().child("⚡"))
             .child(
                 div()
                     .flex_1()
+                    .flex()
+                    .flex_row()
+                    .items_center()
                     .text_sm()
                     .text_color(if self.search_text.is_empty() {
                         dimmed_text
                     } else {
-                        secondary_text
+                        primary_text
                     })
-                    .child(search_display),
+                    // ALWAYS render cursor div to prevent layout shift, only show bg when visible
+                    .when(self.search_text.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .w(px(2.))
+                                .h(px(16.))
+                                .mr(px(4.))
+                                .when(self.cursor_visible, |d| d.bg(primary_text))
+                        )
+                    })
+                    .child(search_display)
+                    .when(!self.search_text.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .w(px(2.))
+                                .h(px(16.))
+                                .ml(px(2.))
+                                .when(self.cursor_visible, |d| d.bg(primary_text))
+                        )
+                    }),
             );
 
         // Render action list using uniform_list for virtualized scrolling
@@ -528,23 +573,26 @@ impl Render for ActionsDialog {
                     let item_spacing = item_tokens.spacing();
                     let item_visual = item_tokens.visual();
                     
-                    // Extract colors for list items (with theme fallback for Default)
-                    let (selected_bg, primary_text, tertiary_alpha, dimmed_alpha, text_on_accent) = 
+                    // Extract colors for list items - MATCH main list styling exactly
+                    // Uses accent_selected_subtle with 0x80 alpha (same as ListItem)
+                    let (selected_bg, hover_bg, primary_text, secondary_text, dimmed_text) = 
                         if design_variant == DesignVariant::Default {
                             (
-                                rgba(hex_with_alpha(this.theme.colors.accent.selected, 0xcc)),
+                                // Selected: subtle background with 50% opacity (matches ListItem)
+                                rgba((this.theme.colors.accent.selected_subtle << 8) | 0x80),
+                                // Hover: subtle background with 25% opacity (matches ListItem)
+                                rgba((this.theme.colors.accent.selected_subtle << 8) | 0x40),
                                 rgb(this.theme.colors.text.primary),
-                                rgba(hex_with_alpha(this.theme.colors.text.tertiary, 0x99)),
-                                rgba(hex_with_alpha(this.theme.colors.text.dimmed, 0x99)),
-                                rgb(0xffffff),
+                                rgb(this.theme.colors.text.secondary),
+                                rgb(this.theme.colors.text.dimmed),
                             )
                         } else {
                             (
-                                rgba(hex_with_alpha(item_colors.background_selected, 0xcc)),
+                                rgba((item_colors.background_selected << 8) | 0x80),
+                                rgba((item_colors.background_selected << 8) | 0x40),
                                 rgb(item_colors.text_primary),
-                                rgba(hex_with_alpha(item_colors.text_secondary, 0x99)),
-                                rgba(hex_with_alpha(item_colors.text_dimmed, 0x99)),
-                                rgb(item_colors.text_on_accent),
+                                rgb(item_colors.text_secondary),
+                                rgb(item_colors.text_dimmed),
                             )
                         };
                     
@@ -555,23 +603,15 @@ impl Render for ActionsDialog {
                             if let Some(action) = this.actions.get(action_idx) {
                                 let action: &Action = action; // Explicit type annotation
                                 let is_selected = idx == selected_index;
-                                let bg = if is_selected {
-                                    selected_bg
-                                } else {
-                                    rgba(0x00000000) // Transparent
-                                };
-
+                                
+                                // Match main list styling: bright text when selected, secondary when not
                                 let title_color = if is_selected {
-                                    text_on_accent
-                                } else {
                                     primary_text
+                                } else {
+                                    secondary_text
                                 };
 
-                                let shortcut_color = if is_selected {
-                                    tertiary_alpha
-                                } else {
-                                    dimmed_alpha
-                                };
+                                let shortcut_color = dimmed_text;
 
                                 // Clone strings for SharedString conversion
                                 let title_str: String = action.title.clone();
@@ -582,9 +622,10 @@ impl Render for ActionsDialog {
                                     .w_full()
                                     .h(px(ACTION_ITEM_HEIGHT)) // Fixed height for uniform_list
                                     .px(px(item_spacing.item_padding_x))
-                                    .bg(bg)
-                                    .rounded(px(item_visual.radius_sm))
-                                    .mx(px(item_spacing.margin_sm))
+                                    // Match main list: subtle selection bg, transparent when not selected
+                                    .bg(if is_selected { selected_bg } else { rgba(0x00000000) })
+                                    .hover(|s| s.bg(hover_bg))
+                                    .cursor_pointer()
                                     .flex()
                                     .flex_row()
                                     .items_center()
@@ -595,6 +636,7 @@ impl Render for ActionsDialog {
                                     div()
                                         .text_color(title_color)
                                         .text_sm()
+                                        .font_weight(if is_selected { gpui::FontWeight::MEDIUM } else { gpui::FontWeight::NORMAL })
                                         .child(title_str),
                                 );
 
@@ -625,13 +667,19 @@ impl Render for ActionsDialog {
         let (main_bg, container_border, container_text) = 
             self.get_container_colors(&colors);
         
+        // Calculate dynamic height based on number of items
+        // Each item is ACTION_ITEM_HEIGHT, plus search box height (~44px), plus padding
+        let num_items = self.filtered_actions.len();
+        let items_height = (num_items as f32 * ACTION_ITEM_HEIGHT).min(POPUP_MAX_HEIGHT - 60.0);
+        let total_height = items_height + 60.0; // 60px for search box + padding
+        
         // Main overlay popup container
-        // Fixed width, max height, rounded corners, shadow, semi-transparent bg
+        // Fixed width, dynamic height based on content, rounded corners, shadow, semi-transparent bg
         div()
             .flex()
             .flex_col()
             .w(px(POPUP_WIDTH))
-            .max_h(px(POPUP_MAX_HEIGHT))
+            .h(px(total_height))  // Use calculated height instead of max_h
             .bg(main_bg)
             .rounded(px(visual.radius_lg))
             .shadow(Self::create_popup_shadow())
@@ -642,9 +690,135 @@ impl Render for ActionsDialog {
             .key_context("actions_dialog")
             .track_focus(&self.focus_handle)
             .on_key_down(handle_key)
-            .child(input_container)
             .child(actions_container)
+            .child(input_container)
     }
+}
+
+// ============================================================================
+// Script Creation Utilities
+// ============================================================================
+
+/// Validates a script name - only alphanumeric and hyphens allowed
+/// 
+/// # Rules
+/// - Cannot be empty
+/// - Only letters, numbers, and hyphens allowed
+/// - Cannot start or end with a hyphen
+/// 
+/// # Examples
+/// ```
+/// assert!(validate_script_name("hello-world").is_ok());
+/// assert!(validate_script_name("myScript").is_ok());
+/// assert!(validate_script_name("").is_err());
+/// assert!(validate_script_name("-hello").is_err());
+/// ```
+pub fn validate_script_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Script name cannot be empty".to_string());
+    }
+    if !name.chars().all(|c| c.is_alphanumeric() || c == '-') {
+        return Err("Script name can only contain letters, numbers, and hyphens".to_string());
+    }
+    if name.starts_with('-') || name.ends_with('-') {
+        return Err("Script name cannot start or end with a hyphen".to_string());
+    }
+    Ok(())
+}
+
+/// Generates a script template with the given name
+/// 
+/// Converts kebab-case names to Title Case for the display name.
+/// Creates a basic TypeScript script with Name and Description metadata.
+/// 
+/// # Example
+/// ```
+/// let template = generate_script_template("hello-world");
+/// // Returns:
+/// // // Name: Hello World
+/// // // Description: 
+/// // 
+/// // console.log("Hello from hello-world!")
+/// ```
+pub fn generate_script_template(name: &str) -> String {
+    // Convert kebab-case to Title Case for display
+    let display_name = name
+        .split('-')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    
+    format!(
+        r#"// Name: {}
+// Description: 
+
+console.log("Hello from {}!")
+"#,
+        display_name, name
+    )
+}
+
+/// Creates a new script file at ~/.kenv/scripts/{name}.ts
+/// 
+/// # Arguments
+/// * `name` - The script name (will be validated)
+/// 
+/// # Returns
+/// * `Ok(PathBuf)` - Path to the created script file
+/// * `Err(String)` - Error message if creation failed
+/// 
+/// # Errors
+/// - Invalid script name (see `validate_script_name`)
+/// - Script already exists
+/// - Failed to create directory or write file
+pub fn create_script_file(name: &str) -> Result<std::path::PathBuf, String> {
+    use std::path::PathBuf;
+    use std::fs;
+    
+    validate_script_name(name)?;
+    
+    let scripts_dir = PathBuf::from(shellexpand::tilde("~/.kenv/scripts").as_ref());
+    
+    // Ensure directory exists
+    if !scripts_dir.exists() {
+        fs::create_dir_all(&scripts_dir)
+            .map_err(|e| format!("Failed to create scripts directory: {}", e))?;
+    }
+    
+    let file_path = scripts_dir.join(format!("{}.ts", name));
+    
+    // Check if file already exists
+    if file_path.exists() {
+        return Err(format!("Script '{}' already exists", name));
+    }
+    
+    // Write template
+    let template = generate_script_template(name);
+    fs::write(&file_path, template)
+        .map_err(|e| format!("Failed to write script file: {}", e))?;
+    
+    logging::log("SCRIPT_CREATE", &format!("Created new script: {}", file_path.display()));
+    
+    Ok(file_path)
+}
+
+/// Returns the path where a script would be created (without creating it)
+/// Useful for checking if a script already exists or for UI display
+pub fn get_script_path(name: &str) -> std::path::PathBuf {
+    use std::path::PathBuf;
+    let scripts_dir = PathBuf::from(shellexpand::tilde("~/.kenv/scripts").as_ref());
+    scripts_dir.join(format!("{}.ts", name))
+}
+
+/// Checks if a script with the given name already exists
+pub fn script_exists(name: &str) -> bool {
+    get_script_path(name).exists()
 }
 
 #[cfg(test)]
@@ -733,5 +907,113 @@ mod tests {
         
         // Log for visibility
         println!("Total actions: {}, Max visible: {}", total_actions, max_visible);
+    }
+
+    // ========================================================================
+    // Script Creation Utility Tests
+    // ========================================================================
+
+    #[test]
+    fn test_validate_script_name_valid() {
+        assert!(validate_script_name("hello-world").is_ok());
+        assert!(validate_script_name("myScript").is_ok());
+        assert!(validate_script_name("test123").is_ok());
+        assert!(validate_script_name("a").is_ok());
+        assert!(validate_script_name("ABC").is_ok());
+        assert!(validate_script_name("my-cool-script").is_ok());
+    }
+
+    #[test]
+    fn test_validate_script_name_empty() {
+        let result = validate_script_name("");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Script name cannot be empty");
+    }
+
+    #[test]
+    fn test_validate_script_name_invalid_chars() {
+        // Spaces not allowed
+        let result = validate_script_name("hello world");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("only contain letters"));
+
+        // Underscores not allowed
+        let result = validate_script_name("hello_world");
+        assert!(result.is_err());
+
+        // Special characters not allowed
+        assert!(validate_script_name("hello!").is_err());
+        assert!(validate_script_name("hello@script").is_err());
+        assert!(validate_script_name("hello.ts").is_err());
+        assert!(validate_script_name("path/to/script").is_err());
+    }
+
+    #[test]
+    fn test_validate_script_name_hyphen_position() {
+        // Leading hyphen not allowed
+        let result = validate_script_name("-hello");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("cannot start or end"));
+
+        // Trailing hyphen not allowed
+        let result = validate_script_name("hello-");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("cannot start or end"));
+
+        // Just a hyphen not allowed
+        assert!(validate_script_name("-").is_err());
+    }
+
+    #[test]
+    fn test_generate_script_template_simple() {
+        let template = generate_script_template("hello");
+        assert!(template.contains("// Name: Hello"));
+        assert!(template.contains("// Description:"));
+        assert!(template.contains("Hello from hello!"));
+    }
+
+    #[test]
+    fn test_generate_script_template_kebab_case() {
+        let template = generate_script_template("hello-world");
+        assert!(template.contains("// Name: Hello World"));
+        assert!(template.contains("Hello from hello-world!"));
+    }
+
+    #[test]
+    fn test_generate_script_template_multi_word() {
+        let template = generate_script_template("my-cool-script");
+        assert!(template.contains("// Name: My Cool Script"));
+        assert!(template.contains("Hello from my-cool-script!"));
+    }
+
+    #[test]
+    fn test_generate_script_template_structure() {
+        let template = generate_script_template("test");
+        
+        // Should have proper structure
+        assert!(template.starts_with("// Name:"));
+        assert!(template.contains("// Description:"));
+        assert!(template.contains("console.log"));
+        
+        // Template should be valid TypeScript (basic check)
+        assert!(template.contains("\"Hello from test!\""));
+    }
+
+    #[test]
+    fn test_get_script_path() {
+        let path = get_script_path("hello-world");
+        
+        // Should end with the correct filename
+        assert!(path.to_string_lossy().ends_with("hello-world.ts"));
+        
+        // Should be in ~/.kenv/scripts/
+        assert!(path.to_string_lossy().contains(".kenv/scripts"));
+    }
+
+    #[test]
+    fn test_get_script_path_various_names() {
+        assert!(get_script_path("a").to_string_lossy().ends_with("a.ts"));
+        assert!(get_script_path("my-script").to_string_lossy().ends_with("my-script.ts"));
+        assert!(get_script_path("Test123").to_string_lossy().ends_with("Test123.ts"));
     }
 }
