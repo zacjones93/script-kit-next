@@ -124,27 +124,18 @@ pub struct TextColors {
 /// Accent and highlight colors
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccentColors {
-    /// Selected item highlight (0x007acc - blue)
+    /// Primary accent color (0xfbbf24 - yellow/gold for Script Kit)
+    /// Used for: selected items, button text, logo, highlights
     pub selected: HexColor,
     /// Subtle selection for list items - barely visible highlight (0x2a2a2a - dark gray)
     /// Used for polished, Raycast-like selection backgrounds
     #[serde(default = "default_selected_subtle")]
     pub selected_subtle: HexColor,
-    /// Button text color for action buttons like Run, Actions, Edit, New (0x5eead4 - teal/cyan)
-    /// Used for interactive button text that should stand out from regular text
-    #[serde(default = "default_button_text")]
-    pub button_text: HexColor,
 }
 
 /// Default subtle selection color (dark gray, barely visible)
 fn default_selected_subtle() -> HexColor {
     0x2a2a2a
-}
-
-/// Default button text color (teal/cyan - matches common accent colors)
-/// 0x5eead4 is a pleasant teal that works well on dark backgrounds
-fn default_button_text() -> HexColor {
-    0x5eead4
 }
 
 /// Border and UI element colors
@@ -281,9 +272,8 @@ impl ColorScheme {
                 dimmed: 0x666666,
             },
             accent: AccentColors {
-                selected: 0xfbbf24,    // Script Kit primary: #fbbf24 (yellow/gold) - for text highlights
+                selected: 0xfbbf24,    // Script Kit primary: #fbbf24 (yellow/gold)
                 selected_subtle: 0x2a2a2a, // Subtle dark gray for list selection backgrounds
-                button_text: 0x5eead4, // Teal/cyan for button text (Run, Actions, Edit, New)
             },
             ui: UIColors {
                 border: 0x464647,
@@ -314,7 +304,6 @@ impl ColorScheme {
             accent: AccentColors {
                 selected: 0x0078d4,
                 selected_subtle: 0xe8e8e8, // Subtle light gray for list selections
-                button_text: 0x0d9488, // Darker teal for light mode button text
             },
             ui: UIColors {
                 border: 0xd0d0d0,
@@ -361,7 +350,6 @@ impl ColorScheme {
             accent: AccentColors {
                 selected: darken_hex(self.accent.selected),
                 selected_subtle: darken_hex(self.accent.selected_subtle),
-                button_text: darken_hex(self.accent.button_text),
             },
             ui: UIColors {
                 border: darken_hex(self.ui.border),
@@ -799,7 +787,6 @@ fn log_theme_config(theme: &Theme) {
     debug!(
         selected = format!("#{:06x}", theme.colors.accent.selected),
         selected_subtle = format!("#{:06x}", theme.colors.accent.selected_subtle),
-        button_text = format!("#{:06x}", theme.colors.accent.button_text),
         "Theme accent colors"
     );
     debug!(

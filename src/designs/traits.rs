@@ -95,8 +95,8 @@ impl Default for DesignColors {
             text_dimmed: 0x666666,
             text_on_accent: 0x000000,
 
-            accent: 0xfbbf24,
-            accent_secondary: 0x5eead4,
+            accent: 0xfbbf24,           // Script Kit yellow/gold
+            accent_secondary: 0xfbbf24,  // Same as primary for consistency
             success: 0x00ff00,
             warning: 0xf59e0b,
             error: 0xef4444,
@@ -433,8 +433,8 @@ impl DesignTokens for MinimalDesignTokens {
             text_dimmed: 0x666666,
             text_on_accent: 0x000000,
 
-            accent: 0xfbbf24, // Gold accent for selected text
-            accent_secondary: 0x5eead4,
+            accent: 0xfbbf24,           // Gold accent for selected text
+            accent_secondary: 0xfbbf24,  // Same as primary for consistency
             success: 0x00ff00,
             warning: 0xf59e0b,
             error: 0xef4444,

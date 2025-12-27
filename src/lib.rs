@@ -5,6 +5,7 @@
 //! This library provides the core functionality for executing scripts
 //! with bidirectional JSONL communication.
 
+pub mod components;
 pub mod config;
 pub mod designs;
 pub mod error;
