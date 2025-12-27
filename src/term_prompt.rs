@@ -23,8 +23,10 @@ const FONT_SIZE: f32 = 14.0;
 const LINE_HEIGHT_MULTIPLIER: f32 = 1.3;
 
 /// Terminal cell dimensions
-/// Cell width is approximately 0.6 × font_size for monospace fonts like Menlo
-const CELL_WIDTH: f32 = FONT_SIZE * 0.6;  // ~8.4px for 14pt
+/// Cell width for Menlo 14pt is 8.4287px (measured). We use a slightly larger value
+/// to be conservative and prevent the last character from wrapping to the next line.
+/// Using 8.5px ensures we never tell the PTY we have more columns than can render.
+const CELL_WIDTH: f32 = 8.5;  // Conservative value for Menlo 14pt (actual: 8.4287px)
 /// Cell height = font_size × line_height_multiplier
 const CELL_HEIGHT: f32 = FONT_SIZE * LINE_HEIGHT_MULTIPLIER;  // 18.2px for 14pt
 
@@ -123,6 +125,9 @@ impl TermPrompt {
         let available_height = f32::from(height) - (TERMINAL_PADDING * 2.0);
         
         // Calculate columns and rows
+        // Use floor() for cols to ensure we never tell the PTY we have more columns
+        // than can actually be rendered. Combined with a conservative CELL_WIDTH (8.5px
+        // vs actual 8.4287px), this prevents the last character from wrapping.
         let cols = (available_width / CELL_WIDTH).floor() as u16;
         let rows = (available_height / CELL_HEIGHT).floor() as u16;
         
@@ -344,21 +349,25 @@ impl TermPrompt {
                     rgb(fg_u32)
                 };
                 
-                let has_custom_bg = is_cursor_start || (bg_u32 != 0x000000 && bg_u32 != colors.background.main);
+                // Determine background color:
+                // - Cursor gets cursor_bg
+                // - Cells with custom background (non-black) get their explicit color
+                // - All other cells get default_bg to prevent content bleed-through
+                let bg_color = if is_cursor_start {
+                    cursor_bg
+                } else if bg_u32 != 0x000000 {
+                    rgb(bg_u32)
+                } else {
+                    default_bg
+                };
                 
                 let mut span = div()
                     .w(px(batch_width))
                     .h(px(CELL_HEIGHT))
                     .flex_shrink_0()
+                    .bg(bg_color) // Always apply background to prevent bleed-through
                     .text_color(if fg_u32 == 0 { default_fg } else { fg_color })
                     .child(SharedString::from(batch_text));
-                
-                // Apply background only if needed
-                if is_cursor_start {
-                    span = span.bg(cursor_bg);
-                } else if has_custom_bg {
-                    span = span.bg(rgb(bg_u32));
-                }
                 
                 // Apply text attributes
                 if attrs.contains(CellAttributes::BOLD) {
@@ -695,5 +704,26 @@ mod tests {
         // Should be roughly 226 cols x 62 rows
         assert!(cols > 200, "Large window should have many cols, got {}", cols);
         assert!(rows > 50, "Large window should have many rows, got {}", rows);
+    }
+    
+    #[test]
+    fn test_calculate_terminal_size_conservative() {
+        use gpui::px;
+        
+        // Test that we use conservative column calculation to prevent wrapping.
+        // CELL_WIDTH is 8.5px (slightly larger than actual 8.4287px Menlo width)
+        // to ensure we never tell PTY we have more columns than can render.
+        
+        // 680px / 8.5 = 80.0 -> exactly 80 cols
+        let (cols, _rows) = TermPrompt::calculate_terminal_size(px(680.0), px(500.0));
+        assert_eq!(cols, 80, "680px width should give 80 cols (680/8.5=80), got {}", cols);
+        
+        // 679px / 8.5 = 79.88 -> floors to 79 cols (conservative)
+        let (cols2, _) = TermPrompt::calculate_terminal_size(px(679.0), px(500.0));
+        assert_eq!(cols2, 79, "679px width should give 79 cols (679/8.5=79.88 floors to 79), got {}", cols2);
+        
+        // 500px / 8.5 = 58.82 -> floors to 58 cols
+        let (cols3, _) = TermPrompt::calculate_terminal_size(px(500.0), px(500.0));
+        assert_eq!(cols3, 58, "500px width should give 58 cols (500/8.5=58.82 floors to 58), got {}", cols3);
     }
 }
