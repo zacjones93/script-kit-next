@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, trace, warn};
 
+use crate::config::Config;
 use crate::terminal::{CellAttributes, TerminalContent, TerminalEvent, TerminalHandle};
 use crate::theme::Theme;
 use crate::prompts::SubmitCallback;
@@ -37,9 +38,6 @@ const REFRESH_INTERVAL_MS: u64 = 33; // ~30fps, reduces CPU load significantly
 const MIN_COLS: u16 = 20;
 const MIN_ROWS: u16 = 5;
 
-/// Padding around terminal content (pixels) - now 0 to fill edge-to-edge
-const TERMINAL_PADDING: f32 = 0.0;
-
 /// Terminal prompt GPUI component
 pub struct TermPrompt {
     pub id: String,
@@ -47,6 +45,7 @@ pub struct TermPrompt {
     pub focus_handle: FocusHandle,
     pub on_submit: SubmitCallback,
     pub theme: Arc<Theme>,
+    pub config: Arc<Config>,
     exited: bool,
     exit_code: Option<i32>,
     /// Whether the refresh timer is active
@@ -66,8 +65,9 @@ impl TermPrompt {
         focus_handle: FocusHandle,
         on_submit: SubmitCallback,
         theme: Arc<Theme>,
+        config: Arc<Config>,
     ) -> anyhow::Result<Self> {
-        Self::with_height(id, command, focus_handle, on_submit, theme, None)
+        Self::with_height(id, command, focus_handle, on_submit, theme, config, None)
     }
     
     /// Create new terminal prompt with explicit height
@@ -81,6 +81,7 @@ impl TermPrompt {
         focus_handle: FocusHandle,
         on_submit: SubmitCallback,
         theme: Arc<Theme>,
+        config: Arc<Config>,
         content_height: Option<Pixels>,
     ) -> anyhow::Result<Self> {
         // Start with a reasonable default size; will be resized dynamically
@@ -104,6 +105,7 @@ impl TermPrompt {
             focus_handle,
             on_submit,
             theme,
+            config,
             exited: false,
             exit_code: None,
             refresh_timer_active: false,
@@ -118,11 +120,11 @@ impl TermPrompt {
         self.content_height = Some(height);
     }
     
-    /// Calculate terminal dimensions from pixel size
-    fn calculate_terminal_size(width: Pixels, height: Pixels) -> (u16, u16) {
+    /// Calculate terminal dimensions from pixel size with padding
+    fn calculate_terminal_size(width: Pixels, height: Pixels, padding_left: f32, padding_right: f32, padding_top: f32) -> (u16, u16) {
         // Subtract padding from available space
-        let available_width = f32::from(width) - (TERMINAL_PADDING * 2.0);
-        let available_height = f32::from(height) - (TERMINAL_PADDING * 2.0);
+        let available_width = f32::from(width) - padding_left - padding_right;
+        let available_height = f32::from(height) - padding_top;
         
         // Calculate columns and rows
         // Use floor() for cols to ensure we never tell the PTY we have more columns
@@ -140,7 +142,8 @@ impl TermPrompt {
     
     /// Resize terminal if needed based on new dimensions
     fn resize_if_needed(&mut self, width: Pixels, height: Pixels) {
-        let (new_cols, new_rows) = Self::calculate_terminal_size(width, height);
+        let padding = self.config.get_padding();
+        let (new_cols, new_rows) = Self::calculate_terminal_size(width, height, padding.left, padding.right, padding.top);
         
         if (new_cols, new_rows) != self.last_size {
             debug!(
@@ -520,6 +523,9 @@ impl Render for TermPrompt {
         // Render terminal content with styled cells
         let colors = &self.theme.colors;
         let terminal_content = self.render_content(&content);
+        
+        // Get padding from config
+        let padding = self.config.get_padding();
 
         // Log slow renders
         let elapsed = start.elapsed().as_millis();
@@ -531,12 +537,15 @@ impl Render for TermPrompt {
 
         // Main container with terminal styling
         // Use explicit height if available, otherwise fall back to size_full
-        // NO padding - terminal content should fill edge-to-edge
+        // Apply padding from config settings
         // Use main background color to match window - no visible seam at edges
         let container = div()
             .flex()
             .flex_col()
             .w_full()
+            .pl(px(padding.left))
+            .pr(px(padding.right))
+            .pt(px(padding.top))
             .bg(rgb(colors.background.main))
             .text_color(rgb(colors.text.primary))
             .overflow_hidden() // Clip any overflow
@@ -674,13 +683,15 @@ mod tests {
     fn test_calculate_terminal_size_basic() {
         use gpui::px;
         
-        // Window of 750x500 pixels
-        let (cols, rows) = TermPrompt::calculate_terminal_size(px(750.0), px(500.0));
+        // Window of 750x500 pixels with default padding (12 left, 12 right, 8 top)
+        // Available width: 750 - 12 - 12 = 726
+        // Available height: 500 - 8 = 492
+        let (cols, rows) = TermPrompt::calculate_terminal_size(px(750.0), px(500.0), 12.0, 12.0, 8.0);
         
-        // Expected: (750 - 16) / 8.4 = 87.38 -> 87 cols
-        // Expected: (500 - 16) / 17 = 28.47 -> 28 rows
-        assert!((80..=95).contains(&cols), "Cols should be around 87, got {}", cols);
-        assert!((25..=35).contains(&rows), "Rows should be around 28, got {}", rows);
+        // Expected: 726 / 8.5 = 85.4 -> 85 cols
+        // Expected: 492 / 18.2 = 27.0 -> 27 rows
+        assert!((80..=90).contains(&cols), "Cols should be around 85, got {}", cols);
+        assert!((25..=30).contains(&rows), "Rows should be around 27, got {}", rows);
     }
     
     #[test]
@@ -688,7 +699,7 @@ mod tests {
         use gpui::px;
         
         // Very small window should return minimum size
-        let (cols, rows) = TermPrompt::calculate_terminal_size(px(50.0), px(50.0));
+        let (cols, rows) = TermPrompt::calculate_terminal_size(px(50.0), px(50.0), 0.0, 0.0, 0.0);
         
         assert_eq!(cols, MIN_COLS, "Should use minimum cols");
         assert_eq!(rows, MIN_ROWS, "Should use minimum rows");
@@ -698,10 +709,10 @@ mod tests {
     fn test_calculate_terminal_size_large() {
         use gpui::px;
         
-        // Large window (1920x1080)
-        let (cols, rows) = TermPrompt::calculate_terminal_size(px(1920.0), px(1080.0));
+        // Large window (1920x1080) with no padding
+        let (cols, rows) = TermPrompt::calculate_terminal_size(px(1920.0), px(1080.0), 0.0, 0.0, 0.0);
         
-        // Should be roughly 226 cols x 62 rows
+        // Should be roughly 225 cols x 59 rows
         assert!(cols > 200, "Large window should have many cols, got {}", cols);
         assert!(rows > 50, "Large window should have many rows, got {}", rows);
     }
@@ -714,16 +725,32 @@ mod tests {
         // CELL_WIDTH is 8.5px (slightly larger than actual 8.4287px Menlo width)
         // to ensure we never tell PTY we have more columns than can render.
         
-        // 680px / 8.5 = 80.0 -> exactly 80 cols
-        let (cols, _rows) = TermPrompt::calculate_terminal_size(px(680.0), px(500.0));
+        // With no padding: 680px / 8.5 = 80.0 -> exactly 80 cols
+        let (cols, _rows) = TermPrompt::calculate_terminal_size(px(680.0), px(500.0), 0.0, 0.0, 0.0);
         assert_eq!(cols, 80, "680px width should give 80 cols (680/8.5=80), got {}", cols);
         
         // 679px / 8.5 = 79.88 -> floors to 79 cols (conservative)
-        let (cols2, _) = TermPrompt::calculate_terminal_size(px(679.0), px(500.0));
+        let (cols2, _) = TermPrompt::calculate_terminal_size(px(679.0), px(500.0), 0.0, 0.0, 0.0);
         assert_eq!(cols2, 79, "679px width should give 79 cols (679/8.5=79.88 floors to 79), got {}", cols2);
         
         // 500px / 8.5 = 58.82 -> floors to 58 cols
-        let (cols3, _) = TermPrompt::calculate_terminal_size(px(500.0), px(500.0));
+        let (cols3, _) = TermPrompt::calculate_terminal_size(px(500.0), px(500.0), 0.0, 0.0, 0.0);
         assert_eq!(cols3, 58, "500px width should give 58 cols (500/8.5=58.82 floors to 58), got {}", cols3);
+    }
+    
+    #[test]
+    fn test_calculate_terminal_size_with_padding() {
+        use gpui::px;
+        
+        // Test that padding is properly subtracted from available space
+        // 500px width with 12px left and 12px right padding = 476px available
+        // 476 / 8.5 = 56.0 -> 56 cols
+        let (cols, _) = TermPrompt::calculate_terminal_size(px(500.0), px(500.0), 12.0, 12.0, 0.0);
+        assert_eq!(cols, 56, "500px with 24px total horizontal padding should give 56 cols, got {}", cols);
+        
+        // 500px height with 8px top padding = 492px available
+        // 492 / 18.2 = 27.0 -> 27 rows
+        let (_, rows) = TermPrompt::calculate_terminal_size(px(500.0), px(500.0), 0.0, 0.0, 8.0);
+        assert_eq!(rows, 27, "500px with 8px top padding should give 27 rows, got {}", rows);
     }
 }

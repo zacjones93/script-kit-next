@@ -174,8 +174,9 @@ fn move_first_window_to(x: f64, y: f64, width: f64, height: f64) {
         // Move the window
         let _: () = msg_send![window, setFrame:new_frame display:true animate:false];
         
-        // Also bring to front and make key
-        let _: () = msg_send![window, makeKeyAndOrderFront:nil];
+        // NOTE: We no longer call makeKeyAndOrderFront here.
+        // Window ordering/activation is handled by GPUI's cx.activate() and win.activate_window()
+        // which is called AFTER ensure_move_to_active_space() sets the collection behavior.
         
         // Verify the move worked
         let after_frame: NSRect = msg_send![window, frame];
@@ -580,6 +581,11 @@ impl HotkeyPoller {
                     
                     let window_clone = window;
                     let _ = cx.update(move |cx: &mut App| {
+                        // Step 0: CRITICAL - Set MoveToActiveSpace BEFORE any activation
+                        // This MUST happen before move_first_window_to_bounds, cx.activate(), 
+                        // or win.activate_window() to prevent macOS from switching spaces
+                        ensure_move_to_active_space();
+                        
                         // Step 1: Calculate new bounds on display with mouse, at eye-line height
                         let window_size = size(px(750.), initial_window_height());
                         let new_bounds = calculate_eye_line_bounds_on_mouse_display(window_size, cx);
@@ -592,9 +598,8 @@ impl HotkeyPoller {
                             f64::from(new_bounds.size.height)
                         ));
                         
-                        // Step 2: Move window FIRST (before activation)
-                        // We use move_first_window_to_bounds which doesn't depend on keyWindow
-                        // This ensures the window is in the right position before it becomes visible
+                        // Step 2: Move window (position only, no activation)
+                        // Note: makeKeyAndOrderFront was removed - ordering happens via GPUI below
                         move_first_window_to_bounds(&new_bounds);
                         logging::log("HOTKEY", "Window repositioned to mouse display");
                         
@@ -867,7 +872,8 @@ impl ScriptListApp {
     }
     
     fn update_config(&mut self, cx: &mut Context<Self>) {
-        logging::log("APP", "Config file reloaded");
+        self.config = config::load_config();
+        logging::log("APP", &format!("Config reloaded: padding={:?}", self.config.get_padding()));
         cx.notify();
     }
     
@@ -1887,6 +1893,7 @@ impl ScriptListApp {
                     self.focus_handle.clone(),
                     submit_callback,
                     std::sync::Arc::new(self.theme.clone()),
+                    std::sync::Arc::new(self.config.clone()),
                     Some(term_height),
                 ) {
                     Ok(term_prompt) => {
@@ -1933,6 +1940,7 @@ impl ScriptListApp {
                     editor_focus_handle.clone(),
                     submit_callback,
                     std::sync::Arc::new(self.theme.clone()),
+                    std::sync::Arc::new(self.config.clone()),
                     Some(editor_height),
                 );
                 
@@ -3730,6 +3738,39 @@ fn start_hotkey_listener(config: config::Config) {
     });
 }
 
+/// Ensure the window has MoveToActiveSpace collection behavior.
+/// MUST be called BEFORE any window activation/ordering.
+/// This makes the window move to the current space rather than forcing a space switch.
+#[cfg(target_os = "macos")]
+fn ensure_move_to_active_space() {
+    unsafe {
+        // Use WindowManager to get the main window (not keyWindow, which may not exist yet)
+        let window = match window_manager::get_main_window() {
+            Some(w) => w,
+            None => {
+                logging::log(
+                    "PANEL",
+                    "WARNING: Main window not registered, cannot set MoveToActiveSpace",
+                );
+                return;
+            }
+        };
+
+        // NSWindowCollectionBehaviorMoveToActiveSpace = (1 << 1) = 2
+        // This makes the window MOVE to the current active space when shown
+        let collection_behavior: u64 = 2;
+        let _: () = msg_send![window, setCollectionBehavior:collection_behavior];
+
+        logging::log(
+            "PANEL",
+            "Set MoveToActiveSpace collection behavior (before activation)",
+        );
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn ensure_move_to_active_space() {}
+
 /// Configure the current window as a floating macOS panel that appears above other apps
 #[cfg(target_os = "macos")]
 fn configure_as_floating_panel() {
@@ -3745,9 +3786,10 @@ fn configure_as_floating_panel() {
             let floating_level: i32 = 3;
             let _: () = msg_send![window, setLevel:floating_level];
 
-            // NSWindowCollectionBehaviorCanJoinAllSpaces = (1 << 0)
-            // This makes the window appear on all spaces/desktops
-            let collection_behavior: u64 = 1;
+            // NSWindowCollectionBehaviorMoveToActiveSpace = (1 << 1)
+            // This makes the window MOVE to the current active space when shown
+            // (instead of forcing user back to the space where window was last visible)
+            let collection_behavior: u64 = 2;
             let _: () = msg_send![window, setCollectionBehavior:collection_behavior];
             
             // CRITICAL: Disable macOS window state restoration
@@ -3761,7 +3803,7 @@ fn configure_as_floating_panel() {
 
             logging::log(
                 "PANEL",
-                "Configured window as floating panel (level=3, restorable=false, no autosave)",
+                "Configured window as floating panel (level=3, MoveToActiveSpace, restorable=false, no autosave)",
             );
         } else {
             logging::log("PANEL", "Warning: No key window found to configure as panel");

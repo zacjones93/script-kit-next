@@ -21,6 +21,7 @@ use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
 
+use crate::config::Config;
 use crate::logging;
 use crate::syntax::{highlight_code_lines, HighlightedLine};
 use crate::theme::Theme;
@@ -125,6 +126,7 @@ pub struct EditorPrompt {
     focus_handle: FocusHandle,
     on_submit: SubmitCallback,
     theme: Arc<Theme>,
+    config: Arc<Config>,
     
     // Layout - explicit height for proper sizing (GPUI entities don't inherit parent flex sizing)
     content_height: Option<gpui::Pixels>,
@@ -143,6 +145,7 @@ struct RenderState {
 
 impl EditorPrompt {
     /// Create a new EditorPrompt
+    #[allow(dead_code)]
     pub fn new(
         id: String,
         content: String,
@@ -150,8 +153,9 @@ impl EditorPrompt {
         focus_handle: FocusHandle,
         on_submit: SubmitCallback,
         theme: Arc<Theme>,
+        config: Arc<Config>,
     ) -> Self {
-        Self::with_height(id, content, language, focus_handle, on_submit, theme, None)
+        Self::with_height(id, content, language, focus_handle, on_submit, theme, config, None)
     }
     
     /// Create a new EditorPrompt with explicit height
@@ -159,6 +163,7 @@ impl EditorPrompt {
     /// This is necessary because GPUI entities don't inherit parent flex sizing.
     /// When rendered as a child of a sized container, h_full() doesn't resolve
     /// to the parent's height. We must pass an explicit height.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_height(
         id: String,
         content: String,
@@ -166,6 +171,7 @@ impl EditorPrompt {
         focus_handle: FocusHandle,
         on_submit: SubmitCallback,
         theme: Arc<Theme>,
+        config: Arc<Config>,
         content_height: Option<gpui::Pixels>,
     ) -> Self {
         logging::log(
@@ -203,6 +209,7 @@ impl EditorPrompt {
             focus_handle,
             on_submit,
             theme,
+            config,
             content_height,
             last_render_state: None,
         }
@@ -1038,6 +1045,9 @@ impl Render for EditorPrompt {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = &self.theme.colors;
         let line_count = self.line_count();
+        
+        // Get padding from config
+        let padding = self.config.get_padding();
 
         // Keyboard handler
         let handle_key = cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
@@ -1049,8 +1059,9 @@ impl Render for EditorPrompt {
         
         // Calculate editor area height: use explicit height if available, otherwise use flex
         let editor_area = if let Some(total_height) = self.content_height {
-            // Explicit height: editor gets total - status bar
-            let editor_height = total_height - gpui::px(STATUS_BAR_HEIGHT);
+            // Explicit height: editor gets total - status bar - padding
+            let padding_vertical = padding.top;
+            let editor_height = total_height - gpui::px(STATUS_BAR_HEIGHT) - gpui::px(padding_vertical);
             
             // Only log when render state changes (avoid log spam every ~500ms)
             let current_state = RenderState {
@@ -1065,6 +1076,9 @@ impl Render for EditorPrompt {
                     total_height = ?total_height,
                     editor_height = ?editor_height,
                     status_bar = STATUS_BAR_HEIGHT,
+                    padding_top = padding.top,
+                    padding_left = padding.left,
+                    padding_right = padding.right,
                     line_count = line_count,
                     "Editor render state changed"
                 );
@@ -1074,6 +1088,9 @@ impl Render for EditorPrompt {
             div()
                 .w_full()
                 .h(editor_height)
+                .pt(px(padding.top))
+                .pl(px(padding.left))
+                .pr(px(padding.right))
                 .overflow_hidden()
                 .child(
                     uniform_list(
@@ -1092,6 +1109,9 @@ impl Render for EditorPrompt {
                 .flex_1()
                 .w_full()
                 .min_h(px(0.))
+                .pt(px(padding.top))
+                .pl(px(padding.left))
+                .pr(px(padding.right))
                 .overflow_hidden()
                 .child(
                     uniform_list(

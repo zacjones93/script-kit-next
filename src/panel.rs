@@ -48,8 +48,8 @@ impl WindowVibrancy {
 ///
 /// This function:
 /// - Sets the window level to NSFloatingWindowLevel (3) so it floats above normal windows
-/// - Sets collection behavior to appear on all spaces/desktops
-/// - Keeps the window visible when switching between applications
+/// - Sets collection behavior to MoveToActiveSpace (2) so the window moves to the user's
+///   current space when activated, rather than appearing on all spaces simultaneously
 ///
 /// Note: Vibrancy/blur effect is configured via WindowBackgroundAppearance::Blurred
 /// in WindowOptions when the window is created (see main.rs).

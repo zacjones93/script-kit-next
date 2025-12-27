@@ -3,6 +3,43 @@ use std::process::Command;
 use std::path::PathBuf;
 use tracing::{info, warn, instrument};
 
+/// Default padding values for content areas
+pub const DEFAULT_PADDING_TOP: f32 = 8.0;
+pub const DEFAULT_PADDING_LEFT: f32 = 12.0;
+pub const DEFAULT_PADDING_RIGHT: f32 = 12.0;
+
+/// Default font sizes
+pub const DEFAULT_EDITOR_FONT_SIZE: f32 = 14.0;
+pub const DEFAULT_TERMINAL_FONT_SIZE: f32 = 14.0;
+
+/// Default UI scale
+pub const DEFAULT_UI_SCALE: f32 = 1.0;
+
+/// Content padding configuration for prompts (terminal, editor, etc.)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentPadding {
+    #[serde(default = "default_padding_top")]
+    pub top: f32,
+    #[serde(default = "default_padding_left")]
+    pub left: f32,
+    #[serde(default = "default_padding_right")]
+    pub right: f32,
+}
+
+fn default_padding_top() -> f32 { DEFAULT_PADDING_TOP }
+fn default_padding_left() -> f32 { DEFAULT_PADDING_LEFT }
+fn default_padding_right() -> f32 { DEFAULT_PADDING_RIGHT }
+
+impl Default for ContentPadding {
+    fn default() -> Self {
+        ContentPadding {
+            top: DEFAULT_PADDING_TOP,
+            left: DEFAULT_PADDING_LEFT,
+            right: DEFAULT_PADDING_RIGHT,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub hotkey: HotkeyConfig,
@@ -10,6 +47,18 @@ pub struct Config {
     pub bun_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub editor: Option<String>,
+    /// Padding for content areas (terminal, editor, etc.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding: Option<ContentPadding>,
+    /// Font size for the editor prompt (in pixels)
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "editorFontSize")]
+    pub editor_font_size: Option<f32>,
+    /// Font size for the terminal prompt (in pixels)
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "terminalFontSize")]
+    pub terminal_font_size: Option<f32>,
+    /// UI scale factor (1.0 = 100%)
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "uiScale")]
+    pub ui_scale: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +76,10 @@ impl Default for Config {
             },
             bun_path: None,  // Will use system PATH if not specified
             editor: None,    // Will use $EDITOR or fallback to "code"
+            padding: None,   // Will use ContentPadding::default() via getter
+            editor_font_size: None,    // Will use DEFAULT_EDITOR_FONT_SIZE via getter
+            terminal_font_size: None,  // Will use DEFAULT_TERMINAL_FONT_SIZE via getter
+            ui_scale: None,  // Will use DEFAULT_UI_SCALE via getter
         }
     }
 }
@@ -40,6 +93,30 @@ impl Config {
             .clone()
             .or_else(|| std::env::var("EDITOR").ok())
             .unwrap_or_else(|| "code".to_string())
+    }
+
+    /// Returns the content padding, or defaults if not configured
+    #[allow(dead_code)]  // Will be used by TermPrompt/EditorPrompt workers
+    pub fn get_padding(&self) -> ContentPadding {
+        self.padding.clone().unwrap_or_default()
+    }
+
+    /// Returns the editor font size, or DEFAULT_EDITOR_FONT_SIZE if not configured
+    #[allow(dead_code)]  // Will be used by EditorPrompt worker
+    pub fn get_editor_font_size(&self) -> f32 {
+        self.editor_font_size.unwrap_or(DEFAULT_EDITOR_FONT_SIZE)
+    }
+
+    /// Returns the terminal font size, or DEFAULT_TERMINAL_FONT_SIZE if not configured
+    #[allow(dead_code)]  // Will be used by TermPrompt worker
+    pub fn get_terminal_font_size(&self) -> f32 {
+        self.terminal_font_size.unwrap_or(DEFAULT_TERMINAL_FONT_SIZE)
+    }
+
+    /// Returns the UI scale factor, or DEFAULT_UI_SCALE if not configured
+    #[allow(dead_code)]  // Will be used for UI scaling
+    pub fn get_ui_scale(&self) -> f32 {
+        self.ui_scale.unwrap_or(DEFAULT_UI_SCALE)
     }
 }
 
@@ -143,6 +220,10 @@ mod tests {
             },
             bun_path: Some("/usr/local/bin/bun".to_string()),
             editor: Some("vim".to_string()),
+            padding: None,
+            editor_font_size: None,
+            terminal_font_size: None,
+            ui_scale: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -174,6 +255,10 @@ mod tests {
             },
             bun_path: Some("/custom/path/bun".to_string()),
             editor: None,
+            padding: None,
+            editor_font_size: None,
+            terminal_font_size: None,
+            ui_scale: None,
         };
         assert_eq!(config.bun_path, Some("/custom/path/bun".to_string()));
     }
@@ -187,6 +272,10 @@ mod tests {
             },
             bun_path: None,
             editor: None,
+            padding: None,
+            editor_font_size: None,
+            terminal_font_size: None,
+            ui_scale: None,
         };
         assert_eq!(config.bun_path, None);
     }
@@ -200,6 +289,10 @@ mod tests {
             },
             bun_path: None,
             editor: None,
+            padding: None,
+            editor_font_size: None,
+            terminal_font_size: None,
+            ui_scale: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -218,6 +311,10 @@ mod tests {
             },
             bun_path: None,
             editor: None,
+            padding: None,
+            editor_font_size: None,
+            terminal_font_size: None,
+            ui_scale: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -303,6 +400,10 @@ mod tests {
             },
             bun_path: None,
             editor: None,
+            padding: None,
+            editor_font_size: None,
+            terminal_font_size: None,
+            ui_scale: None,
         };
 
         assert_eq!(config.hotkey.modifiers.len(), 0);
@@ -322,6 +423,10 @@ mod tests {
                 },
                 bun_path: None,
                 editor: None,
+                padding: None,
+                editor_font_size: None,
+                terminal_font_size: None,
+                ui_scale: None,
             };
 
             let json = serde_json::to_string(&config).unwrap();
@@ -340,6 +445,10 @@ mod tests {
             },
             bun_path: None,
             editor: Some("vim".to_string()),
+            padding: None,
+            editor_font_size: None,
+            terminal_font_size: None,
+            ui_scale: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -358,6 +467,10 @@ mod tests {
             },
             bun_path: None,
             editor: None,
+            padding: None,
+            editor_font_size: None,
+            terminal_font_size: None,
+            ui_scale: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -377,6 +490,10 @@ mod tests {
             },
             bun_path: None,
             editor: Some("nvim".to_string()),
+            padding: None,
+            editor_font_size: None,
+            terminal_font_size: None,
+            ui_scale: None,
         };
 
         // Config editor takes precedence
@@ -398,6 +515,10 @@ mod tests {
             },
             bun_path: None,
             editor: None,
+            padding: None,
+            editor_font_size: None,
+            terminal_font_size: None,
+            ui_scale: None,
         };
 
         // Should fall back to EDITOR env var
@@ -425,6 +546,10 @@ mod tests {
             },
             bun_path: None,
             editor: None,
+            padding: None,
+            editor_font_size: None,
+            terminal_font_size: None,
+            ui_scale: None,
         };
 
         // Should fall back to "code" default
@@ -452,6 +577,10 @@ mod tests {
             },
             bun_path: None,
             editor: Some("vim".to_string()),
+            padding: None,
+            editor_font_size: None,
+            terminal_font_size: None,
+            ui_scale: None,
         };
 
         // Config editor should win
@@ -477,5 +606,259 @@ mod tests {
         let config: Config = serde_json::from_str(json).unwrap();
         assert_eq!(config.editor, Some("subl".to_string()));
         assert_eq!(config.get_editor(), "subl");
+    }
+
+    // ContentPadding tests
+    #[test]
+    fn test_content_padding_default() {
+        let padding = ContentPadding::default();
+        assert_eq!(padding.top, DEFAULT_PADDING_TOP);
+        assert_eq!(padding.left, DEFAULT_PADDING_LEFT);
+        assert_eq!(padding.right, DEFAULT_PADDING_RIGHT);
+    }
+
+    #[test]
+    fn test_content_padding_serialization() {
+        let padding = ContentPadding {
+            top: 10.0,
+            left: 16.0,
+            right: 16.0,
+        };
+        
+        let json = serde_json::to_string(&padding).unwrap();
+        let deserialized: ContentPadding = serde_json::from_str(&json).unwrap();
+        
+        assert_eq!(deserialized.top, 10.0);
+        assert_eq!(deserialized.left, 16.0);
+        assert_eq!(deserialized.right, 16.0);
+    }
+
+    #[test]
+    fn test_content_padding_partial_deserialization() {
+        // If only some fields are present, defaults should fill in
+        let json = r#"{"top": 20.0}"#;
+        let padding: ContentPadding = serde_json::from_str(json).unwrap();
+        
+        assert_eq!(padding.top, 20.0);
+        assert_eq!(padding.left, DEFAULT_PADDING_LEFT);
+        assert_eq!(padding.right, DEFAULT_PADDING_RIGHT);
+    }
+
+    // UI settings tests
+    #[test]
+    fn test_config_default_has_none_ui_settings() {
+        let config = Config::default();
+        assert!(config.padding.is_none());
+        assert!(config.editor_font_size.is_none());
+        assert!(config.terminal_font_size.is_none());
+        assert!(config.ui_scale.is_none());
+    }
+
+    #[test]
+    fn test_config_get_padding_default() {
+        let config = Config::default();
+        let padding = config.get_padding();
+        
+        assert_eq!(padding.top, DEFAULT_PADDING_TOP);
+        assert_eq!(padding.left, DEFAULT_PADDING_LEFT);
+        assert_eq!(padding.right, DEFAULT_PADDING_RIGHT);
+    }
+
+    #[test]
+    fn test_config_get_padding_custom() {
+        let config = Config {
+            hotkey: HotkeyConfig {
+                modifiers: vec!["meta".to_string()],
+                key: "Semicolon".to_string(),
+            },
+            bun_path: None,
+            editor: None,
+            padding: Some(ContentPadding {
+                top: 10.0,
+                left: 20.0,
+                right: 20.0,
+            }),
+            editor_font_size: None,
+            terminal_font_size: None,
+            ui_scale: None,
+        };
+        
+        let padding = config.get_padding();
+        assert_eq!(padding.top, 10.0);
+        assert_eq!(padding.left, 20.0);
+        assert_eq!(padding.right, 20.0);
+    }
+
+    #[test]
+    fn test_config_get_editor_font_size_default() {
+        let config = Config::default();
+        assert_eq!(config.get_editor_font_size(), DEFAULT_EDITOR_FONT_SIZE);
+    }
+
+    #[test]
+    fn test_config_get_editor_font_size_custom() {
+        let config = Config {
+            hotkey: HotkeyConfig {
+                modifiers: vec!["meta".to_string()],
+                key: "Semicolon".to_string(),
+            },
+            bun_path: None,
+            editor: None,
+            padding: None,
+            editor_font_size: Some(16.0),
+            terminal_font_size: None,
+            ui_scale: None,
+        };
+        
+        assert_eq!(config.get_editor_font_size(), 16.0);
+    }
+
+    #[test]
+    fn test_config_get_terminal_font_size_default() {
+        let config = Config::default();
+        assert_eq!(config.get_terminal_font_size(), DEFAULT_TERMINAL_FONT_SIZE);
+    }
+
+    #[test]
+    fn test_config_get_terminal_font_size_custom() {
+        let config = Config {
+            hotkey: HotkeyConfig {
+                modifiers: vec!["meta".to_string()],
+                key: "Semicolon".to_string(),
+            },
+            bun_path: None,
+            editor: None,
+            padding: None,
+            editor_font_size: None,
+            terminal_font_size: Some(12.0),
+            ui_scale: None,
+        };
+        
+        assert_eq!(config.get_terminal_font_size(), 12.0);
+    }
+
+    #[test]
+    fn test_config_get_ui_scale_default() {
+        let config = Config::default();
+        assert_eq!(config.get_ui_scale(), DEFAULT_UI_SCALE);
+    }
+
+    #[test]
+    fn test_config_get_ui_scale_custom() {
+        let config = Config {
+            hotkey: HotkeyConfig {
+                modifiers: vec!["meta".to_string()],
+                key: "Semicolon".to_string(),
+            },
+            bun_path: None,
+            editor: None,
+            padding: None,
+            editor_font_size: None,
+            terminal_font_size: None,
+            ui_scale: Some(1.5),
+        };
+        
+        assert_eq!(config.get_ui_scale(), 1.5);
+    }
+
+    #[test]
+    fn test_config_deserialization_with_ui_settings() {
+        let json = r#"{
+            "hotkey": {
+                "modifiers": ["meta"],
+                "key": "Semicolon"
+            },
+            "padding": {
+                "top": 10,
+                "left": 16,
+                "right": 16
+            },
+            "editorFontSize": 16,
+            "terminalFontSize": 14,
+            "uiScale": 1.2
+        }"#;
+
+        let config: Config = serde_json::from_str(json).unwrap();
+        
+        assert!(config.padding.is_some());
+        let padding = config.get_padding();
+        assert_eq!(padding.top, 10.0);
+        assert_eq!(padding.left, 16.0);
+        assert_eq!(padding.right, 16.0);
+        
+        assert_eq!(config.get_editor_font_size(), 16.0);
+        assert_eq!(config.get_terminal_font_size(), 14.0);
+        assert_eq!(config.get_ui_scale(), 1.2);
+    }
+
+    #[test]
+    fn test_config_deserialization_without_ui_settings() {
+        // Existing configs without UI settings should still work
+        let json = r#"{
+            "hotkey": {
+                "modifiers": ["meta"],
+                "key": "Semicolon"
+            }
+        }"#;
+
+        let config: Config = serde_json::from_str(json).unwrap();
+        
+        // All UI settings should be None
+        assert!(config.padding.is_none());
+        assert!(config.editor_font_size.is_none());
+        assert!(config.terminal_font_size.is_none());
+        assert!(config.ui_scale.is_none());
+        
+        // Getters should return defaults
+        assert_eq!(config.get_padding().top, DEFAULT_PADDING_TOP);
+        assert_eq!(config.get_editor_font_size(), DEFAULT_EDITOR_FONT_SIZE);
+        assert_eq!(config.get_terminal_font_size(), DEFAULT_TERMINAL_FONT_SIZE);
+        assert_eq!(config.get_ui_scale(), DEFAULT_UI_SCALE);
+    }
+
+    #[test]
+    fn test_config_serialization_skips_none_ui_settings() {
+        let config = Config::default();
+        let json = serde_json::to_string(&config).unwrap();
+        
+        // None values should not appear in JSON
+        assert!(!json.contains("padding"));
+        assert!(!json.contains("editorFontSize"));
+        assert!(!json.contains("terminalFontSize"));
+        assert!(!json.contains("uiScale"));
+    }
+
+    #[test]
+    fn test_config_serialization_includes_set_ui_settings() {
+        let config = Config {
+            hotkey: HotkeyConfig {
+                modifiers: vec!["meta".to_string()],
+                key: "Semicolon".to_string(),
+            },
+            bun_path: None,
+            editor: None,
+            padding: Some(ContentPadding::default()),
+            editor_font_size: Some(16.0),
+            terminal_font_size: Some(12.0),
+            ui_scale: Some(1.5),
+        };
+        
+        let json = serde_json::to_string(&config).unwrap();
+        
+        assert!(json.contains("padding"));
+        assert!(json.contains("editorFontSize"));
+        assert!(json.contains("terminalFontSize"));
+        assert!(json.contains("uiScale"));
+    }
+
+    #[test]
+    fn test_config_constants() {
+        // Verify constants match expected defaults from task
+        assert_eq!(DEFAULT_PADDING_TOP, 8.0);
+        assert_eq!(DEFAULT_PADDING_LEFT, 12.0);
+        assert_eq!(DEFAULT_PADDING_RIGHT, 12.0);
+        assert_eq!(DEFAULT_EDITOR_FONT_SIZE, 14.0);
+        assert_eq!(DEFAULT_TERMINAL_FONT_SIZE, 14.0);
+        assert_eq!(DEFAULT_UI_SCALE, 1.0);
     }
 }
