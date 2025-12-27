@@ -43,9 +43,14 @@ mod editor;
 mod window_resize;
 mod window_manager;
 
+// Phase 1 system API modules
+mod clipboard_history;
+mod window_control;
+mod file_search;
+
 use tray::{TrayManager, TrayMenuAction};
 use editor::EditorPrompt;
-use window_resize::{ViewType, height_for_view, resize_first_window_to_height};
+use window_resize::{ViewType, height_for_view, resize_first_window_to_height, initial_window_height, reset_resize_debounce};
 
 use list_item::{ListItem, ListItemColors, LIST_ITEM_HEIGHT};
 use utils::strip_html_tags;
@@ -376,6 +381,8 @@ enum ExternalCommand {
     Show,
     /// Hide the window  
     Hide,
+    /// Set the filter text (for testing)
+    SetFilter { text: String },
 }
 
 /// Start a thread that listens on stdin for external JSONL commands.
@@ -489,7 +496,7 @@ impl HotkeyPoller {
                     let window_clone = window;
                     let _ = cx.update(move |cx: &mut App| {
                         // Step 1: Calculate new bounds on display with mouse, at eye-line height
-                        let window_size = size(px(750.), px(500.0));
+                        let window_size = size(px(750.), initial_window_height());
                         let new_bounds = calculate_eye_line_bounds_on_mouse_display(window_size, cx);
                         
                         logging::log("HOTKEY", &format!(
@@ -524,14 +531,15 @@ impl HotkeyPoller {
                             logging::log("HOTKEY", "Window activated and focused");
                             
                             // Step 5: Check if we need to reset to script list (after script completion)
-                            // IMPORTANT: Use reset_to_script_list_skip_resize() here because we just
-                            // positioned the window with move_first_window_to_bounds(). There's a race
-                            // condition where macOS hasn't finished processing the move before resize
-                            // tries to read the window frame - it would get the OLD position and put
-                            // the window on the wrong display. The window size was set during the move.
+                            // Reset debounce timer to allow immediate resize after window move
+                            reset_resize_debounce();
+                            
                             if NEEDS_RESET.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-                                logging::log("VISIBILITY", "NEEDS_RESET was true - clearing and resetting to script list (skip resize)");
-                                view.reset_to_script_list_skip_resize(cx);
+                                logging::log("VISIBILITY", "NEEDS_RESET was true - clearing and resetting to script list");
+                                view.reset_to_script_list(cx);
+                            } else {
+                                // Even without reset, ensure window is properly sized for current content
+                                view.update_window_size();
                             }
                         });
                         
@@ -1260,8 +1268,253 @@ impl ScriptListApp {
                                         continue;
                                     }
                                     executor::SelectedTextHandleResult::NotHandled => {
-                                        // Fall through to UI message handling
+                                        // Fall through to other message handling
                                     }
+                                }
+                                
+                                // Handle ClipboardHistory directly (no UI needed)
+                                if let Message::ClipboardHistory { request_id, action, entry_id } = &msg {
+                                    logging::log("EXEC", &format!("ClipboardHistory request: {:?}", action));
+                                    
+                                    let response = match action {
+                                        protocol::ClipboardHistoryAction::List => {
+                                            let entries = clipboard_history::get_clipboard_history(100);
+                                            let entry_data: Vec<protocol::ClipboardHistoryEntryData> = entries
+                                                .into_iter()
+                                                .map(|e| protocol::ClipboardHistoryEntryData {
+                                                    entry_id: e.id,
+                                                    content: e.content,
+                                                    content_type: match e.content_type {
+                                                        clipboard_history::ContentType::Text => protocol::ClipboardEntryType::Text,
+                                                        clipboard_history::ContentType::Image => protocol::ClipboardEntryType::Image,
+                                                    },
+                                                    timestamp: chrono::DateTime::from_timestamp(e.timestamp, 0)
+                                                        .map(|dt| dt.to_rfc3339())
+                                                        .unwrap_or_default(),
+                                                    pinned: e.pinned,
+                                                })
+                                                .collect();
+                                            Message::clipboard_history_list_response(request_id.clone(), entry_data)
+                                        }
+                                        protocol::ClipboardHistoryAction::Pin => {
+                                            if let Some(id) = entry_id {
+                                                match clipboard_history::pin_entry(id) {
+                                                    Ok(()) => Message::clipboard_history_success(request_id.clone()),
+                                                    Err(e) => Message::clipboard_history_error(request_id.clone(), e.to_string()),
+                                                }
+                                            } else {
+                                                Message::clipboard_history_error(request_id.clone(), "Missing entry_id".to_string())
+                                            }
+                                        }
+                                        protocol::ClipboardHistoryAction::Unpin => {
+                                            if let Some(id) = entry_id {
+                                                match clipboard_history::unpin_entry(id) {
+                                                    Ok(()) => Message::clipboard_history_success(request_id.clone()),
+                                                    Err(e) => Message::clipboard_history_error(request_id.clone(), e.to_string()),
+                                                }
+                                            } else {
+                                                Message::clipboard_history_error(request_id.clone(), "Missing entry_id".to_string())
+                                            }
+                                        }
+                                        protocol::ClipboardHistoryAction::Remove => {
+                                            if let Some(id) = entry_id {
+                                                match clipboard_history::remove_entry(id) {
+                                                    Ok(()) => Message::clipboard_history_success(request_id.clone()),
+                                                    Err(e) => Message::clipboard_history_error(request_id.clone(), e.to_string()),
+                                                }
+                                            } else {
+                                                Message::clipboard_history_error(request_id.clone(), "Missing entry_id".to_string())
+                                            }
+                                        }
+                                        protocol::ClipboardHistoryAction::Clear => {
+                                            match clipboard_history::clear_history() {
+                                                Ok(()) => Message::clipboard_history_success(request_id.clone()),
+                                                Err(e) => Message::clipboard_history_error(request_id.clone(), e.to_string()),
+                                            }
+                                        }
+                                    };
+                                    
+                                    if let Err(e) = reader_response_tx.send(response) {
+                                        logging::log("EXEC", &format!("Failed to send clipboard history response: {}", e));
+                                    }
+                                    continue;
+                                }
+                                
+                                // Handle WindowList directly (no UI needed)
+                                if let Message::WindowList { request_id } = &msg {
+                                    logging::log("EXEC", &format!("WindowList request: {}", request_id));
+                                    
+                                    let response = match window_control::list_windows() {
+                                        Ok(windows) => {
+                                            let window_infos: Vec<protocol::SystemWindowInfo> = windows
+                                                .into_iter()
+                                                .map(|w| protocol::SystemWindowInfo {
+                                                    window_id: w.id,
+                                                    title: w.title,
+                                                    app_name: w.app,
+                                                    bounds: Some(protocol::TargetWindowBounds {
+                                                        x: w.bounds.x,
+                                                        y: w.bounds.y,
+                                                        width: w.bounds.width,
+                                                        height: w.bounds.height,
+                                                    }),
+                                                    is_minimized: None,
+                                                    is_active: None,
+                                                })
+                                                .collect();
+                                            Message::window_list_result(request_id.clone(), window_infos)
+                                        }
+                                        Err(e) => {
+                                            logging::log("EXEC", &format!("WindowList error: {}", e));
+                                            // Return empty list on error
+                                            Message::window_list_result(request_id.clone(), vec![])
+                                        }
+                                    };
+                                    
+                                    if let Err(e) = reader_response_tx.send(response) {
+                                        logging::log("EXEC", &format!("Failed to send window list response: {}", e));
+                                    }
+                                    continue;
+                                }
+                                
+                                // Handle WindowAction directly (no UI needed)
+                                if let Message::WindowAction { request_id, action, window_id, bounds } = &msg {
+                                    logging::log("EXEC", &format!("WindowAction request: {:?} for window {:?}", action, window_id));
+                                    
+                                    let result = match action {
+                                        protocol::WindowActionType::Focus => {
+                                            if let Some(id) = window_id {
+                                                window_control::focus_window(*id)
+                                            } else {
+                                                Err(anyhow::anyhow!("Missing window_id"))
+                                            }
+                                        }
+                                        protocol::WindowActionType::Close => {
+                                            if let Some(id) = window_id {
+                                                window_control::close_window(*id)
+                                            } else {
+                                                Err(anyhow::anyhow!("Missing window_id"))
+                                            }
+                                        }
+                                        protocol::WindowActionType::Minimize => {
+                                            if let Some(id) = window_id {
+                                                window_control::minimize_window(*id)
+                                            } else {
+                                                Err(anyhow::anyhow!("Missing window_id"))
+                                            }
+                                        }
+                                        protocol::WindowActionType::Maximize => {
+                                            if let Some(id) = window_id {
+                                                window_control::maximize_window(*id)
+                                            } else {
+                                                Err(anyhow::anyhow!("Missing window_id"))
+                                            }
+                                        }
+                                        protocol::WindowActionType::Resize => {
+                                            if let (Some(id), Some(b)) = (window_id, bounds) {
+                                                window_control::resize_window(*id, b.width, b.height)
+                                            } else {
+                                                Err(anyhow::anyhow!("Missing window_id or bounds"))
+                                            }
+                                        }
+                                        protocol::WindowActionType::Move => {
+                                            if let (Some(id), Some(b)) = (window_id, bounds) {
+                                                window_control::move_window(*id, b.x, b.y)
+                                            } else {
+                                                Err(anyhow::anyhow!("Missing window_id or bounds"))
+                                            }
+                                        }
+                                    };
+                                    
+                                    let response = match result {
+                                        Ok(()) => Message::window_action_success(request_id.clone()),
+                                        Err(e) => Message::window_action_error(request_id.clone(), e.to_string()),
+                                    };
+                                    
+                                    if let Err(e) = reader_response_tx.send(response) {
+                                        logging::log("EXEC", &format!("Failed to send window action response: {}", e));
+                                    }
+                                    continue;
+                                }
+                                
+                                // Handle FileSearch directly (no UI needed)
+                                if let Message::FileSearch { request_id, query, only_in } = &msg {
+                                    logging::log("EXEC", &format!("FileSearch request: query='{}', only_in={:?}", query, only_in));
+                                    
+                                    let results = file_search::search_files(query, only_in.as_deref(), file_search::DEFAULT_LIMIT);
+                                    let file_entries: Vec<protocol::FileSearchResultEntry> = results
+                                        .into_iter()
+                                        .map(|f| protocol::FileSearchResultEntry {
+                                            path: f.path,
+                                            name: f.name,
+                                            is_directory: f.file_type == file_search::FileType::Directory,
+                                            size: Some(f.size),
+                                            modified_at: chrono::DateTime::from_timestamp(f.modified as i64, 0)
+                                                .map(|dt| dt.to_rfc3339()),
+                                        })
+                                        .collect();
+                                    
+                                    let response = Message::file_search_result(request_id.clone(), file_entries);
+                                    
+                                    if let Err(e) = reader_response_tx.send(response) {
+                                        logging::log("EXEC", &format!("Failed to send file search response: {}", e));
+                                    }
+                                    continue;
+                                }
+                                
+                                // Handle GetWindowBounds directly (no UI needed)
+                                if let Message::GetWindowBounds { request_id } = &msg {
+                                    logging::log("EXEC", &format!("GetWindowBounds request: {}", request_id));
+                                    
+                                    #[cfg(target_os = "macos")]
+                                    let bounds_json = {
+                                        if let Some(window) = window_manager::get_main_window() {
+                                            unsafe {
+                                                // Get the window frame
+                                                let frame: NSRect = msg_send![window, frame];
+                                                
+                                                // Get the PRIMARY screen's height for coordinate conversion
+                                                // macOS uses bottom-left origin, we convert to top-left
+                                                let screens: id = msg_send![class!(NSScreen), screens];
+                                                let main_screen: id = msg_send![screens, firstObject];
+                                                let main_screen_frame: NSRect = msg_send![main_screen, frame];
+                                                let primary_screen_height = main_screen_frame.size.height;
+                                                
+                                                // Convert from bottom-left origin (macOS) to top-left origin
+                                                let flipped_y = primary_screen_height - frame.origin.y - frame.size.height;
+                                                
+                                                logging::log("EXEC", &format!(
+                                                    "Window bounds: x={:.0}, y={:.0}, width={:.0}, height={:.0}",
+                                                    frame.origin.x, flipped_y, frame.size.width, frame.size.height
+                                                ));
+                                                
+                                                // Create JSON string with bounds
+                                                format!(
+                                                    r#"{{"x":{},"y":{},"width":{},"height":{}}}"#,
+                                                    frame.origin.x as f64,
+                                                    flipped_y as f64,
+                                                    frame.size.width as f64,
+                                                    frame.size.height as f64
+                                                )
+                                            }
+                                        } else {
+                                            logging::log("EXEC", "GetWindowBounds: Main window not registered");
+                                            r#"{"error":"Main window not found"}"#.to_string()
+                                        }
+                                    };
+                                    
+                                    #[cfg(not(target_os = "macos"))]
+                                    let bounds_json = r#"{"error":"Not supported on this platform"}"#.to_string();
+                                    
+                                    let response = Message::Submit { 
+                                        id: request_id.clone(), 
+                                        value: Some(bounds_json) 
+                                    };
+                                    logging::log("EXEC", &format!("Sending window bounds response: {:?}", response));
+                                    if let Err(e) = reader_response_tx.send(response) {
+                                        logging::log("EXEC", &format!("Failed to send window bounds response: {}", e));
+                                    }
+                                    continue;
                                 }
                                 
                                 let prompt_msg = match msg {
@@ -1371,12 +1624,17 @@ impl ScriptListApp {
                         }
                     });
                 
-                match term_prompt::TermPrompt::new(
+                // Get the target height for terminal view
+                let term_height = window_resize::layout::MAX_HEIGHT;
+                
+                // Create terminal with explicit height - GPUI entities don't inherit parent flex sizing
+                match term_prompt::TermPrompt::with_height(
                     id.clone(),
                     command,
                     self.focus_handle.clone(),
                     submit_callback,
                     std::sync::Arc::new(self.theme.clone()),
+                    Some(term_height),
                 ) {
                     Ok(term_prompt) => {
                         let entity = cx.new(|_| term_prompt);
@@ -1411,13 +1669,18 @@ impl ScriptListApp {
                 // and child would be tracking the same handle.
                 let editor_focus_handle = cx.focus_handle();
                 
-                let editor_prompt = EditorPrompt::new(
+                // Get the target height for editor view
+                let editor_height = window_resize::layout::MAX_HEIGHT;
+                
+                // Create editor with explicit height - GPUI entities don't inherit parent flex sizing
+                let editor_prompt = EditorPrompt::with_height(
                     id.clone(),
                     content.unwrap_or_default(),
                     language.unwrap_or_else(|| "typescript".to_string()),
                     editor_focus_handle.clone(),
                     submit_callback,
                     std::sync::Arc::new(self.theme.clone()),
+                    Some(editor_height),
                 );
                 
                 let entity = cx.new(|_| editor_prompt);
@@ -1560,17 +1823,8 @@ impl ScriptListApp {
     }
     
     /// Reset all state and return to the script list view.
-    /// 
-    /// # Arguments
-    /// * `skip_resize` - If true, skip the window resize. This is needed when the window
-    ///   was just positioned via `move_first_window_to_bounds()` because there's a race
-    ///   condition: macOS hasn't finished processing the move before we try to resize.
-    ///   The resize reads the window's current frame, but gets the OLD position (before
-    ///   the move), causing the window to appear on the wrong display.
-    ///   
-    ///   IMPORTANT: Only set `skip_resize=true` when calling immediately after
-    ///   `move_first_window_to_bounds()` in the hotkey/tray show handlers.
-    fn reset_to_script_list_inner(&mut self, cx: &mut Context<Self>, skip_resize: bool) {
+    /// This clears all prompt state and resizes the window appropriately.
+    fn reset_to_script_list(&mut self, cx: &mut Context<Self>) {
         let old_view = match &self.current_view {
             AppView::ScriptList => "ScriptList",
             AppView::ActionsDialog => "ActionsDialog",
@@ -1580,7 +1834,7 @@ impl ScriptListApp {
             AppView::EditorPrompt { .. } => "EditorPrompt",
         };
         
-        logging::log("UI", &format!("Resetting to script list (was: {}, skip_resize: {})", old_view, skip_resize));
+        logging::log("UI", &format!("Resetting to script list (was: {})", old_view));
         
         // Belt-and-suspenders: Force-kill the process group using stored PID
         // This runs BEFORE clearing channels to ensure cleanup even if Drop doesn't fire
@@ -1610,13 +1864,9 @@ impl ScriptListApp {
         self.list_scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
         self.last_scrolled_index = Some(0);
         
-        // Resize window for script list.
-        // SKIP when called right after move_first_window_to_bounds() - there's a race condition
-        // where macOS hasn't updated the window frame yet, causing resize to use the wrong position.
-        if !skip_resize {
-            let count = self.scripts.len() + self.scriptlets.len();
-            resize_first_window_to_height(height_for_view(ViewType::ScriptList, count));
-        }
+        // Resize window for script list content
+        let count = self.scripts.len() + self.scriptlets.len();
+        resize_first_window_to_height(height_for_view(ViewType::ScriptList, count));
         
         // Clear output
         self.last_output = None;
@@ -1632,28 +1882,6 @@ impl ScriptListApp {
         
         logging::log("UI", "State reset complete - view is now ScriptList (filter, selection, scroll cleared)");
         cx.notify();
-    }
-    
-    /// Reset all state and return to the script list view.
-    /// This is the standard method that includes window resizing.
-    /// 
-    /// NOTE: If you're calling this immediately after positioning the window with
-    /// `move_first_window_to_bounds()`, use `reset_to_script_list_skip_resize()` instead
-    /// to avoid a race condition that causes the window to appear on the wrong display.
-    fn reset_to_script_list(&mut self, cx: &mut Context<Self>) {
-        self.reset_to_script_list_inner(cx, false);
-    }
-    
-    /// Reset all state and return to the script list view, WITHOUT resizing.
-    /// 
-    /// Use this variant when:
-    /// - Called immediately after `move_first_window_to_bounds()` (e.g., in hotkey/tray handlers)
-    /// - The window was just positioned and we don't want to race with that positioning
-    /// 
-    /// The window size was already set correctly during the move, so resize is unnecessary
-    /// and would cause a race condition leading to wrong display positioning.
-    fn reset_to_script_list_skip_resize(&mut self, cx: &mut Context<Self>) {
-        self.reset_to_script_list_inner(cx, true);
     }
     
     /// Check if we're currently in a prompt view (script is running)
@@ -1954,24 +2182,7 @@ impl ScriptListApp {
                                 .child(format!("{}.{}", script.name, script.extension))
                         );
                         
-                        // Type badge
-                        panel = panel.child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .gap_2()
-                                .pb(px(12.))
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .px(px(6.))
-                                        .py(px(2.))
-                                        .rounded(px(4.))
-                                        .bg(rgb(0x4a90e2))
-                                        .text_color(rgb(0xffffff))
-                                        .child("Script")
-                                )
-                        );
+
                         
                         // Description (if present)
                         if let Some(desc) = &script.description {
@@ -2071,34 +2282,7 @@ impl ScriptListApp {
                                 .child(scriptlet.name.clone())
                         );
                         
-                        // Type and tool badges
-                        panel = panel.child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .gap_2()
-                                .pb(px(12.))
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .px(px(6.))
-                                        .py(px(2.))
-                                        .rounded(px(4.))
-                                        .bg(rgb(0x7ed321))
-                                        .text_color(rgb(0xffffff))
-                                        .child("Snippet")
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .px(px(6.))
-                                        .py(px(2.))
-                                        .rounded(px(4.))
-                                        .bg(rgba((ui_border << 8) | 0xff))
-                                        .text_color(rgb(text_secondary))
-                                        .child(scriptlet.tool.clone())
-                                )
-                        );
+
                         
                         // Description (if present)
                         if let Some(desc) = &scriptlet.description {
@@ -2997,13 +3181,18 @@ impl ScriptListApp {
         let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
         let box_shadows = self.create_box_shadows();
         
+        // Use explicit height from layout constants instead of h_full()
+        // DivPrompt uses STANDARD_HEIGHT (500px) to match main window
+        let content_height = window_resize::layout::STANDARD_HEIGHT;
+        
         div()
             .flex()
             .flex_col()
             .bg(rgba(bg_with_alpha))
             .shadow(box_shadows)
             .w_full()
-            .h_full()
+            .h(content_height)
+            .overflow_hidden()
             .rounded(px(design_visual.radius_lg))
             .text_color(rgb(design_colors.text_primary))
             .font_family(design_typography.font_family)
@@ -3015,6 +3204,8 @@ impl ScriptListApp {
                 div()
                     .flex_1()
                     .w_full()
+                    .min_h(px(0.))  // Critical: allows flex children to size properly
+                    .overflow_hidden()
                     .p(px(design_spacing.padding_xl))
                     .text_lg()
                     .child(display_text)
@@ -3046,15 +3237,26 @@ impl ScriptListApp {
         let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
         let box_shadows = self.create_box_shadows();
         
+        // Use explicit height from layout constants instead of h_full()
+        // h_full() doesn't work at the root level because there's no parent to fill
+        let content_height = window_resize::layout::MAX_HEIGHT;
+        
+        // Container with explicit height. We wrap the entity in a sized div because
+        // GPUI entities don't automatically inherit parent flex sizing.
         div()
             .flex()
             .flex_col()
             .bg(rgba(bg_with_alpha))
             .shadow(box_shadows)
             .w_full()
-            .h_full()
+            .h(content_height)
+            .overflow_hidden()
             .rounded(px(design_visual.radius_lg))
-            .child(entity)
+            .child(
+                div()
+                    .size_full()
+                    .child(entity)
+            )
             .into_any_element()
     }
     
@@ -3070,17 +3272,29 @@ impl ScriptListApp {
         let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
         let box_shadows = self.create_box_shadows();
         
+        // Use explicit height from layout constants instead of h_full()
+        // h_full() doesn't work at the root level because there's no parent to fill
+        let content_height = window_resize::layout::MAX_HEIGHT;
+        
         // NOTE: The EditorPrompt entity has its own track_focus and on_key_down in its render method.
         // We do NOT add track_focus here to avoid duplicate focus tracking on the same handle.
+        // 
+        // Container with explicit height. We wrap the entity in a sized div because
+        // GPUI entities don't automatically inherit parent flex sizing.
         div()
             .flex()
             .flex_col()
             .bg(rgba(bg_with_alpha))
             .shadow(box_shadows)
             .w_full()
-            .h_full()
+            .h(content_height)
+            .overflow_hidden()
             .rounded(px(design_visual.radius_lg))
-            .child(entity)
+            .child(
+                div()
+                    .size_full()
+                    .child(entity)
+            )
             .into_any_element()
     }
     
@@ -3309,6 +3523,13 @@ fn start_hotkey_event_handler(cx: &mut App, window: WindowHandle<ScriptListApp>)
 fn main() {
     logging::init();
     
+    // Initialize clipboard history monitoring (background thread)
+    if let Err(e) = clipboard_history::init_clipboard_history() {
+        logging::log("APP", &format!("Failed to initialize clipboard history: {}", e));
+    } else {
+        logging::log("APP", "Clipboard history monitoring initialized");
+    }
+    
     // Load config early so we can use it for hotkey registration
     let loaded_config = config::load_config();
     logging::log("APP", &format!("Loaded config: hotkey={:?}+{}, bun_path={:?}", 
@@ -3347,7 +3568,7 @@ fn main() {
         };
         
         // Calculate window bounds: centered on display with mouse, at eye-line height
-        let window_size = size(px(750.), px(500.0));
+        let window_size = size(px(750.), initial_window_height());
         let bounds = calculate_eye_line_bounds_on_mouse_display(window_size, cx);
         
         let window: WindowHandle<ScriptListApp> = cx.open_window(
@@ -3510,6 +3731,13 @@ fn main() {
                                 WINDOW_VISIBLE.store(false, Ordering::SeqCst);
                                 ctx.hide();
                             }
+                            ExternalCommand::SetFilter { ref text } => {
+                                logging::log("STDIN", &format!("Setting filter to: '{}'", text));
+                                view.filter_text = text.clone();
+                                let _ = view.get_filtered_results_cached(); // Update cache
+                                view.selected_index = 0;
+                                view.update_window_size();
+                            }
                         }
                         ctx.notify();
                     });
@@ -3541,7 +3769,7 @@ fn main() {
                                     WINDOW_VISIBLE.store(true, Ordering::SeqCst);
                                     
                                     // Calculate new bounds on display with mouse
-                                    let window_size = size(px(750.), px(500.0));
+                                    let window_size = size(px(750.), initial_window_height());
                                     let new_bounds = calculate_eye_line_bounds_on_mouse_display(window_size, cx);
                                     
                                     // Move window first
@@ -3561,12 +3789,13 @@ fn main() {
                                         let focus_handle = view.focus_handle(ctx);
                                         win.focus(&focus_handle, ctx);
                                         
-                                        // Reset if needed.
-                                        // IMPORTANT: Use reset_to_script_list_skip_resize() because we just
-                                        // positioned the window with move_first_window_to_bounds(). See the
-                                        // hotkey handler for detailed explanation of the race condition.
+                                        // Reset if needed and ensure proper sizing
+                                        reset_resize_debounce();
+                                        
                                         if NEEDS_RESET.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-                                            view.reset_to_script_list_skip_resize(ctx);
+                                            view.reset_to_script_list(ctx);
+                                        } else {
+                                            view.update_window_size();
                                         }
                                     });
                                 });

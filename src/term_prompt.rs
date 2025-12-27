@@ -44,16 +44,35 @@ pub struct TermPrompt {
     refresh_timer_active: bool,
     /// Last known terminal size (cols, rows)
     last_size: (u16, u16),
+    /// Explicit content height - GPUI entities don't inherit parent flex sizing
+    content_height: Option<Pixels>,
 }
 
 impl TermPrompt {
     /// Create new terminal prompt
+    #[allow(dead_code)]
     pub fn new(
         id: String,
         command: Option<String>,
         focus_handle: FocusHandle,
         on_submit: SubmitCallback,
         theme: Arc<Theme>,
+    ) -> anyhow::Result<Self> {
+        Self::with_height(id, command, focus_handle, on_submit, theme, None)
+    }
+    
+    /// Create new terminal prompt with explicit height
+    /// 
+    /// This is necessary because GPUI entities don't inherit parent flex sizing.
+    /// When rendered as a child of a sized container, h_full() doesn't resolve
+    /// to the parent's height. We must pass an explicit height.
+    pub fn with_height(
+        id: String,
+        command: Option<String>,
+        focus_handle: FocusHandle,
+        on_submit: SubmitCallback,
+        theme: Arc<Theme>,
+        content_height: Option<Pixels>,
     ) -> anyhow::Result<Self> {
         // Start with a reasonable default size; will be resized dynamically
         let initial_cols = 80;
@@ -63,6 +82,12 @@ impl TermPrompt {
             Some(cmd) => TerminalHandle::with_command(&cmd, initial_cols, initial_rows)?,
             None => TerminalHandle::new(initial_cols, initial_rows)?,
         };
+
+        info!(
+            id = %id,
+            content_height = ?content_height,
+            "TermPrompt::with_height created"
+        );
 
         Ok(Self {
             id,
@@ -74,7 +99,14 @@ impl TermPrompt {
             exit_code: None,
             refresh_timer_active: false,
             last_size: (initial_cols, initial_rows),
+            content_height,
         })
+    }
+    
+    /// Set the content height (for dynamic resizing)
+    #[allow(dead_code)]
+    pub fn set_height(&mut self, height: Pixels) {
+        self.content_height = Some(height);
     }
     
     /// Calculate terminal dimensions from pixel size
@@ -235,8 +267,8 @@ impl TermPrompt {
             .flex()
             .flex_col()
             .flex_1()
-            .w_full()
-            .h_full()
+            .size_full()  // Both w_full and h_full
+            .min_h(px(0.)) // Critical for flex children sizing
             .overflow_hidden()
             .bg(default_bg)
             .font_family("Menlo")
@@ -480,18 +512,27 @@ impl Render for TermPrompt {
         }
 
         // Main container with terminal styling
-        div()
+        // Use explicit height if available, otherwise fall back to size_full
+        let container = div()
             .flex()
             .flex_col()
             .w_full()
-            .h_full()
             .bg(rgb(colors.background.log_panel)) // Dark terminal background
             .text_color(rgb(colors.text.primary))
             .p(px(4.0)) // Small padding around terminal
             .key_context("term_prompt")
             .track_focus(&self.focus_handle)
-            .on_key_down(handle_key)
-            .child(terminal_content)
+            .on_key_down(handle_key);
+        
+        // Apply height - use explicit if set, otherwise use h_full (may not work in all contexts)
+        let container = if let Some(h) = self.content_height {
+            debug!(content_height = ?h, "TermPrompt using explicit height");
+            container.h(h)
+        } else {
+            container.h_full().min_h(px(0.))
+        };
+        
+        container.child(terminal_content)
     }
 }
 

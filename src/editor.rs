@@ -125,6 +125,9 @@ pub struct EditorPrompt {
     focus_handle: FocusHandle,
     on_submit: SubmitCallback,
     theme: Arc<Theme>,
+    
+    // Layout - explicit height for proper sizing (GPUI entities don't inherit parent flex sizing)
+    content_height: Option<gpui::Pixels>,
 }
 
 impl EditorPrompt {
@@ -137,11 +140,28 @@ impl EditorPrompt {
         on_submit: SubmitCallback,
         theme: Arc<Theme>,
     ) -> Self {
+        Self::with_height(id, content, language, focus_handle, on_submit, theme, None)
+    }
+    
+    /// Create a new EditorPrompt with explicit height
+    /// 
+    /// This is necessary because GPUI entities don't inherit parent flex sizing.
+    /// When rendered as a child of a sized container, h_full() doesn't resolve
+    /// to the parent's height. We must pass an explicit height.
+    pub fn with_height(
+        id: String,
+        content: String,
+        language: String,
+        focus_handle: FocusHandle,
+        on_submit: SubmitCallback,
+        theme: Arc<Theme>,
+        content_height: Option<gpui::Pixels>,
+    ) -> Self {
         logging::log(
             "EDITOR",
             &format!(
-                "EditorPrompt::new id={}, lang={}, content_len={}",
-                id, language, content.len()
+                "EditorPrompt::new id={}, lang={}, content_len={}, height={:?}",
+                id, language, content.len(), content_height
             ),
         );
 
@@ -172,7 +192,13 @@ impl EditorPrompt {
             focus_handle,
             on_submit,
             theme,
+            content_height,
         }
+    }
+    
+    /// Set the content height (for dynamic resizing)
+    pub fn set_height(&mut self, height: gpui::Pixels) {
+        self.content_height = Some(height);
     }
 
     /// Get the current content as a String
@@ -1006,7 +1032,55 @@ impl Render for EditorPrompt {
             this.handle_key_event(event, cx);
         });
 
-        div()
+        // Status bar height constant
+        const STATUS_BAR_HEIGHT: f32 = 28.0;
+        
+        // Calculate editor area height: use explicit height if available, otherwise use flex
+        let editor_area = if let Some(total_height) = self.content_height {
+            // Explicit height: editor gets total - status bar
+            let editor_height = total_height - gpui::px(STATUS_BAR_HEIGHT);
+            tracing::debug!(
+                total_height = ?total_height,
+                editor_height = ?editor_height,
+                "EditorPrompt using explicit height"
+            );
+            div()
+                .w_full()
+                .h(editor_height)
+                .overflow_hidden()
+                .child(
+                    uniform_list(
+                        "editor-lines",
+                        line_count,
+                        cx.processor(|this, range: Range<usize>, _window, cx| {
+                            this.render_lines(range, cx)
+                        }),
+                    )
+                    .track_scroll(&self.scroll_handle)
+                    .size_full(),
+                )
+        } else {
+            // Fallback: use flex (may not work in all GPUI contexts)
+            div()
+                .flex_1()
+                .w_full()
+                .min_h(px(0.))
+                .overflow_hidden()
+                .child(
+                    uniform_list(
+                        "editor-lines",
+                        line_count,
+                        cx.processor(|this, range: Range<usize>, _window, cx| {
+                            this.render_lines(range, cx)
+                        }),
+                    )
+                    .track_scroll(&self.scroll_handle)
+                    .size_full(),
+                )
+        };
+        
+        // Build the container - use explicit height if available
+        let container = div()
             .id("editor-prompt")
             .key_context("EditorPrompt")
             .track_focus(&self.focus_handle)
@@ -1014,26 +1088,18 @@ impl Render for EditorPrompt {
             .flex()
             .flex_col()
             .w_full()
-            .h_full()
             .bg(rgb(colors.background.main))
-            .font_family("Menlo")
-            .child(
-                // Editor content area with virtualized line rendering
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .child(
-                        uniform_list(
-                            "editor-lines",
-                            line_count,
-                            cx.processor(|this, range: Range<usize>, _window, cx| {
-                                this.render_lines(range, cx)
-                            }),
-                        )
-                        .track_scroll(&self.scroll_handle)
-                        .h_full(),
-                    ),
-            )
+            .font_family("Menlo");
+        
+        // Apply height
+        let container = if let Some(h) = self.content_height {
+            container.h(h)
+        } else {
+            container.size_full().min_h(px(0.))
+        };
+        
+        container
+            .child(editor_area)
             .child(self.render_status_bar())
     }
 }

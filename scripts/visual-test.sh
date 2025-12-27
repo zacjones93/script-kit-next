@@ -1,49 +1,99 @@
 #!/bin/bash
-# Visual Test Helper for Script Kit GPUI
-# Takes a screenshot of the app window for comparison
+# Visual Test Runner for Script Kit GPUI
+# Launches app with test script, captures screenshot, terminates
+# Usage: ./scripts/visual-test.sh <test-script.ts> [wait-seconds]
 
 set -e
 
-SCREENSHOT_DIR="$HOME/dev/script-kit-gpui/screenshots"
-mkdir -p "$SCREENSHOT_DIR"
+SCRIPT_PATH="$1"
+WAIT_SECS="${2:-2}"  # Default 2 seconds to let window render
+SCREENSHOT_DIR="$(dirname "$0")/../.test-screenshots"
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+TEST_NAME=$(basename "$SCRIPT_PATH" .ts 2>/dev/null || echo "unknown")
+SCREENSHOT_FILE="${SCREENSHOT_DIR}/${TEST_NAME}-${TIMESTAMP}.png"
+LOG_FILE="${SCREENSHOT_DIR}/${TEST_NAME}-${TIMESTAMP}.log"
 
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-SCREENSHOT_PATH="$SCREENSHOT_DIR/screenshot_$TIMESTAMP.png"
-
-echo "Taking screenshot of Script Kit window..."
-
-# Use screencapture on macOS to capture the frontmost window
-# -l captures a specific window by ID, -w captures interactive window selection
-# -o removes shadow
-
-# First, try to find the Script Kit window
-WINDOW_ID=$(osascript -e 'tell application "System Events" to get id of first window of (first process whose name contains "script-kit-gpui")' 2>/dev/null || echo "")
-
-if [ -n "$WINDOW_ID" ]; then
-    echo "Found Script Kit window (ID: $WINDOW_ID)"
-    screencapture -l "$WINDOW_ID" -o "$SCREENSHOT_PATH"
-else
-    echo "Script Kit window not found. Using interactive mode..."
-    echo "Click on the Script Kit window to capture it."
-    screencapture -w -o "$SCREENSHOT_PATH"
+if [ -z "$SCRIPT_PATH" ]; then
+    echo "Usage: $0 <test-script.ts> [wait-seconds]"
+    echo ""
+    echo "Examples:"
+    echo "  $0 tests/smoke/test-editor-height.ts"
+    echo "  $0 tests/smoke/test-term-height.ts 3"
+    exit 1
 fi
 
-if [ -f "$SCREENSHOT_PATH" ]; then
-    echo "Screenshot saved to: $SCREENSHOT_PATH"
-    echo ""
-    echo "To compare with reference:"
-    echo "  open $SCREENSHOT_PATH"
-    
-    # If ImageMagick is installed, create a diff
-    if command -v compare &> /dev/null; then
-        REFERENCE="$SCREENSHOT_DIR/reference.png"
-        if [ -f "$REFERENCE" ]; then
-            DIFF_PATH="$SCREENSHOT_DIR/diff_$TIMESTAMP.png"
-            compare "$REFERENCE" "$SCREENSHOT_PATH" "$DIFF_PATH" 2>/dev/null || true
-            echo "  Diff saved to: $DIFF_PATH"
-        fi
-    fi
+# Ensure screenshot directory exists
+mkdir -p "$SCREENSHOT_DIR"
+
+echo "=== Visual Test Runner ===" | tee "$LOG_FILE"
+echo "Script: $SCRIPT_PATH" | tee -a "$LOG_FILE"
+echo "Wait: ${WAIT_SECS}s" | tee -a "$LOG_FILE"
+echo "Screenshot: $SCREENSHOT_FILE" | tee -a "$LOG_FILE"
+echo "" | tee -a "$LOG_FILE"
+
+# Get absolute path
+cd "$(dirname "$0")/.."
+PROJECT_DIR=$(pwd)
+FULL_SCRIPT_PATH="$PROJECT_DIR/$SCRIPT_PATH"
+
+if [ ! -f "$FULL_SCRIPT_PATH" ]; then
+    echo "ERROR: Script not found: $FULL_SCRIPT_PATH" | tee -a "$LOG_FILE"
+    exit 1
+fi
+
+# Build first
+echo "Building..." | tee -a "$LOG_FILE"
+cargo build 2>&1 | grep -v "^warning:" | tail -5 | tee -a "$LOG_FILE"
+
+# Start app in background with the test script
+echo "" | tee -a "$LOG_FILE"
+echo "Launching app with test script..." | tee -a "$LOG_FILE"
+echo "{\"type\": \"run\", \"path\": \"$FULL_SCRIPT_PATH\"}" | ./target/debug/script-kit-gpui 2>&1 >> "$LOG_FILE" &
+APP_PID=$!
+echo "App PID: $APP_PID" | tee -a "$LOG_FILE"
+
+# Wait for window to render
+echo "Waiting ${WAIT_SECS}s for render..." | tee -a "$LOG_FILE"
+sleep "$WAIT_SECS"
+
+# Take screenshot - try window-specific first, fall back to full screen
+echo "Capturing screenshot..." | tee -a "$LOG_FILE"
+
+# Try to capture the specific window by finding script-kit-gpui process
+WINDOW_ID=$(osascript -e 'tell application "System Events" to get id of first window of (first process whose name contains "script-kit-gpui")' 2>/dev/null || echo "")
+
+if [ -n "$WINDOW_ID" ] && [ "$WINDOW_ID" != "" ]; then
+    echo "Found window ID: $WINDOW_ID" | tee -a "$LOG_FILE"
+    screencapture -l"$WINDOW_ID" -o "$SCREENSHOT_FILE" 2>>"$LOG_FILE" || screencapture "$SCREENSHOT_FILE"
 else
-    echo "Failed to capture screenshot"
+    echo "Window ID not found, capturing main display..." | tee -a "$LOG_FILE"
+    screencapture -m "$SCREENSHOT_FILE"
+fi
+
+# Kill the app gracefully
+echo "Terminating app..." | tee -a "$LOG_FILE"
+kill "$APP_PID" 2>/dev/null || true
+
+# Wait a moment for cleanup
+sleep 0.5
+
+# Force kill if still running
+if kill -0 "$APP_PID" 2>/dev/null; then
+    echo "Force killing app..." | tee -a "$LOG_FILE"
+    kill -9 "$APP_PID" 2>/dev/null || true
+fi
+
+echo "" | tee -a "$LOG_FILE"
+echo "=== Test Complete ===" | tee -a "$LOG_FILE"
+
+if [ -f "$SCREENSHOT_FILE" ]; then
+    echo "Screenshot: $SCREENSHOT_FILE" | tee -a "$LOG_FILE"
+    echo "Log: $LOG_FILE" | tee -a "$LOG_FILE"
+    
+    # Output just the filename for programmatic parsing
+    echo ""
+    echo "SCREENSHOT_PATH=$SCREENSHOT_FILE"
+else
+    echo "ERROR: Screenshot capture failed" | tee -a "$LOG_FILE"
     exit 1
 fi
