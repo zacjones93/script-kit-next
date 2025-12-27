@@ -23,12 +23,14 @@ Script KIT GPUI is a complete rewrite of Script Kit into the GPUI framework. The
 **NEVER pass scripts as command line arguments.** The app uses stdin JSON messages:
 
 ```bash
-# CORRECT - Use stdin JSON protocol
-echo '{"type": "run", "path": "'$(pwd)'/tests/smoke/test-editor-height.ts"}' | ./target/debug/script-kit-gpui 2>&1
+# CORRECT - Use stdin JSON protocol with AI compact logs
+echo '{"type": "run", "path": "'$(pwd)'/tests/smoke/test-editor-height.ts"}' | SCRIPT_KIT_AI_LOG=1 ./target/debug/script-kit-gpui 2>&1
 
 # WRONG - Command line args don't work!
 ./target/debug/script-kit-gpui tests/smoke/hello-world.ts  # THIS DOES NOTHING
 ```
+
+**ALWAYS use `SCRIPT_KIT_AI_LOG=1`** when running tests - it produces compact logs that save ~70% tokens.
 
 ### Quick Verification Command
 
@@ -118,14 +120,16 @@ The app accepts JSONL commands via stdin for automated testing. This is the ONLY
 # 1. Build
 cargo build
 
-# 2. Run test via stdin JSON (NOT command line args!)
-echo '{"type": "run", "path": "'$(pwd)'/tests/smoke/test-editor-height.ts"}' | ./target/debug/script-kit-gpui 2>&1
+# 2. Run test via stdin JSON with AI compact logs (NOT command line args!)
+echo '{"type": "run", "path": "'$(pwd)'/tests/smoke/test-editor-height.ts"}' | SCRIPT_KIT_AI_LOG=1 ./target/debug/script-kit-gpui 2>&1
 
 # 3. Check output for expected behavior
 # 4. If broken, fix code and repeat from step 1
 ```
 
 **This loop is NON-NEGOTIABLE.** Do not ask the user to test. Do not skip testing. Run the test yourself, read the logs, fix issues, repeat.
+
+**NOTE:** Always use `SCRIPT_KIT_AI_LOG=1` to get compact logs that are easier to parse and save context tokens.
 
 ### Available stdin Commands
 
@@ -152,11 +156,11 @@ console.error('[SMOKE] result:', result);
 ### Checking Logs
 
 ```bash
-# Stderr shows pretty logs during execution
-# JSONL logs are at ~/.kit/logs/script-kit-gpui.jsonl
+# With SCRIPT_KIT_AI_LOG=1, stderr shows compact logs (SS.mmm|L|C|message)
+# JSONL logs are at ~/.kit/logs/script-kit-gpui.jsonl (full detail)
 
-# Filter for specific behavior:
-echo '{"type": "run", "path": "..."}' | ./target/debug/script-kit-gpui 2>&1 | grep -iE 'RESIZE|editor|height'
+# Filter for specific behavior with compact logs:
+echo '{"type": "run", "path": "..."}' | SCRIPT_KIT_AI_LOG=1 ./target/debug/script-kit-gpui 2>&1 | grep -iE 'RESIZE|editor|height'
 
 # Check structured logs:
 tail -50 ~/.kit/logs/script-kit-gpui.jsonl | grep -i resize
@@ -235,6 +239,7 @@ grep -E 'height|700|resize' .test-screenshots/test-editor-height-*.log
 | Committing without running the test | Run `cargo build && echo '...' \| ./target/debug/...` |
 | "I can't see what the UI looks like" | Use `./scripts/visual-test.sh` to capture and read screenshots |
 | Guessing at layout issues | Capture screenshot, read it, analyze actual vs expected |
+| Running without `SCRIPT_KIT_AI_LOG=1` | ALWAYS use AI log mode to save tokens |
 
 ### Why This Matters
 
