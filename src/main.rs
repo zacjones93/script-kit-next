@@ -3291,39 +3291,106 @@ impl ScriptListApp {
                                     .when(self.focused_input == FocusedInput::MainFilter && self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
                     )
-                    // Run button with click handler
-                    .child({
+                    // CONDITIONAL: When NOT in actions mode, show Run button + Actions button
+                    // When IN actions mode, show actions search input instead
+                    .when(!self.show_actions_popup, |d| {
                         let button_colors = ButtonColors::from_theme(&self.theme);
-                        let handle = cx.entity().downgrade();
-                        Button::new("Run", button_colors)
-                            .variant(ButtonVariant::Ghost)
-                            .shortcut("↵")
-                            .on_click(Box::new(move |_, _window, cx| {
-                                if let Some(app) = handle.upgrade() {
-                                    app.update(cx, |this, cx| {
-                                        this.execute_selected(cx);
-                                    });
-                                }
-                            }))
+                        let handle_run = cx.entity().downgrade();
+                        let handle_actions = cx.entity().downgrade();
+                        d
+                            // Run button with click handler
+                            .child(
+                                Button::new("Run", button_colors.clone())
+                                    .variant(ButtonVariant::Ghost)
+                                    .shortcut("↵")
+                                    .on_click(Box::new(move |_, _window, cx| {
+                                        if let Some(app) = handle_run.upgrade() {
+                                            app.update(cx, |this, cx| {
+                                                this.execute_selected(cx);
+                                            });
+                                        }
+                                    }))
+                            )
+                            .child(div().text_color(rgb(text_dimmed)).child("|"))
+                            // Actions button with click handler
+                            .child(
+                                Button::new("Actions", button_colors)
+                                    .variant(ButtonVariant::Ghost)
+                                    .shortcut("⌘ K")
+                                    .on_click(Box::new(move |_, window, cx| {
+                                        if let Some(app) = handle_actions.upgrade() {
+                                            app.update(cx, |this, cx| {
+                                                this.toggle_actions(cx, window);
+                                            });
+                                        }
+                                    }))
+                            )
+                            .child(div().text_color(rgb(text_dimmed)).child("|"))
                     })
-                    .child(div().text_color(rgb(text_dimmed)).child("|"))
-                    // Actions button with click handler
-                    .child({
-                        let button_colors = ButtonColors::from_theme(&self.theme);
-                        let handle = cx.entity().downgrade();
-                        Button::new("Actions", button_colors)
-                            .variant(ButtonVariant::Ghost)
-                            .shortcut("⌘ K")
-                            .on_click(Box::new(move |_, window, cx| {
-                                if let Some(app) = handle.upgrade() {
-                                    app.update(cx, |this, cx| {
-                                        this.toggle_actions(cx, window);
-                                    });
-                                }
-                            }))
+                    // CONDITIONAL: When IN actions mode, show actions search input
+                    .when(self.show_actions_popup, |d| {
+                        // Get actions search text from the dialog
+                        let search_text = self.actions_dialog.as_ref()
+                            .map(|dialog| dialog.read(cx).search_text.clone())
+                            .unwrap_or_default();
+                        let search_is_empty = search_text.is_empty();
+                        let search_display = if search_is_empty {
+                            SharedString::from("Search actions...")
+                        } else {
+                            SharedString::from(search_text)
+                        };
+                        
+                        d.child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(8.))
+                                // ⌘K indicator
+                                .child(
+                                    div()
+                                        .text_color(rgb(text_dimmed))
+                                        .text_xs()
+                                        .child("⌘K")
+                                )
+                                // Search input display
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .px(px(8.))
+                                        .py(px(4.))
+                                        .rounded(px(6.))
+                                        .bg(rgba((theme.colors.background.search_box << 8) | 0x80))
+                                        .border_1()
+                                        .border_color(rgba((accent_color << 8) | 0x40))
+                                        .text_sm()
+                                        .text_color(if search_is_empty { rgb(text_muted) } else { rgb(text_primary) })
+                                        // Cursor before placeholder when empty
+                                        .when(search_is_empty, |d| d.child(
+                                            div()
+                                                .w(px(2.))
+                                                .h(px(16.))
+                                                .mr(px(4.))
+                                                .rounded(px(1.))
+                                                .when(self.focused_input == FocusedInput::ActionsSearch && self.cursor_visible, |d| d.bg(rgb(accent_color)))
+                                        ))
+                                        .child(search_display)
+                                        // Cursor after text when not empty
+                                        .when(!search_is_empty, |d| d.child(
+                                            div()
+                                                .w(px(2.))
+                                                .h(px(16.))
+                                                .ml(px(2.))
+                                                .rounded(px(1.))
+                                                .when(self.focused_input == FocusedInput::ActionsSearch && self.cursor_visible, |d| d.bg(rgb(accent_color)))
+                                        ))
+                                )
+                                .child(div().text_color(rgb(text_dimmed)).child("|"))
+                        )
                     })
-                    .child(div().text_color(rgb(text_dimmed)).child("|"))
-                    // Script Kit Logo - actual SVG file loaded from filesystem
+                    // Script Kit Logo - ALWAYS visible
                     .child(
                         svg()
                             .external_path(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/logo.svg"))
@@ -3369,12 +3436,20 @@ impl ScriptListApp {
                             .child(list_element)
                     )
                     // Right side: Preview panel (50% width)
+                    // CONDITIONAL: Show actions dialog OR normal preview
                     .child(
                         div()
                             .w_1_2()      // 50% width
                             .h_full()     // Take full height
                             .min_h(px(0.))  // Allow shrinking
-                            .child(self.render_preview_panel(cx))
+                            .overflow_hidden()
+                            // When NOT in actions mode, show normal preview
+                            .when(!self.show_actions_popup, |d| d.child(self.render_preview_panel(cx)))
+                            // When IN actions mode, show actions dialog inline
+                            .when_some(
+                                if self.show_actions_popup { self.actions_dialog.clone() } else { None },
+                                |d, dialog| d.child(dialog)
+                            )
                     ),
             );
         
@@ -3382,27 +3457,12 @@ impl ScriptListApp {
             main_div = main_div.child(panel);
         }
         
-        // Wrap in relative container for overlay positioning
-        let show_popup = self.show_actions_popup;
-        
+        // Wrap in relative container for toast overlay positioning
         let mut container = div()
             .relative()
             .w_full()
             .h_full()
             .child(main_div);
-        
-        // Add actions popup overlay when visible - render the ActionsDialog entity
-        if show_popup {
-            if let Some(ref dialog) = self.actions_dialog {
-                container = container.child(
-                    div()
-                        .absolute()
-                        .right(px(design_spacing.padding_lg))
-                        .bottom(px(design_spacing.padding_lg))  // Near bottom edge
-                        .child(dialog.clone())
-                );
-            }
-        }
         
         // Add toast notifications overlay (top-right)
         if let Some(toasts) = self.render_toasts(cx) {
