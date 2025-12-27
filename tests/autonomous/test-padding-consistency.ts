@@ -99,7 +99,8 @@ await runTest('term-padding-applied', async () => {
   
   // Launch term prompt with a simple command
   // Note: term() returns when the user submits, so we use a short-lived command
-  const termPromise = term('echo "Testing padding"');
+  // We don't await the promise since we'll use submit() to force exit
+  void term('echo "Testing padding"');
   
   // Wait for window to render and resize to settle
   await wait(RESIZE_SETTLE_TIME * 2);
@@ -142,7 +143,8 @@ await runTest('editor-padding-applied', async () => {
   debug('Launching editor() prompt...');
   
   // Launch editor prompt with test content
-  const editorPromise = editor('// Padding consistency test\nconsole.log("hello");', 'javascript');
+  // We don't await the promise since we'll use submit() to force exit
+  void editor('// Padding consistency test\nconsole.log("hello");', 'javascript');
   
   // Wait for window to render and resize to settle
   await wait(RESIZE_SETTLE_TIME * 2);
@@ -184,8 +186,8 @@ await runTest('editor-padding-applied', async () => {
 await runTest('term-to-editor-padding-consistency', async () => {
   debug('Testing term -> editor transition...');
   
-  // Launch term first
-  const termPromise = term('echo "First prompt"');
+  // Launch term first (don't await, use submit() to exit)
+  void term('echo "First prompt"');
   await wait(RESIZE_SETTLE_TIME * 2);
   
   const termBounds = await getWindowBounds();
@@ -195,8 +197,8 @@ await runTest('term-to-editor-padding-consistency', async () => {
   submit('');
   await wait(50);
   
-  // Launch editor
-  const editorPromise = editor('// Second prompt', 'text');
+  // Launch editor (don't await, use submit() to exit)
+  void editor('// Second prompt', 'text');
   await wait(RESIZE_SETTLE_TIME * 2);
   
   const editorBounds = await getWindowBounds();
@@ -242,8 +244,8 @@ await runTest('term-to-editor-padding-consistency', async () => {
 await runTest('editor-to-term-padding-consistency', async () => {
   debug('Testing editor -> term transition...');
   
-  // Launch editor first
-  const editorPromise = editor('// First prompt', 'text');
+  // Launch editor first (don't await, use submit() to exit)
+  void editor('// First prompt', 'text');
   await wait(RESIZE_SETTLE_TIME * 2);
   
   const editorBounds = await getWindowBounds();
@@ -253,8 +255,8 @@ await runTest('editor-to-term-padding-consistency', async () => {
   submit('');
   await wait(50);
   
-  // Launch term
-  const termPromise = term('echo "Second prompt"');
+  // Launch term (don't await, use submit() to exit)
+  void term('echo "Second prompt"');
   await wait(RESIZE_SETTLE_TIME * 2);
   
   const termBounds = await getWindowBounds();
@@ -307,8 +309,8 @@ await runTest('rapid-transitions-padding-stability', async () => {
   for (let i = 0; i < iterations; i++) {
     debug(`Iteration ${i + 1}/${iterations}`);
     
-    // Term prompt
-    const termPromise = term(`echo "Iteration ${i + 1} term"`);
+    // Term prompt (don't await, use submit() to exit)
+    void term(`echo "Iteration ${i + 1} term"`);
     await wait(RESIZE_SETTLE_TIME);
     
     const termBounds = await getWindowBounds();
@@ -324,8 +326,8 @@ await runTest('rapid-transitions-padding-stability', async () => {
     submit('');
     await wait(50);
     
-    // Editor prompt
-    const editorPromise = editor(`// Iteration ${i + 1}`, 'text');
+    // Editor prompt (don't await, use submit() to exit)
+    void editor(`// Iteration ${i + 1}`, 'text');
     await wait(RESIZE_SETTLE_TIME);
     
     const editorBounds = await getWindowBounds();

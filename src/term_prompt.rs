@@ -537,7 +537,7 @@ impl Render for TermPrompt {
 
         // Main container with terminal styling
         // Use explicit height if available, otherwise fall back to size_full
-        // Apply padding from config settings
+        // Apply padding from config settings (top/left/right/bottom)
         // Use main background color to match window - no visible seam at edges
         let container = div()
             .flex()
@@ -546,6 +546,7 @@ impl Render for TermPrompt {
             .pl(px(padding.left))
             .pr(px(padding.right))
             .pt(px(padding.top))
+            .pb(px(padding.top))  // Use same as top for consistent spacing
             .bg(rgb(colors.background.main))
             .text_color(rgb(colors.text.primary))
             .overflow_hidden() // Clip any overflow

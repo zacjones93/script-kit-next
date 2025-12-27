@@ -1059,9 +1059,9 @@ impl Render for EditorPrompt {
         
         // Calculate editor area height: use explicit height if available, otherwise use flex
         let editor_area = if let Some(total_height) = self.content_height {
-            // Explicit height: editor gets total - status bar - padding
-            let padding_vertical = padding.top;
-            let editor_height = total_height - gpui::px(STATUS_BAR_HEIGHT) - gpui::px(padding_vertical);
+            // Explicit height: editor gets total - status bar
+            // Note: padding is INSIDE the div (pt/pl/pr), not added to its height
+            let editor_height = total_height - gpui::px(STATUS_BAR_HEIGHT);
             
             // Only log when render state changes (avoid log spam every ~500ms)
             let current_state = RenderState {
@@ -1076,9 +1076,6 @@ impl Render for EditorPrompt {
                     total_height = ?total_height,
                     editor_height = ?editor_height,
                     status_bar = STATUS_BAR_HEIGHT,
-                    padding_top = padding.top,
-                    padding_left = padding.left,
-                    padding_right = padding.right,
                     line_count = line_count,
                     "Editor render state changed"
                 );
