@@ -820,10 +820,14 @@ impl Render for ActionsDialog {
             .track_scroll(&self.scroll_handle);
             
             // Wrap uniform_list in a relative container with scrollbar overlay
+            // NOTE: The wrapper needs flex + h_full for uniform_list to properly calculate visible range
             div()
                 .relative()
+                .flex()
+                .flex_col()
                 .flex_1()
                 .w_full()
+                .h_full()
                 .child(list)
                 .child(scrollbar)
                 .into_any_element()
