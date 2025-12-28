@@ -3864,7 +3864,7 @@ impl ScriptListApp {
                             .when(filter_is_empty, |d| d.child(
                                 div()
                                     .w(px(design_visual.border_normal))
-                                    .h(px(design_spacing.padding_lg))
+                                    .h(px(design_typography.font_size_lg * design_typography.line_height_normal))
                                     .mr(px(design_spacing.padding_xs))
                                     .when(self.focused_input == FocusedInput::MainFilter && self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
@@ -3872,7 +3872,7 @@ impl ScriptListApp {
                             .when(!filter_is_empty, |d| d.child(
                                 div()
                                     .w(px(design_visual.border_normal))
-                                    .h(px(design_spacing.padding_lg))
+                                    .h(px(design_typography.font_size_lg * design_typography.line_height_normal))
                                     .ml(px(design_visual.border_normal))
                                     .when(self.focused_input == FocusedInput::MainFilter && self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
@@ -4239,7 +4239,7 @@ impl ScriptListApp {
                             .when(input_is_empty, |d| d.child(
                                 div()
                                     .w(px(design_visual.border_normal))
-                                    .h(px(design_spacing.padding_lg))
+                                    .h(px(design_typography.font_size_lg * design_typography.line_height_normal))
                                     .mr(px(design_spacing.padding_xs))
                                     .when(self.focused_input == FocusedInput::ArgPrompt && self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
@@ -4247,7 +4247,7 @@ impl ScriptListApp {
                             .when(!input_is_empty, |d| d.child(
                                 div()
                                     .w(px(design_visual.border_normal))
-                                    .h(px(design_spacing.padding_lg))
+                                    .h(px(design_typography.font_size_lg * design_typography.line_height_normal))
                                     .ml(px(design_visual.border_normal))
                                     .when(self.focused_input == FocusedInput::ArgPrompt && self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
@@ -4862,7 +4862,7 @@ impl ScriptListApp {
                             .when(input_is_empty, |d| d.child(
                                 div()
                                     .w(px(design_visual.border_normal))
-                                    .h(px(design_spacing.padding_lg))
+                                    .h(px(design_typography.font_size_lg * design_typography.line_height_normal))
                                     .mr(px(design_spacing.padding_xs))
                                     .when(self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
@@ -4870,7 +4870,7 @@ impl ScriptListApp {
                             .when(!input_is_empty, |d| d.child(
                                 div()
                                     .w(px(design_visual.border_normal))
-                                    .h(px(design_spacing.padding_lg))
+                                    .h(px(design_typography.font_size_lg * design_typography.line_height_normal))
                                     .ml(px(design_visual.border_normal))
                                     .when(self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
@@ -5363,7 +5363,7 @@ impl ScriptListApp {
                             .when(input_is_empty, |d| d.child(
                                 div()
                                     .w(px(design_visual.border_normal))
-                                    .h(px(design_spacing.padding_lg))
+                                    .h(px(design_typography.font_size_lg * design_typography.line_height_normal))
                                     .mr(px(design_spacing.padding_xs))
                                     .when(self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
@@ -5371,7 +5371,7 @@ impl ScriptListApp {
                             .when(!input_is_empty, |d| d.child(
                                 div()
                                     .w(px(design_visual.border_normal))
-                                    .h(px(design_spacing.padding_lg))
+                                    .h(px(design_typography.font_size_lg * design_typography.line_height_normal))
                                     .ml(px(design_visual.border_normal))
                                     .when(self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
