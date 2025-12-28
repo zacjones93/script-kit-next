@@ -892,9 +892,19 @@ function send(msg: object): void {
 // This works better with bun's --preload mode
 let stdinBuffer = '';
 
+console.error('[SDK] Setting up stdin handler...');
+
 // Set up raw stdin handling
 process.stdin.setEncoding('utf8');
+// Resume stdin to start receiving data - it may be paused by default  
+process.stdin.resume();
+// Unref stdin so it doesn't keep the process alive when script completes
+// This allows the process to exit naturally when all async work is done
+(process.stdin as any).unref?.();
+console.error('[SDK] stdin resumed, readable:', process.stdin.readable);
+
 process.stdin.on('data', (chunk: string) => {
+  console.error('[SDK_DEBUG] Received stdin chunk:', chunk.length, 'bytes');
   stdinBuffer += chunk;
   
   // Process complete lines

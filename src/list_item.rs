@@ -19,9 +19,25 @@ pub enum IconKind {
 }
 
 /// Fixed height for list items (same as main script list)
-/// Height of 46px provides comfortable spacing for both name-only and name+description items
-/// Content: name (18px line-height) + description (14px line-height) = 32px + 14px vertical padding
-pub const LIST_ITEM_HEIGHT: f32 = 46.0;
+/// Height of 40px balances compact layout with comfortable spacing for name+description items
+pub const LIST_ITEM_HEIGHT: f32 = 40.0;
+
+/// Fixed height for section headers (RECENT, MAIN, etc.)
+/// Total height includes: pt(16px) + text (~8px) + pb(4px) = ~28px
+/// Using 24px as the uniform_list height for consistent calculations
+pub const SECTION_HEADER_HEIGHT: f32 = 24.0;
+
+/// Enum for grouped list items - supports both regular items and section headers
+/// 
+/// Used with uniform_list when rendering grouped results (e.g., frecency with RECENT/MAIN sections).
+/// The usize in Item variant is the index into the flat results array.
+#[derive(Clone, Debug)]
+pub enum GroupedListItem {
+    /// A section header (e.g., "RECENT", "MAIN")
+    SectionHeader(String),
+    /// A regular list item - usize is the index in the flat results array
+    Item(usize),
+}
 
 /// Pre-computed colors for ListItem rendering
 /// 
@@ -435,6 +451,44 @@ pub fn icon_from_png(png_data: &[u8]) -> Option<IconKind> {
     decode_png_to_render_image(png_data)
         .ok()
         .map(IconKind::Image)
+}
+
+/// Render a section header for grouped lists (e.g., "RECENT", "MAIN")
+/// 
+/// Visual design matches Script Kit's section headers:
+/// - ALL CAPS text
+/// - Small font (~11-12px via text_xs)
+/// - Medium font weight
+/// - Muted color
+/// - Vertical spacing: pt(16px) pb(4px)
+/// - Horizontal padding: px(16px) matching list items
+/// - No background, no border
+/// 
+/// # Arguments
+/// * `label` - The section label (will be uppercased)
+/// * `colors` - ListItemColors for theme-aware styling
+/// 
+/// # Example
+/// ```ignore
+/// let colors = ListItemColors::from_theme(&theme);
+/// render_section_header("Recent", colors)
+/// ```
+pub fn render_section_header(label: &str, colors: ListItemColors) -> impl IntoElement {
+    div()
+        .w_full()
+        .h(px(SECTION_HEADER_HEIGHT))
+        .pt(px(16.))
+        .pb(px(4.))
+        .px(px(16.))
+        .flex()
+        .items_end()
+        .child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(colors.text_muted))
+                .child(label.to_uppercase())
+        )
 }
 
 // Note: Tests omitted for this module due to GPUI macro recursion limit issues.

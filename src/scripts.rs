@@ -5,11 +5,13 @@ use std::env;
 use std::fs;
 use std::cmp::Ordering;
 use tracing::{debug, warn, instrument};
+use glob::glob;
 
 pub use crate::builtins::BuiltInEntry;
 use crate::frecency::FrecencyStore;
 use crate::list_item::GroupedListItem;
 use crate::app_launcher::AppInfo;
+use crate::scriptlets as scriptlet_parser;
 
 #[derive(Clone, Debug)]
 pub struct Script {
@@ -29,6 +31,12 @@ pub struct Scriptlet {
     pub tool: String,  // "ts", "bash", "paste", etc.
     pub shortcut: Option<String>,
     pub expand: Option<String>,
+    /// Group name from H1 header (e.g., "Productivity", "Development")
+    pub group: Option<String>,
+    /// Source file path with anchor for execution (e.g., "/path/to/file.md#slug")
+    pub file_path: Option<String>,
+    /// Command slug for execution
+    pub command: Option<String>,
 }
 
 /// Represents a scored match result for fuzzy search
@@ -296,6 +304,9 @@ fn parse_scriptlet_section(section: &str) -> Option<Scriptlet> {
         tool,
         shortcut: metadata.get("shortcut").cloned(),
         expand: metadata.get("expand").cloned(),
+        group: None,
+        file_path: None,
+        command: None,
     })
 }
 
@@ -389,6 +400,143 @@ pub fn read_scriptlets() -> Vec<Scriptlet> {
 
     debug!(count = scriptlets.len(), "Loaded scriptlets from all .md files");
     scriptlets
+}
+
+/// Load scriptlets from markdown files using the comprehensive parser
+/// 
+/// Globs:
+/// - ~/.kenv/scriptlets/*.md (main scriptlets directory)
+/// - ~/.kenv/kenvs/*/scriptlets/*.md (nested kenvs)
+/// 
+/// Uses `crate::scriptlets::parse_markdown_as_scriptlets` for parsing.
+/// Returns scriptlets sorted by group then by name.
+#[instrument(level = "debug", skip_all)]
+pub fn load_scriptlets() -> Vec<Scriptlet> {
+    let home = match env::var("HOME") {
+        Ok(home_path) => PathBuf::from(home_path),
+        Err(e) => {
+            warn!(error = %e, "HOME environment variable not set, cannot load scriptlets");
+            return vec![];
+        }
+    };
+
+    let mut scriptlets = Vec::new();
+
+    // Glob patterns to search
+    let patterns = [
+        home.join(".kenv/scriptlets/*.md"),
+        home.join(".kenv/kenvs/*/scriptlets/*.md"),
+    ];
+
+    for pattern in patterns {
+        let pattern_str = pattern.to_string_lossy().to_string();
+        debug!(pattern = %pattern_str, "Globbing for scriptlet files");
+
+        match glob(&pattern_str) {
+            Ok(paths) => {
+                for entry in paths {
+                    match entry {
+                        Ok(path) => {
+                            debug!(path = %path.display(), "Parsing scriptlet file");
+                            
+                            // Determine kenv from path (for nested kenvs)
+                            let kenv = extract_kenv_from_path(&path, &home);
+                            
+                            match fs::read_to_string(&path) {
+                                Ok(content) => {
+                                    let path_str = path.to_string_lossy().to_string();
+                                    let parsed = scriptlet_parser::parse_markdown_as_scriptlets(
+                                        &content,
+                                        Some(&path_str),
+                                    );
+                                    
+                                    // Convert parsed scriptlets to our Scriptlet format
+                                    for parsed_scriptlet in parsed {
+                                        let file_path = build_scriptlet_file_path(&path, &parsed_scriptlet.command);
+                                        
+                                        scriptlets.push(Scriptlet {
+                                            name: parsed_scriptlet.name,
+                                            description: parsed_scriptlet.metadata.description,
+                                            code: parsed_scriptlet.scriptlet_content,
+                                            tool: parsed_scriptlet.tool,
+                                            shortcut: parsed_scriptlet.metadata.shortcut,
+                                            expand: parsed_scriptlet.metadata.expand,
+                                            group: if parsed_scriptlet.group.is_empty() {
+                                                kenv.clone()
+                                            } else {
+                                                Some(parsed_scriptlet.group)
+                                            },
+                                            file_path: Some(file_path),
+                                            command: Some(parsed_scriptlet.command),
+                                        });
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        error = %e,
+                                        path = %path.display(),
+                                        "Failed to read scriptlet file"
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Failed to process glob entry");
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    pattern = %pattern_str,
+                    "Failed to glob scriptlet files"
+                );
+            }
+        }
+    }
+
+    // Sort by group first (None last), then by name
+    scriptlets.sort_by(|a, b| {
+        match (&a.group, &b.group) {
+            (Some(g1), Some(g2)) => {
+                match g1.cmp(g2) {
+                    Ordering::Equal => a.name.cmp(&b.name),
+                    other => other,
+                }
+            }
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => a.name.cmp(&b.name),
+        }
+    });
+
+    debug!(count = scriptlets.len(), "Loaded scriptlets via parser");
+    scriptlets
+}
+
+/// Extract kenv name from a nested kenv path
+/// e.g., ~/.kenv/kenvs/my-kenv/scriptlets/file.md -> Some("my-kenv")
+fn extract_kenv_from_path(path: &std::path::Path, home: &std::path::Path) -> Option<String> {
+    let kenvs_prefix = home.join(".kenv/kenvs/");
+    let kenvs_prefix_str = kenvs_prefix.to_string_lossy().to_string();
+    let path_str = path.to_string_lossy().to_string();
+    
+    if path_str.starts_with(&kenvs_prefix_str) {
+        // Extract the kenv name from the path
+        let relative = &path_str[kenvs_prefix_str.len()..];
+        // Find the first slash to get kenv name
+        if let Some(slash_pos) = relative.find('/') {
+            return Some(relative[..slash_pos].to_string());
+        }
+    }
+    None
+}
+
+/// Build the file path with anchor for scriptlet execution
+/// Format: /path/to/file.md#slug
+fn build_scriptlet_file_path(md_path: &std::path::Path, command: &str) -> String {
+    format!("{}#{}", md_path.display(), command)
 }
 
 /// Reads scripts from ~/.kenv/scripts directory
@@ -1089,8 +1237,10 @@ pub fn get_grouped_results(
     // Limit recent items to MAX_RECENT_ITEMS
     recent_indices.truncate(MAX_RECENT_ITEMS);
     
-    // Sort main items alphabetically by name
-    main_indices.sort_by(|&a, &b| results[a].name().cmp(results[b].name()));
+    // Sort main items alphabetically by name (case-insensitive)
+    main_indices.sort_by(|&a, &b| {
+        results[a].name().to_lowercase().cmp(&results[b].name().to_lowercase())
+    });
     
     // Build grouped list
     if !recent_indices.is_empty() {
@@ -1121,6 +1271,102 @@ pub fn get_grouped_results(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Helper to create a test Scriptlet with minimal required fields
+    fn test_scriptlet(name: &str, tool: &str, code: &str) -> Scriptlet {
+        Scriptlet {
+            name: name.to_string(),
+            description: None,
+            code: code.to_string(),
+            tool: tool.to_string(),
+            shortcut: None,
+            expand: None,
+            group: None,
+            file_path: None,
+            command: None,
+        }
+    }
+
+    /// Helper to create a test Scriptlet with description
+    fn test_scriptlet_with_desc(name: &str, tool: &str, code: &str, desc: &str) -> Scriptlet {
+        Scriptlet {
+            name: name.to_string(),
+            description: Some(desc.to_string()),
+            code: code.to_string(),
+            tool: tool.to_string(),
+            shortcut: None,
+            expand: None,
+            group: None,
+            file_path: None,
+            command: None,
+        }
+    }
+
+    // ============================================
+    // LOAD_SCRIPTLETS INTEGRATION TESTS
+    // ============================================
+
+    #[test]
+    fn test_load_scriptlets_returns_vec() {
+        // load_scriptlets should return a Vec even if directory doesn't exist
+        let scriptlets = load_scriptlets();
+        // Just verify it returns without panicking
+        let _ = scriptlets.len();
+    }
+
+    #[test]
+    fn test_extract_kenv_from_path_nested() {
+        use std::path::Path;
+        let home = Path::new("/Users/test");
+        
+        // Nested kenv path
+        let nested_path = Path::new("/Users/test/.kenv/kenvs/my-kenv/scriptlets/file.md");
+        let kenv = extract_kenv_from_path(nested_path, home);
+        assert_eq!(kenv, Some("my-kenv".to_string()));
+    }
+
+    #[test]
+    fn test_extract_kenv_from_path_main_kenv() {
+        use std::path::Path;
+        let home = Path::new("/Users/test");
+        
+        // Main kenv path (not nested)
+        let main_path = Path::new("/Users/test/.kenv/scriptlets/file.md");
+        let kenv = extract_kenv_from_path(main_path, home);
+        assert_eq!(kenv, None);
+    }
+
+    #[test]
+    fn test_build_scriptlet_file_path() {
+        use std::path::Path;
+        let md_path = Path::new("/Users/test/.kenv/scriptlets/my-scripts.md");
+        let result = build_scriptlet_file_path(md_path, "my-slug");
+        assert_eq!(result, "/Users/test/.kenv/scriptlets/my-scripts.md#my-slug");
+    }
+
+    #[test]
+    fn test_scriptlet_new_fields() {
+        // Verify the new Scriptlet struct fields work
+        let scriptlet = Scriptlet {
+            name: "Test".to_string(),
+            description: Some("Desc".to_string()),
+            code: "code".to_string(),
+            tool: "ts".to_string(),
+            shortcut: None,
+            expand: None,
+            group: Some("My Group".to_string()),
+            file_path: Some("/path/to/file.md#test".to_string()),
+            command: Some("test".to_string()),
+        };
+        
+        assert_eq!(scriptlet.group, Some("My Group".to_string()));
+        assert_eq!(scriptlet.file_path, Some("/path/to/file.md#test".to_string()));
+        assert_eq!(scriptlet.command, Some("test".to_string()));
+    }
+
+    // ============================================
+    // EXISTING SCRIPTLET PARSING TESTS
+    // ============================================
 
     #[test]
     fn test_parse_scriptlet_basic() {
@@ -1309,22 +1555,8 @@ mod tests {
     #[test]
     fn test_fuzzy_search_scriptlets() {
         let scriptlets = vec![
-            Scriptlet {
-                name: "Copy Text".to_string(),
-                description: Some("Copy current selection".to_string()),
-                code: "copy()".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
-            Scriptlet {
-                name: "Paste Code".to_string(),
-                description: None,
-                code: "paste()".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
+            test_scriptlet_with_desc("Copy Text", "ts", "copy()", "Copy current selection"),
+            test_scriptlet("Paste Code", "ts", "paste()"),
         ];
 
         let results = fuzzy_search_scriptlets(&scriptlets, "copy");
@@ -1345,14 +1577,7 @@ mod tests {
         ];
 
         let scriptlets = vec![
-            Scriptlet {
-                name: "Open Browser".to_string(),
-                description: Some("Open in browser".to_string()),
-                code: "open()".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
+            test_scriptlet_with_desc("Open Browser", "ts", "open()", "Open in browser"),
         ];
 
         let results = fuzzy_search_unified(&scripts, &scriptlets, "open");
@@ -1384,14 +1609,7 @@ mod tests {
         });
 
         let scriptlet = SearchResult::Scriptlet(ScriptletMatch {
-            scriptlet: Scriptlet {
-                name: "snippet".to_string(),
-                description: None,
-                code: "code".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
+            scriptlet: test_scriptlet("snippet", "ts", "code"),
             score: 50,
         });
 
@@ -1647,22 +1865,8 @@ mod tests {
     #[test]
     fn test_fuzzy_search_scriptlets_by_tool() {
         let scriptlets = vec![
-            Scriptlet {
-                name: "Snippet1".to_string(),
-                description: None,
-                code: "code".to_string(),
-                tool: "bash".to_string(),
-                shortcut: None,
-                expand: None,
-            },
-            Scriptlet {
-                name: "Snippet2".to_string(),
-                description: None,
-                code: "code".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
+            test_scriptlet("Snippet1", "bash", "code"),
+            test_scriptlet("Snippet2", "ts", "code"),
         ];
 
         let results = fuzzy_search_scriptlets(&scriptlets, "bash");
@@ -1673,14 +1877,7 @@ mod tests {
     #[test]
     fn test_fuzzy_search_scriptlets_no_results() {
         let scriptlets = vec![
-            Scriptlet {
-                name: "Copy Text".to_string(),
-                description: Some("Copy current selection".to_string()),
-                code: "copy()".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
+            test_scriptlet_with_desc("Copy Text", "ts", "copy()", "Copy current selection"),
         ];
 
         let results = fuzzy_search_scriptlets(&scriptlets, "paste");
@@ -1699,14 +1896,7 @@ mod tests {
         ];
 
         let scriptlets = vec![
-            Scriptlet {
-                name: "Snippet1".to_string(),
-                description: None,
-                code: "code".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
+            test_scriptlet("Snippet1", "ts", "code"),
         ];
 
         let results = fuzzy_search_unified(&scripts, &scriptlets, "");
@@ -1725,14 +1915,7 @@ mod tests {
         ];
 
         let scriptlets = vec![
-            Scriptlet {
-                name: "test".to_string(),
-                description: Some("test snippet".to_string()),
-                code: "test()".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
+            test_scriptlet_with_desc("test", "ts", "test()", "test snippet"),
         ];
 
         let results = fuzzy_search_unified(&scripts, &scriptlets, "test");
@@ -1775,6 +1958,9 @@ mod tests {
             tool: "bash".to_string(),
             shortcut: Some("cmd k".to_string()),
             expand: Some("prompt,,".to_string()),
+            group: None,
+            file_path: None,
+            command: None,
         };
 
         assert_eq!(scriptlet.name, "Full Scriptlet");
@@ -2135,14 +2321,9 @@ const x = 1;
 
     #[test]
     fn test_scriptlet_clone_independence() {
-        let original = Scriptlet {
-            name: "original".to_string(),
-            description: Some("desc".to_string()),
-            code: "code".to_string(),
-            tool: "ts".to_string(),
-            shortcut: Some("cmd k".to_string()),
-            expand: None,
-        };
+        let mut original = test_scriptlet("original", "ts", "code");
+        original.description = Some("desc".to_string());
+        original.shortcut = Some("cmd k".to_string());
 
         let cloned = original.clone();
         assert_eq!(original.name, cloned.name);
@@ -2152,30 +2333,9 @@ const x = 1;
     #[test]
     fn test_search_multiple_scriptlets() {
         let scriptlets = vec![
-            Scriptlet {
-                name: "Copy".to_string(),
-                description: Some("Copy to clipboard".to_string()),
-                code: "copy()".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
-            Scriptlet {
-                name: "Paste".to_string(),
-                description: Some("Paste from clipboard".to_string()),
-                code: "paste()".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
-            Scriptlet {
-                name: "Custom Paste".to_string(),
-                description: Some("Custom paste with format".to_string()),
-                code: "pasteCustom()".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
+            test_scriptlet_with_desc("Copy", "ts", "copy()", "Copy to clipboard"),
+            test_scriptlet_with_desc("Paste", "ts", "paste()", "Paste from clipboard"),
+            test_scriptlet_with_desc("Custom Paste", "ts", "pasteCustom()", "Custom paste with format"),
         ];
 
         let results = fuzzy_search_scriptlets(&scriptlets, "paste");
@@ -2202,14 +2362,7 @@ const x = 1;
         ];
 
         let scriptlets = vec![
-            Scriptlet {
-                name: "Open URL".to_string(),
-                description: None,
-                code: "open(url)".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
+            test_scriptlet("Open URL", "ts", "open(url)"),
         ];
 
         let results = fuzzy_search_unified(&scripts, &scriptlets, "open");
@@ -2234,14 +2387,7 @@ const x = 1;
     #[test]
     fn test_search_result_description_accessor() {
         let scriptlet = SearchResult::Scriptlet(ScriptletMatch {
-            scriptlet: Scriptlet {
-                name: "Test".to_string(),
-                description: Some("Test Description".to_string()),
-                code: "code".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
+            scriptlet: test_scriptlet_with_desc("Test", "ts", "code", "Test Description"),
             score: 75,
         });
 
@@ -2375,22 +2521,8 @@ third()
     #[test]
     fn test_scriptlet_ordering_by_name() {
         let scriptlets = vec![
-            Scriptlet {
-                name: "Zebra".to_string(),
-                description: None,
-                code: "code".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
-            Scriptlet {
-                name: "Apple".to_string(),
-                description: None,
-                code: "code".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
+            test_scriptlet("Zebra", "ts", "code"),
+            test_scriptlet("Apple", "ts", "code"),
         ];
 
         let results = fuzzy_search_scriptlets(&scriptlets, "");
@@ -2578,15 +2710,7 @@ const obj = { key: "value" };
         let tools = vec!["ts", "bash", "paste", "sh", "zsh", "py"];
         
         for tool in tools {
-            let scriptlet = Scriptlet {
-                name: format!("Test {}", tool),
-                description: None,
-                code: "code".to_string(),
-                tool: tool.to_string(),
-                shortcut: None,
-                expand: None,
-            };
-
+            let scriptlet = test_scriptlet(&format!("Test {}", tool), tool, "code");
             assert_eq!(scriptlet.tool, tool);
         }
     }
@@ -2640,14 +2764,7 @@ code here
         assert_eq!(script.type_label(), "Script");
         
         let scriptlet = SearchResult::Scriptlet(ScriptletMatch {
-            scriptlet: Scriptlet {
-                name: "test".to_string(),
-                description: None,
-                code: "code".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
+            scriptlet: test_scriptlet("test", "ts", "code"),
             score: 0,
         });
 
@@ -2746,24 +2863,12 @@ code here
 
     #[test]
     fn test_scriptlet_code_match_lower_than_description() {
-        let scriptlets = vec![
-            Scriptlet {
-                name: "Snippet".to_string(),
-                description: Some("copy text".to_string()),
-                code: "paste()".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
-            Scriptlet {
-                name: "Other".to_string(),
-                description: None,
-                code: "copy()".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
-        ];
+        let mut snippet = test_scriptlet("Snippet", "ts", "paste()");
+        snippet.description = Some("copy text".to_string());
+        
+        let other = test_scriptlet("Other", "ts", "copy()");
+        
+        let scriptlets = vec![snippet, other];
 
         let results = fuzzy_search_scriptlets(&scriptlets, "copy");
         // Description match should score higher than code match
@@ -2773,22 +2878,8 @@ code here
     #[test]
     fn test_tool_type_bonus_in_scoring() {
         let scriptlets = vec![
-            Scriptlet {
-                name: "Script1".to_string(),
-                description: None,
-                code: "code".to_string(),
-                tool: "bash".to_string(),
-                shortcut: None,
-                expand: None,
-            },
-            Scriptlet {
-                name: "Script2".to_string(),
-                description: None,
-                code: "code".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
+            test_scriptlet("Script1", "bash", "code"),
+            test_scriptlet("Script2", "ts", "code"),
         ];
 
         let results = fuzzy_search_scriptlets(&scriptlets, "bash");
@@ -2863,22 +2954,8 @@ code here
     #[test]
     fn test_scriptlet_name_match_bonus_points() {
         let scriptlets = vec![
-            Scriptlet {
-                name: "copy".to_string(),
-                description: None,
-                code: "copy()".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
-            Scriptlet {
-                name: "paste".to_string(),
-                description: None,
-                code: "copy()".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
+            test_scriptlet("copy", "ts", "copy()"),
+            test_scriptlet("paste", "ts", "copy()"),
         ];
 
         let results = fuzzy_search_scriptlets(&scriptlets, "copy");
@@ -2899,14 +2976,7 @@ code here
         ];
 
         let scriptlets = vec![
-            Scriptlet {
-                name: "test".to_string(),
-                description: Some("Test snippet".to_string()),
-                code: "test()".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
+            test_scriptlet_with_desc("test", "ts", "test()", "Test snippet"),
         ];
 
         let results = fuzzy_search_unified(&scripts, &scriptlets, "test");
@@ -3051,16 +3121,9 @@ code here
             },
         ];
 
-        let scriptlets = vec![
-            Scriptlet {
-                name: "Quick Copy".to_string(),
-                description: Some("Copy selection".to_string()),
-                code: "copy()".to_string(),
-                tool: "ts".to_string(),
-                shortcut: Some("cmd c".to_string()),
-                expand: None,
-            },
-        ];
+        let mut quick_copy = test_scriptlet_with_desc("Quick Copy", "ts", "copy()", "Copy selection");
+        quick_copy.shortcut = Some("cmd c".to_string());
+        let scriptlets = vec![quick_copy];
 
         let results = fuzzy_search_unified(&scripts, &scriptlets, "copy");
         assert_eq!(results.len(), 2);
@@ -3229,14 +3292,7 @@ code here
         ];
 
         let scriptlets = vec![
-            Scriptlet {
-                name: "Clipboard Helper".to_string(),
-                description: Some("Helper for clipboard".to_string()),
-                code: "clipboard()".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
+            test_scriptlet_with_desc("Clipboard Helper", "ts", "clipboard()", "Helper for clipboard"),
         ];
 
         let builtins = create_test_builtins();
@@ -3297,14 +3353,7 @@ code here
         ];
 
         let scriptlets = vec![
-            Scriptlet {
-                name: "Test Snippet".to_string(),
-                description: None,
-                code: "test()".to_string(),
-                tool: "ts".to_string(),
-                shortcut: None,
-                expand: None,
-            },
+            test_scriptlet("Test Snippet", "ts", "test()"),
         ];
 
         let results = fuzzy_search_unified(&scripts, &scriptlets, "test");
@@ -3552,6 +3601,335 @@ code here
         
         assert!(section_headers.contains(&"RECENT"));
         assert!(section_headers.contains(&"MAIN"));
+    }
+
+    #[test]
+    fn test_get_grouped_results_frecency_script_appears_before_builtins() {
+        // This test verifies the fix for: Clipboard History appearing first
+        // regardless of frecency scores.
+        //
+        // Expected behavior: When a script has frecency > 0, it should appear
+        // in the RECENT section BEFORE builtins in MAIN.
+        //
+        // Bug scenario: User frequently uses "test-script", but Clipboard History
+        // still appears as the first choice when opening Script Kit.
+        
+        let scripts = vec![
+            Script {
+                name: "test-script".to_string(),
+                path: PathBuf::from("/test-script.ts"),
+                extension: "ts".to_string(),
+                description: Some("A frequently used script".to_string()),
+            },
+            Script {
+                name: "another-script".to_string(),
+                path: PathBuf::from("/another-script.ts"),
+                extension: "ts".to_string(),
+                description: None,
+            },
+        ];
+        let scriptlets: Vec<Scriptlet> = vec![];
+        let builtins = create_test_builtins(); // Includes Clipboard History and App Launcher
+        let apps: Vec<AppInfo> = vec![];
+        
+        // Record usage for test-script to give it frecency
+        let mut frecency_store = FrecencyStore::new();
+        frecency_store.record_use("/test-script.ts");
+        
+        // Get grouped results with empty filter (default view)
+        let (grouped, results) = get_grouped_results(
+            &scripts, &scriptlets, &builtins, &apps,
+            &frecency_store, ""
+        );
+        
+        // Verify structure:
+        // grouped[0] = SectionHeader("RECENT")
+        // grouped[1] = Item(idx) where results[idx] is the frecency script
+        // grouped[2] = SectionHeader("MAIN")
+        // grouped[3+] = Items including builtins and other scripts
+        
+        // First should be RECENT header
+        assert!(
+            matches!(&grouped[0], GroupedListItem::SectionHeader(s) if s == "RECENT"),
+            "First item should be RECENT section header, got {:?}", grouped[0]
+        );
+        
+        // Second should be the frecency script (test-script)
+        assert!(
+            matches!(&grouped[1], GroupedListItem::Item(idx) if {
+                let result = &results[*idx];
+                matches!(result, SearchResult::Script(sm) if sm.script.name == "test-script")
+            }),
+            "Second item should be the frecency script 'test-script', got {:?}",
+            grouped.get(1).map(|g| {
+                if let GroupedListItem::Item(idx) = g {
+                    format!("Item({}) = {}", idx, results[*idx].name())
+                } else {
+                    format!("{:?}", g)
+                }
+            })
+        );
+        
+        // Third should be MAIN header
+        assert!(
+            matches!(&grouped[2], GroupedListItem::SectionHeader(s) if s == "MAIN"),
+            "Third item should be MAIN section header, got {:?}", grouped[2]
+        );
+        
+        // Find builtins in MAIN section (after grouped[2])
+        let main_items: Vec<&str> = grouped[3..].iter()
+            .filter_map(|item| {
+                if let GroupedListItem::Item(idx) = item {
+                    Some(results[*idx].name())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        
+        // Builtins should be in MAIN, not RECENT
+        assert!(
+            main_items.contains(&"Clipboard History"),
+            "Clipboard History should be in MAIN section, not RECENT. MAIN items: {:?}",
+            main_items
+        );
+        assert!(
+            main_items.contains(&"App Launcher"),
+            "App Launcher should be in MAIN section. MAIN items: {:?}",
+            main_items
+        );
+        
+        // Verify the frecency script is NOT in MAIN (it's in RECENT)
+        assert!(
+            !main_items.contains(&"test-script"),
+            "test-script should NOT be in MAIN (it should be in RECENT). MAIN items: {:?}",
+            main_items
+        );
+    }
+
+    #[test]
+    fn test_get_grouped_results_builtin_with_frecency_vs_script_frecency() {
+        // This test captures a more nuanced bug scenario:
+        // When BOTH a builtin (Clipboard History) AND a script have frecency,
+        // the script with higher frecency should appear first in RECENT.
+        //
+        // Bug: Clipboard History appears first even when user scripts have
+        // higher/more recent frecency scores.
+        
+        let scripts = vec![
+            Script {
+                name: "my-frequent-script".to_string(),
+                path: PathBuf::from("/my-frequent-script.ts"),
+                extension: "ts".to_string(),
+                description: Some("User's frequently used script".to_string()),
+            },
+        ];
+        let scriptlets: Vec<Scriptlet> = vec![];
+        let builtins = create_test_builtins(); // Clipboard History, App Launcher
+        let apps: Vec<AppInfo> = vec![];
+        
+        let mut frecency_store = FrecencyStore::new();
+        
+        // Record builtin usage once (older)
+        frecency_store.record_use("builtin:Clipboard History");
+        
+        // Record script usage multiple times (more frequent, should have higher score)
+        frecency_store.record_use("/my-frequent-script.ts");
+        frecency_store.record_use("/my-frequent-script.ts");
+        frecency_store.record_use("/my-frequent-script.ts");
+        
+        let (grouped, results) = get_grouped_results(
+            &scripts, &scriptlets, &builtins, &apps,
+            &frecency_store, ""
+        );
+        
+        // Both should be in RECENT, but script should come FIRST (higher frecency)
+        assert!(
+            matches!(&grouped[0], GroupedListItem::SectionHeader(s) if s == "RECENT"),
+            "First item should be RECENT header"
+        );
+        
+        // The first ITEM in RECENT should be the user script (higher frecency)
+        assert!(
+            matches!(&grouped[1], GroupedListItem::Item(idx) if {
+                let result = &results[*idx];
+                matches!(result, SearchResult::Script(sm) if sm.script.name == "my-frequent-script")
+            }),
+            "First item in RECENT should be 'my-frequent-script' (highest frecency), got: {}",
+            if let GroupedListItem::Item(idx) = &grouped[1] {
+                results[*idx].name().to_string()
+            } else {
+                format!("{:?}", grouped[1])
+            }
+        );
+        
+        // Clipboard History should be second in RECENT (lower frecency)
+        assert!(
+            matches!(&grouped[2], GroupedListItem::Item(idx) if {
+                results[*idx].name() == "Clipboard History"
+            }),
+            "Second item in RECENT should be 'Clipboard History' (lower frecency), got: {}",
+            if let GroupedListItem::Item(idx) = &grouped[2] {
+                results[*idx].name().to_string()
+            } else {
+                format!("{:?}", grouped[2])
+            }
+        );
+    }
+
+    #[test]
+    fn test_get_grouped_results_selection_priority_with_frecency() {
+        // This test verifies the SELECTION behavior, not just grouping.
+        // 
+        // Bug: When user opens Script Kit, the FIRST SELECTABLE item should be
+        // the most recently used item (from RECENT), not the first item in MAIN.
+        //
+        // The grouped list structure determines what gets selected initially.
+        // With frecency, the first Item (not SectionHeader) should be the
+        // frecency script, which means selected_index=0 should point to
+        // the frecency script when we skip headers.
+        
+        let scripts = vec![
+            Script {
+                name: "alpha-script".to_string(),
+                path: PathBuf::from("/alpha-script.ts"),
+                extension: "ts".to_string(),
+                description: None,
+            },
+            Script {
+                name: "zebra-script".to_string(),
+                path: PathBuf::from("/zebra-script.ts"),
+                extension: "ts".to_string(),
+                description: None,
+            },
+        ];
+        let scriptlets: Vec<Scriptlet> = vec![];
+        let builtins = create_test_builtins(); // Clipboard History, App Launcher
+        let apps: Vec<AppInfo> = vec![];
+        
+        let mut frecency_store = FrecencyStore::new();
+        frecency_store.record_use("/zebra-script.ts"); // Give frecency to zebra
+        
+        let (grouped, results) = get_grouped_results(
+            &scripts, &scriptlets, &builtins, &apps,
+            &frecency_store, ""
+        );
+        
+        // Find the first Item (not SectionHeader) - this is what gets selected
+        let first_selectable_idx = grouped.iter()
+            .find_map(|item| {
+                if let GroupedListItem::Item(idx) = item {
+                    Some(*idx)
+                } else {
+                    None
+                }
+            })
+            .expect("Should have at least one selectable item");
+        
+        let first_result = &results[first_selectable_idx];
+        
+        // The first selectable item MUST be the frecency script
+        // NOT Clipboard History (which would be first alphabetically in MAIN)
+        assert_eq!(
+            first_result.name(), 
+            "zebra-script",
+            "First selectable item should be the frecency script 'zebra-script', got '{}'. \
+             This bug causes Clipboard History to appear first regardless of user's frecency.",
+            first_result.name()
+        );
+        
+        // Verify the structure explicitly
+        // grouped[0] = SectionHeader("RECENT")
+        // grouped[1] = Item(zebra-script) <- THIS should be first selection
+        // grouped[2] = SectionHeader("MAIN")
+        // grouped[3+] = Other items (builtins and scripts sorted together alphabetically)
+        
+        let grouped_names: Vec<String> = grouped.iter()
+            .map(|item| match item {
+                GroupedListItem::SectionHeader(s) => format!("[{}]", s),
+                GroupedListItem::Item(idx) => results[*idx].name().to_string(),
+            })
+            .collect();
+        
+        // First 3 items should be: RECENT header, frecency item, MAIN header
+        assert_eq!(
+            &grouped_names[..3],
+            &["[RECENT]", "zebra-script", "[MAIN]"],
+            "First 3 items should be: RECENT header, frecency item, MAIN header. Got: {:?}",
+            grouped_names
+        );
+    }
+
+    #[test]
+    fn test_get_grouped_results_no_frecency_builtins_sorted_with_scripts() {
+        // TDD FAILING TEST: This test documents the BUG and expected fix.
+        // 
+        // BUG: When there's NO frecency data, builtins appear BEFORE scripts in MAIN,
+        // regardless of alphabetical order. This causes "Clipboard History" to always
+        // appear first.
+        //
+        // EXPECTED BEHAVIOR (after fix): MAIN section items sorted alphabetically by name,
+        // with builtins mixed in with scripts.
+        //
+        // Current broken behavior: ["App Launcher", "Clipboard History", "alpha-script", "zebra-script"]
+        // Expected fixed behavior:  ["alpha-script", "App Launcher", "Clipboard History", "zebra-script"]
+        
+        let scripts = vec![
+            Script {
+                name: "alpha-script".to_string(),
+                path: PathBuf::from("/alpha-script.ts"),
+                extension: "ts".to_string(),
+                description: None,
+            },
+            Script {
+                name: "zebra-script".to_string(),
+                path: PathBuf::from("/zebra-script.ts"),
+                extension: "ts".to_string(),
+                description: None,
+            },
+        ];
+        let scriptlets: Vec<Scriptlet> = vec![];
+        let builtins = create_test_builtins(); // Clipboard History, App Launcher
+        let apps: Vec<AppInfo> = vec![];
+        
+        // No frecency - fresh start
+        let frecency_store = FrecencyStore::new();
+        
+        let (grouped, results) = get_grouped_results(
+            &scripts, &scriptlets, &builtins, &apps,
+            &frecency_store, ""
+        );
+        
+        // With no frecency, should only have MAIN section
+        let grouped_names: Vec<String> = grouped.iter()
+            .map(|item| match item {
+                GroupedListItem::SectionHeader(s) => format!("[{}]", s),
+                GroupedListItem::Item(idx) => results[*idx].name().to_string(),
+            })
+            .collect();
+        
+        // First should be MAIN header (no RECENT because no frecency)
+        assert_eq!(
+            grouped_names[0], "[MAIN]",
+            "First item should be MAIN header when no frecency. Got: {:?}",
+            grouped_names
+        );
+        
+        // Items should be sorted alphabetically - check the order
+        let item_names: Vec<&str> = grouped_names[1..].iter()
+            .map(|s| s.as_str())
+            .collect();
+        
+        // EXPECTED: Items sorted alphabetically, builtins mixed with scripts
+        // "alpha-script" < "App Launcher" < "Clipboard History" < "zebra-script"
+        assert_eq!(
+            item_names,
+            vec!["alpha-script", "App Launcher", "Clipboard History", "zebra-script"],
+            "BUG: Builtins appear before scripts instead of being sorted alphabetically. \
+             This causes 'Clipboard History' to always be first choice. \
+             Expected alphabetical order, got: {:?}",
+            item_names
+        );
     }
 
     #[test]

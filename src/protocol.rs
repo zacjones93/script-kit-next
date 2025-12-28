@@ -294,6 +294,133 @@ impl ElementInfo {
     }
 }
 
+/// Scriptlet metadata for protocol serialization
+///
+/// Matches the ScriptletMetadata struct from scriptlets.rs but optimized
+/// for JSON protocol transmission.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptletMetadataData {
+    /// Trigger text that activates this scriptlet
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<String>,
+    /// Keyboard shortcut (e.g., "cmd shift k")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shortcut: Option<String>,
+    /// Cron-style schedule expression
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<String>,
+    /// Whether to run in background
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<bool>,
+    /// File paths to watch for changes
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watch: Option<String>,
+    /// System event to trigger on
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    /// Description of the scriptlet
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Text expansion trigger (e.g., "type,,")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expand: Option<String>,
+}
+
+/// Scriptlet data for protocol transmission
+///
+/// Represents a parsed scriptlet from markdown files, containing
+/// the code content, tool type, metadata, and variable inputs.
+/// Used to pass scriptlet data between Rust and SDK/bun.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptletData {
+    /// Name of the scriptlet (from H2 header)
+    pub name: String,
+    /// Command identifier (slugified name)
+    pub command: String,
+    /// Tool type (bash, python, ts, etc.)
+    pub tool: String,
+    /// The actual code content
+    pub content: String,
+    /// Named input placeholders (e.g., ["variableName", "otherVar"])
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<String>,
+    /// Group name (from H1 header)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    /// HTML preview content (if any)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+    /// Parsed metadata from HTML comments
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<ScriptletMetadataData>,
+    /// The kenv this scriptlet belongs to
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kenv: Option<String>,
+    /// Source file path
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+    /// Whether this is a scriptlet (always true for scriptlets)
+    #[serde(default)]
+    pub is_scriptlet: bool,
+}
+
+impl ScriptletData {
+    /// Create a new ScriptletData with required fields
+    pub fn new(name: String, command: String, tool: String, content: String) -> Self {
+        ScriptletData {
+            name,
+            command,
+            tool,
+            content,
+            inputs: Vec::new(),
+            group: None,
+            preview: None,
+            metadata: None,
+            kenv: None,
+            source_path: None,
+            is_scriptlet: true,
+        }
+    }
+
+    /// Add inputs
+    pub fn with_inputs(mut self, inputs: Vec<String>) -> Self {
+        self.inputs = inputs;
+        self
+    }
+
+    /// Add group
+    pub fn with_group(mut self, group: String) -> Self {
+        self.group = Some(group);
+        self
+    }
+
+    /// Add preview HTML
+    pub fn with_preview(mut self, preview: String) -> Self {
+        self.preview = Some(preview);
+        self
+    }
+
+    /// Add metadata
+    pub fn with_metadata(mut self, metadata: ScriptletMetadataData) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    /// Add kenv
+    pub fn with_kenv(mut self, kenv: String) -> Self {
+        self.kenv = Some(kenv);
+        self
+    }
+
+    /// Add source path
+    pub fn with_source_path(mut self, path: String) -> Self {
+        self.source_path = Some(path);
+        self
+    }
+}
+
 /// Script error data for structured error reporting
 ///
 /// Sent when a script execution fails, providing detailed error information
@@ -505,6 +632,7 @@ pub fn value_to_slug(value: &str) -> String {
 /// Each variant corresponds to a message kind in the Script Kit v1 API.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
+#[allow(clippy::large_enum_variant)]
 pub enum Message {
     // ============================================================
     // CORE PROMPTS (existing)
@@ -546,6 +674,12 @@ pub enum Message {
         code: Option<i32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
+    },
+
+    /// Force submit the current prompt with a value (from SDK's submit() function)
+    #[serde(rename = "forceSubmit")]
+    ForceSubmit {
+        value: serde_json::Value,
     },
 
     // ============================================================
@@ -1127,6 +1261,65 @@ pub enum Message {
         #[serde(skip_serializing_if = "Option::is_none")]
         timestamp: Option<String>,
     },
+
+    // ============================================================
+    // SCRIPTLET OPERATIONS
+    // ============================================================
+
+    /// Run a scriptlet with variable substitution
+    #[serde(rename = "runScriptlet")]
+    RunScriptlet {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        /// The scriptlet data to execute
+        scriptlet: ScriptletData,
+        /// Named input values for {{variable}} substitution
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        inputs: Option<serde_json::Value>,
+        /// Positional arguments for $1, $2, etc.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        args: Vec<String>,
+    },
+
+    /// Request list of available scriptlets
+    #[serde(rename = "getScriptlets")]
+    GetScriptlets {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        /// Optional kenv to filter by
+        #[serde(skip_serializing_if = "Option::is_none")]
+        kenv: Option<String>,
+        /// Optional group to filter by
+        #[serde(skip_serializing_if = "Option::is_none")]
+        group: Option<String>,
+    },
+
+    /// Response with list of scriptlets
+    #[serde(rename = "scriptletList")]
+    ScriptletList {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        /// List of scriptlets
+        scriptlets: Vec<ScriptletData>,
+    },
+
+    /// Result of scriptlet execution
+    #[serde(rename = "scriptletResult")]
+    ScriptletResult {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        /// Whether execution succeeded
+        success: bool,
+        /// Output from the scriptlet (stdout)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+        /// Error message if failed
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        /// Exit code if available
+        #[serde(rename = "exitCode", skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+    },
 }
 
 impl Message {
@@ -1252,6 +1445,13 @@ impl Message {
             Message::ElementsResult { request_id, .. } => Some(request_id),
             // Error reporting (no ID)
             Message::SetError { .. } => None,
+            // Force submit (no ID - operates on current prompt)
+            Message::ForceSubmit { .. } => None,
+            // Scriptlet operations (use request_id)
+            Message::RunScriptlet { request_id, .. } => Some(request_id),
+            Message::GetScriptlets { request_id, .. } => Some(request_id),
+            Message::ScriptletList { request_id, .. } => Some(request_id),
+            Message::ScriptletResult { request_id, .. } => Some(request_id),
         }
     }
 
@@ -1856,6 +2056,85 @@ impl Message {
             timestamp,
         }
     }
+
+    // ============================================================
+    // Constructor methods for scriptlet operations
+    // ============================================================
+
+    /// Create a run scriptlet request
+    pub fn run_scriptlet(
+        request_id: String,
+        scriptlet: ScriptletData,
+        inputs: Option<serde_json::Value>,
+        args: Vec<String>,
+    ) -> Self {
+        Message::RunScriptlet {
+            request_id,
+            scriptlet,
+            inputs,
+            args,
+        }
+    }
+
+    /// Create a get scriptlets request
+    pub fn get_scriptlets(request_id: String) -> Self {
+        Message::GetScriptlets {
+            request_id,
+            kenv: None,
+            group: None,
+        }
+    }
+
+    /// Create a get scriptlets request with filters
+    pub fn get_scriptlets_filtered(
+        request_id: String,
+        kenv: Option<String>,
+        group: Option<String>,
+    ) -> Self {
+        Message::GetScriptlets {
+            request_id,
+            kenv,
+            group,
+        }
+    }
+
+    /// Create a scriptlet list response
+    pub fn scriptlet_list(request_id: String, scriptlets: Vec<ScriptletData>) -> Self {
+        Message::ScriptletList {
+            request_id,
+            scriptlets,
+        }
+    }
+
+    /// Create a successful scriptlet result
+    pub fn scriptlet_result_success(
+        request_id: String,
+        output: Option<String>,
+        exit_code: Option<i32>,
+    ) -> Self {
+        Message::ScriptletResult {
+            request_id,
+            success: true,
+            output,
+            error: None,
+            exit_code,
+        }
+    }
+
+    /// Create a failed scriptlet result
+    pub fn scriptlet_result_error(
+        request_id: String,
+        error: String,
+        exit_code: Option<i32>,
+    ) -> Self {
+        Message::ScriptletResult {
+            request_id,
+            success: false,
+            output: None,
+            error: Some(error),
+            exit_code,
+        }
+    }
 }
 
 /// Parse a single JSONL message from a string
@@ -1879,6 +2158,7 @@ pub fn parse_message(line: &str) -> Result<Message, serde_json::Error> {
 
 /// Result type for graceful message parsing
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum ParseResult {
     /// Successfully parsed a known message type
     Ok(Message),
@@ -4247,5 +4527,438 @@ mod tests {
         let json = serialize_message(&msg).unwrap();
         assert!(json.contains("\"elements\":[]"));
         assert!(json.contains("\"totalCount\":0"));
+    }
+
+    // ============================================================
+    // SCRIPTLET DATA TESTS
+    // ============================================================
+
+    #[test]
+    fn test_scriptlet_metadata_data_default() {
+        let metadata = ScriptletMetadataData::default();
+        assert_eq!(metadata.trigger, None);
+        assert_eq!(metadata.shortcut, None);
+        assert_eq!(metadata.schedule, None);
+        assert_eq!(metadata.background, None);
+        assert_eq!(metadata.watch, None);
+        assert_eq!(metadata.system, None);
+        assert_eq!(metadata.description, None);
+        assert_eq!(metadata.expand, None);
+    }
+
+    #[test]
+    fn test_scriptlet_metadata_data_serialization() {
+        let metadata = ScriptletMetadataData {
+            shortcut: Some("cmd k".to_string()),
+            description: Some("Test script".to_string()),
+            background: Some(true),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&metadata).unwrap();
+        assert!(json.contains("\"shortcut\":\"cmd k\""));
+        assert!(json.contains("\"description\":\"Test script\""));
+        assert!(json.contains("\"background\":true"));
+        // None fields should be omitted
+        assert!(!json.contains("\"trigger\""));
+        assert!(!json.contains("\"schedule\""));
+    }
+
+    #[test]
+    fn test_scriptlet_metadata_data_deserialization() {
+        let json = r#"{"shortcut":"cmd shift k","expand":"hello,,"}"#;
+        let metadata: ScriptletMetadataData = serde_json::from_str(json).unwrap();
+        assert_eq!(metadata.shortcut, Some("cmd shift k".to_string()));
+        assert_eq!(metadata.expand, Some("hello,,".to_string()));
+        assert_eq!(metadata.trigger, None);
+    }
+
+    #[test]
+    fn test_scriptlet_data_creation() {
+        let scriptlet = ScriptletData::new(
+            "My Script".to_string(),
+            "my-script".to_string(),
+            "bash".to_string(),
+            "echo hello".to_string(),
+        );
+        assert_eq!(scriptlet.name, "My Script");
+        assert_eq!(scriptlet.command, "my-script");
+        assert_eq!(scriptlet.tool, "bash");
+        assert_eq!(scriptlet.content, "echo hello");
+        assert!(scriptlet.inputs.is_empty());
+        assert!(scriptlet.is_scriptlet);
+        assert_eq!(scriptlet.group, None);
+        assert_eq!(scriptlet.kenv, None);
+    }
+
+    #[test]
+    fn test_scriptlet_data_builder() {
+        let metadata = ScriptletMetadataData {
+            shortcut: Some("cmd g".to_string()),
+            ..Default::default()
+        };
+        let scriptlet = ScriptletData::new(
+            "Greeter".to_string(),
+            "greeter".to_string(),
+            "ts".to_string(),
+            "console.log('Hello {{name}}')".to_string(),
+        )
+        .with_inputs(vec!["name".to_string()])
+        .with_group("Utilities".to_string())
+        .with_kenv("main".to_string())
+        .with_source_path("/path/to/scriptlets.md".to_string())
+        .with_metadata(metadata);
+
+        assert_eq!(scriptlet.inputs, vec!["name"]);
+        assert_eq!(scriptlet.group, Some("Utilities".to_string()));
+        assert_eq!(scriptlet.kenv, Some("main".to_string()));
+        assert_eq!(scriptlet.source_path, Some("/path/to/scriptlets.md".to_string()));
+        assert!(scriptlet.metadata.is_some());
+        assert_eq!(scriptlet.metadata.unwrap().shortcut, Some("cmd g".to_string()));
+    }
+
+    #[test]
+    fn test_scriptlet_data_serialization() {
+        let scriptlet = ScriptletData::new(
+            "Test".to_string(),
+            "test".to_string(),
+            "bash".to_string(),
+            "echo $1".to_string(),
+        )
+        .with_inputs(vec!["arg".to_string()]);
+
+        let json = serde_json::to_string(&scriptlet).unwrap();
+        assert!(json.contains("\"name\":\"Test\""));
+        assert!(json.contains("\"command\":\"test\""));
+        assert!(json.contains("\"tool\":\"bash\""));
+        assert!(json.contains("\"content\":\"echo $1\""));
+        assert!(json.contains("\"inputs\":[\"arg\"]"));
+        assert!(json.contains("\"isScriptlet\":true"));
+        // None fields should be omitted
+        assert!(!json.contains("\"group\""));
+        assert!(!json.contains("\"kenv\""));
+        assert!(!json.contains("\"preview\""));
+    }
+
+    #[test]
+    fn test_scriptlet_data_serialization_empty_inputs_omitted() {
+        let scriptlet = ScriptletData::new(
+            "Simple".to_string(),
+            "simple".to_string(),
+            "bash".to_string(),
+            "echo hello".to_string(),
+        );
+
+        let json = serde_json::to_string(&scriptlet).unwrap();
+        // Empty inputs should be omitted
+        assert!(!json.contains("\"inputs\""));
+    }
+
+    #[test]
+    fn test_scriptlet_data_deserialization() {
+        let json = r#"{
+            "name": "Greeter",
+            "command": "greeter",
+            "tool": "ts",
+            "content": "console.log('Hello')",
+            "inputs": ["name", "age"],
+            "group": "Utils",
+            "isScriptlet": true
+        }"#;
+        let scriptlet: ScriptletData = serde_json::from_str(json).unwrap();
+        assert_eq!(scriptlet.name, "Greeter");
+        assert_eq!(scriptlet.command, "greeter");
+        assert_eq!(scriptlet.tool, "ts");
+        assert_eq!(scriptlet.inputs, vec!["name", "age"]);
+        assert_eq!(scriptlet.group, Some("Utils".to_string()));
+        assert!(scriptlet.is_scriptlet);
+    }
+
+    #[test]
+    fn test_scriptlet_data_deserialization_minimal() {
+        let json = r#"{"name":"X","command":"x","tool":"bash","content":"pwd"}"#;
+        let scriptlet: ScriptletData = serde_json::from_str(json).unwrap();
+        assert_eq!(scriptlet.name, "X");
+        assert!(scriptlet.inputs.is_empty());
+        assert!(!scriptlet.is_scriptlet); // defaults to false if not present
+    }
+
+    // ============================================================
+    // SCRIPTLET MESSAGE TESTS
+    // ============================================================
+
+    #[test]
+    fn test_serialize_run_scriptlet() {
+        let scriptlet = ScriptletData::new(
+            "Test".to_string(),
+            "test".to_string(),
+            "bash".to_string(),
+            "echo $1".to_string(),
+        );
+        let msg = Message::run_scriptlet(
+            "req-rs-1".to_string(),
+            scriptlet,
+            Some(serde_json::json!({"name": "World"})),
+            vec!["arg1".to_string()],
+        );
+        let json = serialize_message(&msg).unwrap();
+        assert!(json.contains("\"type\":\"runScriptlet\""));
+        assert!(json.contains("\"requestId\":\"req-rs-1\""));
+        assert!(json.contains("\"scriptlet\""));
+        assert!(json.contains("\"inputs\""));
+        assert!(json.contains("\"args\":[\"arg1\"]"));
+    }
+
+    #[test]
+    fn test_parse_run_scriptlet() {
+        let json = r#"{"type":"runScriptlet","requestId":"req-rs-2","scriptlet":{"name":"Test","command":"test","tool":"bash","content":"pwd","isScriptlet":true},"args":["a","b"]}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::RunScriptlet { request_id, scriptlet, inputs, args } => {
+                assert_eq!(request_id, "req-rs-2");
+                assert_eq!(scriptlet.name, "Test");
+                assert_eq!(scriptlet.tool, "bash");
+                assert_eq!(inputs, None);
+                assert_eq!(args, vec!["a", "b"]);
+            }
+            _ => panic!("Expected RunScriptlet message"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_get_scriptlets() {
+        let msg = Message::get_scriptlets("req-gs-1".to_string());
+        let json = serialize_message(&msg).unwrap();
+        assert!(json.contains("\"type\":\"getScriptlets\""));
+        assert!(json.contains("\"requestId\":\"req-gs-1\""));
+        // Optional fields should be omitted when None
+        assert!(!json.contains("\"kenv\""));
+        assert!(!json.contains("\"group\""));
+    }
+
+    #[test]
+    fn test_serialize_get_scriptlets_filtered() {
+        let msg = Message::get_scriptlets_filtered(
+            "req-gs-2".to_string(),
+            Some("main".to_string()),
+            Some("Utilities".to_string()),
+        );
+        let json = serialize_message(&msg).unwrap();
+        assert!(json.contains("\"type\":\"getScriptlets\""));
+        assert!(json.contains("\"kenv\":\"main\""));
+        assert!(json.contains("\"group\":\"Utilities\""));
+    }
+
+    #[test]
+    fn test_parse_get_scriptlets() {
+        let json = r#"{"type":"getScriptlets","requestId":"req-gs-3","kenv":"dev"}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::GetScriptlets { request_id, kenv, group } => {
+                assert_eq!(request_id, "req-gs-3");
+                assert_eq!(kenv, Some("dev".to_string()));
+                assert_eq!(group, None);
+            }
+            _ => panic!("Expected GetScriptlets message"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_scriptlet_list() {
+        let scriptlets = vec![
+            ScriptletData::new("A".to_string(), "a".to_string(), "bash".to_string(), "echo A".to_string()),
+            ScriptletData::new("B".to_string(), "b".to_string(), "ts".to_string(), "console.log('B')".to_string()),
+        ];
+        let msg = Message::scriptlet_list("req-sl-1".to_string(), scriptlets);
+        let json = serialize_message(&msg).unwrap();
+        assert!(json.contains("\"type\":\"scriptletList\""));
+        assert!(json.contains("\"requestId\":\"req-sl-1\""));
+        assert!(json.contains("\"scriptlets\""));
+        assert!(json.contains("\"name\":\"A\""));
+        assert!(json.contains("\"name\":\"B\""));
+    }
+
+    #[test]
+    fn test_parse_scriptlet_list() {
+        let json = r#"{"type":"scriptletList","requestId":"req-sl-2","scriptlets":[{"name":"X","command":"x","tool":"bash","content":"pwd","isScriptlet":true}]}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::ScriptletList { request_id, scriptlets } => {
+                assert_eq!(request_id, "req-sl-2");
+                assert_eq!(scriptlets.len(), 1);
+                assert_eq!(scriptlets[0].name, "X");
+            }
+            _ => panic!("Expected ScriptletList message"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_scriptlet_result_success() {
+        let msg = Message::scriptlet_result_success(
+            "req-sr-1".to_string(),
+            Some("Hello World\n".to_string()),
+            Some(0),
+        );
+        let json = serialize_message(&msg).unwrap();
+        assert!(json.contains("\"type\":\"scriptletResult\""));
+        assert!(json.contains("\"requestId\":\"req-sr-1\""));
+        assert!(json.contains("\"success\":true"));
+        assert!(json.contains("\"output\":\"Hello World\\n\""));
+        assert!(json.contains("\"exitCode\":0"));
+        assert!(!json.contains("\"error\""));
+    }
+
+    #[test]
+    fn test_serialize_scriptlet_result_error() {
+        let msg = Message::scriptlet_result_error(
+            "req-sr-2".to_string(),
+            "Command not found".to_string(),
+            Some(127),
+        );
+        let json = serialize_message(&msg).unwrap();
+        assert!(json.contains("\"type\":\"scriptletResult\""));
+        assert!(json.contains("\"success\":false"));
+        assert!(json.contains("\"error\":\"Command not found\""));
+        assert!(json.contains("\"exitCode\":127"));
+        assert!(!json.contains("\"output\""));
+    }
+
+    #[test]
+    fn test_parse_scriptlet_result_success() {
+        let json = r#"{"type":"scriptletResult","requestId":"req-sr-3","success":true,"output":"Done","exitCode":0}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::ScriptletResult { request_id, success, output, error, exit_code } => {
+                assert_eq!(request_id, "req-sr-3");
+                assert!(success);
+                assert_eq!(output, Some("Done".to_string()));
+                assert_eq!(error, None);
+                assert_eq!(exit_code, Some(0));
+            }
+            _ => panic!("Expected ScriptletResult message"),
+        }
+    }
+
+    #[test]
+    fn test_parse_scriptlet_result_error() {
+        let json = r#"{"type":"scriptletResult","requestId":"req-sr-4","success":false,"error":"Failed"}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::ScriptletResult { request_id, success, output, error, exit_code } => {
+                assert_eq!(request_id, "req-sr-4");
+                assert!(!success);
+                assert_eq!(output, None);
+                assert_eq!(error, Some("Failed".to_string()));
+                assert_eq!(exit_code, None);
+            }
+            _ => panic!("Expected ScriptletResult message"),
+        }
+    }
+
+    #[test]
+    fn test_scriptlet_message_ids() {
+        let scriptlet = ScriptletData::new("X".to_string(), "x".to_string(), "bash".to_string(), "pwd".to_string());
+        assert_eq!(Message::run_scriptlet("a".to_string(), scriptlet, None, vec![]).id(), Some("a"));
+        assert_eq!(Message::get_scriptlets("b".to_string()).id(), Some("b"));
+        assert_eq!(Message::get_scriptlets_filtered("c".to_string(), None, None).id(), Some("c"));
+        assert_eq!(Message::scriptlet_list("d".to_string(), vec![]).id(), Some("d"));
+        assert_eq!(Message::scriptlet_result_success("e".to_string(), None, None).id(), Some("e"));
+        assert_eq!(Message::scriptlet_result_error("f".to_string(), "err".to_string(), None).id(), Some("f"));
+    }
+
+    // ============================================================
+    // FORCE SUBMIT TESTS (stdin/stdout communication regression tests)
+    // These tests ensure the SDK submit() -> GPUI -> script stdin flow works
+    // ============================================================
+
+    #[test]
+    fn test_parse_force_submit_string() {
+        // SDK sends forceSubmit when user calls submit("value")
+        let json = r#"{"type":"forceSubmit","value":"selected-value"}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::ForceSubmit { value } => {
+                assert_eq!(value, serde_json::json!("selected-value"));
+            }
+            _ => panic!("Expected ForceSubmit message"),
+        }
+    }
+
+    #[test]
+    fn test_parse_force_submit_object() {
+        // SDK can submit complex objects
+        let json = r#"{"type":"forceSubmit","value":{"name":"test","count":42}}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::ForceSubmit { value } => {
+                assert_eq!(value["name"], "test");
+                assert_eq!(value["count"], 42);
+            }
+            _ => panic!("Expected ForceSubmit message"),
+        }
+    }
+
+    #[test]
+    fn test_parse_force_submit_null() {
+        // SDK can submit null (cancel/escape)
+        let json = r#"{"type":"forceSubmit","value":null}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::ForceSubmit { value } => {
+                assert!(value.is_null());
+            }
+            _ => panic!("Expected ForceSubmit message"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_submit_response() {
+        // GPUI sends submit message back to script's stdin
+        let msg = Message::Submit {
+            id: "1".to_string(),
+            value: Some("user-selection".to_string()),
+        };
+        let json = serialize_message(&msg).unwrap();
+        assert!(json.contains("\"type\":\"submit\""));
+        assert!(json.contains("\"id\":\"1\""));
+        assert!(json.contains("\"value\":\"user-selection\""));
+    }
+
+    #[test]
+    fn test_force_submit_roundtrip() {
+        // Simulate the full flow: SDK submit() -> GPUI -> script stdin
+        // 1. SDK sends forceSubmit
+        let sdk_json = r#"{"type":"forceSubmit","value":"auto-value"}"#;
+        let msg = parse_message(sdk_json).unwrap();
+        
+        // 2. GPUI extracts value and creates submit response
+        match msg {
+            Message::ForceSubmit { value } => {
+                let value_str = match &value {
+                    serde_json::Value::String(s) => Some(s.clone()),
+                    serde_json::Value::Null => None,
+                    other => Some(other.to_string()),
+                };
+                
+                let response = Message::Submit {
+                    id: "1".to_string(),
+                    value: value_str,
+                };
+                
+                // 3. Response is serialized and sent to script stdin
+                let response_json = serialize_message(&response).unwrap();
+                assert!(response_json.contains("\"value\":\"auto-value\""));
+                
+                // 4. Script parses the response
+                let parsed = parse_message(&response_json).unwrap();
+                match parsed {
+                    Message::Submit { id, value } => {
+                        assert_eq!(id, "1");
+                        assert_eq!(value, Some("auto-value".to_string()));
+                    }
+                    _ => panic!("Expected Submit message after roundtrip"),
+                }
+            }
+            _ => panic!("Expected ForceSubmit message"),
+        }
     }
 }

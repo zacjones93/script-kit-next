@@ -803,6 +803,15 @@ npx tsx scripts/scroll-bench.ts
 ### Problem: Spawn failures are silent
 **Solution**: Match on `Command::spawn()` result and log errors.
 
+### Problem: Script stdin not receiving data from GPUI
+**Solution**: This is almost always a debugging visibility issue, not an actual bug. GPUI captures script stderr but only reads it on exit. Add real-time stderr forwarding (see `src/main.rs` stderr reader thread) to see script debug output. The stdin pipe IS working if `lsof` shows matching pipe IDs between GPUI's write fd and bun's fd=0.
+
+### Problem: Script process doesn't exit after completing
+**Solution**: The SDK calls `process.stdin.resume()` which keeps the Node/Bun event loop alive. Add `(process.stdin as any).unref?.()` after `resume()` to allow the process to exit naturally when all async work is done. Without this, the process hangs indefinitely waiting for more stdin.
+
+### Problem: Can't see script console.error() output during execution
+**Solution**: GPUI captures stderr via `Stdio::piped()` but only reads it when the script exits (for error reporting). To see real-time stderr, spawn a dedicated stderr reader thread that forwards lines to `logging::log("SCRIPT", &line)`. See the stderr reader thread in `src/main.rs` for the pattern.
+
 ---
 
 ## 10. File Structure

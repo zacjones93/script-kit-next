@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Child, ChildStdin, ChildStdout, ChildStderr, Stdio};
 use std::io::{Write, BufReader};
 use std::time::{Duration, Instant};
 use crate::protocol::{Message, JsonlReader, serialize_message};
 use crate::logging;
+use crate::scriptlets::{Scriptlet, SHELL_TOOLS, format_scriptlet, process_conditionals};
 use tracing::{info, error, debug, warn, instrument};
 
 // ============================================================================
@@ -1127,11 +1129,542 @@ pub fn generate_suggestions(stderr: &str, exit_code: Option<i32>) -> Vec<String>
 }
 
 // ============================================================================
+// Scriptlet Execution
+// ============================================================================
+
+/// Options for scriptlet execution
+#[derive(Debug, Clone, Default)]
+pub struct ScriptletExecOptions {
+    /// Current working directory for script execution
+    pub cwd: Option<PathBuf>,
+    /// Commands to prepend before the main script content
+    pub prepend: Option<String>,
+    /// Commands to append after the main script content
+    pub append: Option<String>,
+    /// Named inputs for variable substitution
+    pub inputs: HashMap<String, String>,
+    /// Positional arguments for variable substitution
+    pub positional_args: Vec<String>,
+    /// Flags for conditional processing
+    pub flags: HashMap<String, bool>,
+}
+
+/// Result of a scriptlet execution
+#[derive(Debug)]
+pub struct ScriptletResult {
+    /// Exit code (0 = success)
+    pub exit_code: i32,
+    /// Standard output
+    pub stdout: String,
+    /// Standard error
+    pub stderr: String,
+    /// Whether execution was successful
+    pub success: bool,
+}
+
+/// Get the file extension for a given tool type
+#[cfg(test)]
+fn tool_extension(tool: &str) -> &'static str {
+    match tool {
+        "ruby" => "rb",
+        "python" => "py",
+        "perl" => "pl",
+        "php" => "php",
+        "bash" | "sh" => "sh",
+        "zsh" => "zsh",
+        "fish" => "fish",
+        "node" | "js" => "js",
+        "ts" | "kit" | "bun" | "deno" => "ts",
+        "applescript" => "applescript",
+        "powershell" | "pwsh" => "ps1",
+        "cmd" => "bat",
+        _ => "sh", // Default to shell script
+    }
+}
+
+/// Execute a scriptlet based on its tool type
+/// 
+/// # Arguments
+/// * `scriptlet` - The scriptlet to execute
+/// * `options` - Execution options (cwd, prepend, append, inputs, etc.)
+/// 
+/// # Returns
+/// A `ScriptletResult` with exit code, stdout, stderr, and success flag
+/// 
+/// # Tool Types Supported
+/// - Shell (bash, zsh, sh, fish): Write temp file, execute via shell
+/// - Scripting (python, ruby, perl, php, node): Write temp file with extension, execute
+/// - TypeScript (kit, ts, bun, deno): Write temp .ts file, run via bun
+/// - transform: Wrap with getSelectedText/setSelectedText (macOS only)
+/// - template: Returns content for template prompt invocation
+/// - open: Use `open` command (macOS) or `xdg-open` (Linux)
+/// - edit: Open in editor
+/// - paste: Set selected text via clipboard
+/// - type: Simulate keyboard typing
+/// - submit: Paste + enter
+#[instrument(skip_all, fields(tool = %scriptlet.tool, name = %scriptlet.name))]
+pub fn run_scriptlet(scriptlet: &Scriptlet, options: ScriptletExecOptions) -> Result<ScriptletResult, String> {
+    let start = Instant::now();
+    debug!(tool = %scriptlet.tool, name = %scriptlet.name, "Running scriptlet");
+    logging::log("EXEC", &format!("run_scriptlet: {} (tool: {})", scriptlet.name, scriptlet.tool));
+    
+    // Process conditionals and variable substitution
+    let content = process_conditionals(&scriptlet.scriptlet_content, &options.flags);
+    let is_windows = cfg!(target_os = "windows");
+    let content = format_scriptlet(&content, &options.inputs, &options.positional_args, is_windows);
+    
+    // Apply prepend/append
+    let content = build_final_content(&content, &options.prepend, &options.append);
+    
+    let tool = scriptlet.tool.to_lowercase();
+    
+    let result = match tool.as_str() {
+        // Shell tools
+        t if SHELL_TOOLS.contains(&t) => execute_shell_scriptlet(&tool, &content, &options),
+        
+        // Scripting languages
+        "python" => execute_with_interpreter("python3", &content, "py", &options),
+        "ruby" => execute_with_interpreter("ruby", &content, "rb", &options),
+        "perl" => execute_with_interpreter("perl", &content, "pl", &options),
+        "php" => execute_with_interpreter("php", &content, "php", &options),
+        "node" | "js" => execute_with_interpreter("node", &content, "js", &options),
+        "applescript" => execute_applescript(&content, &options),
+        
+        // TypeScript tools (run via bun)
+        "kit" | "ts" | "bun" | "deno" => execute_typescript(&content, &options),
+        
+        // Transform (get selected text, process, set selected text)
+        "transform" => execute_transform(&content, &options),
+        
+        // Template (return content for prompt invocation)
+        "template" => {
+            // Template just returns the processed content - the caller handles prompt invocation
+            Ok(ScriptletResult {
+                exit_code: 0,
+                stdout: content,
+                stderr: String::new(),
+                success: true,
+            })
+        }
+        
+        // Open URL/file
+        "open" => execute_open(&content, &options),
+        
+        // Edit file in editor
+        "edit" => execute_edit(&content, &options),
+        
+        // Paste text (set selected text)
+        "paste" => execute_paste(&content),
+        
+        // Type text via keyboard simulation
+        "type" => execute_type(&content),
+        
+        // Submit (paste + enter)
+        "submit" => execute_submit(&content),
+        
+        // Unknown tool - try as shell
+        _ => {
+            warn!(tool = %tool, "Unknown tool type, falling back to shell");
+            execute_shell_scriptlet("sh", &content, &options)
+        }
+    };
+    
+    let duration_ms = start.elapsed().as_millis() as u64;
+    match &result {
+        Ok(r) => {
+            info!(
+                duration_ms = duration_ms,
+                exit_code = r.exit_code,
+                tool = %tool,
+                "Scriptlet execution complete"
+            );
+            logging::log("EXEC", &format!(
+                "Scriptlet '{}' completed: exit={}, duration={}ms",
+                scriptlet.name, r.exit_code, duration_ms
+            ));
+        }
+        Err(e) => {
+            error!(duration_ms = duration_ms, error = %e, tool = %tool, "Scriptlet execution failed");
+            logging::log("EXEC", &format!("Scriptlet '{}' failed: {}", scriptlet.name, e));
+        }
+    }
+    
+    result
+}
+
+/// Build final content with prepend/append
+fn build_final_content(content: &str, prepend: &Option<String>, append: &Option<String>) -> String {
+    let mut result = String::new();
+    
+    if let Some(pre) = prepend {
+        result.push_str(pre);
+        if !pre.ends_with('\n') {
+            result.push('\n');
+        }
+    }
+    
+    result.push_str(content);
+    
+    if let Some(app) = append {
+        if !result.ends_with('\n') {
+            result.push('\n');
+        }
+        result.push_str(app);
+    }
+    
+    result
+}
+
+/// Execute a shell scriptlet (bash, zsh, sh, fish, etc.)
+fn execute_shell_scriptlet(shell: &str, content: &str, options: &ScriptletExecOptions) -> Result<ScriptletResult, String> {
+    logging::log("EXEC", &format!("Executing shell scriptlet with {}", shell));
+    
+    // Create temp file
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join(format!("scriptlet-{}.sh", std::process::id()));
+    
+    std::fs::write(&temp_file, content)
+        .map_err(|e| format!("Failed to write temp script: {}", e))?;
+    
+    // Make executable on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&temp_file)
+            .map_err(|e| format!("Failed to get file metadata: {}", e))?
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&temp_file, perms)
+            .map_err(|e| format!("Failed to set executable permission: {}", e))?;
+    }
+    
+    // Find the shell executable
+    let shell_path = find_executable(shell)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| shell.to_string());
+    
+    let mut cmd = Command::new(&shell_path);
+    cmd.arg(temp_file.to_str().unwrap());
+    
+    if let Some(ref cwd) = options.cwd {
+        cmd.current_dir(cwd);
+    }
+    
+    let output = cmd.output()
+        .map_err(|e| format!("Failed to execute shell script: {}", e))?;
+    
+    // Clean up temp file
+    let _ = std::fs::remove_file(&temp_file);
+    
+    Ok(ScriptletResult {
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        success: output.status.success(),
+    })
+}
+
+/// Execute a script with a specific interpreter
+fn execute_with_interpreter(interpreter: &str, content: &str, extension: &str, options: &ScriptletExecOptions) -> Result<ScriptletResult, String> {
+    logging::log("EXEC", &format!("Executing with interpreter: {}", interpreter));
+    
+    // Create temp file with appropriate extension
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join(format!("scriptlet-{}.{}", std::process::id(), extension));
+    
+    std::fs::write(&temp_file, content)
+        .map_err(|e| format!("Failed to write temp script: {}", e))?;
+    
+    // Find the interpreter
+    let interp_path = find_executable(interpreter)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| interpreter.to_string());
+    
+    let mut cmd = Command::new(&interp_path);
+    cmd.arg(temp_file.to_str().unwrap());
+    
+    if let Some(ref cwd) = options.cwd {
+        cmd.current_dir(cwd);
+    }
+    
+    let output = cmd.output()
+        .map_err(|e| format!("Failed to execute {} script: {}", interpreter, e))?;
+    
+    // Clean up temp file
+    let _ = std::fs::remove_file(&temp_file);
+    
+    Ok(ScriptletResult {
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        success: output.status.success(),
+    })
+}
+
+/// Execute AppleScript
+fn execute_applescript(content: &str, options: &ScriptletExecOptions) -> Result<ScriptletResult, String> {
+    logging::log("EXEC", "Executing AppleScript");
+    
+    let mut cmd = Command::new("osascript");
+    cmd.arg("-e").arg(content);
+    
+    if let Some(ref cwd) = options.cwd {
+        cmd.current_dir(cwd);
+    }
+    
+    let output = cmd.output()
+        .map_err(|e| format!("Failed to execute AppleScript: {}", e))?;
+    
+    Ok(ScriptletResult {
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        success: output.status.success(),
+    })
+}
+
+/// Execute TypeScript via bun
+fn execute_typescript(content: &str, options: &ScriptletExecOptions) -> Result<ScriptletResult, String> {
+    logging::log("EXEC", "Executing TypeScript via bun");
+    
+    // Create temp file
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join(format!("scriptlet-{}.ts", std::process::id()));
+    
+    std::fs::write(&temp_file, content)
+        .map_err(|e| format!("Failed to write temp script: {}", e))?;
+    
+    // Find bun
+    let bun_path = find_executable("bun")
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "bun".to_string());
+    
+    // Check if we should use SDK preload
+    let sdk_path = find_sdk_path();
+    
+    let mut cmd = Command::new(&bun_path);
+    cmd.arg("run");
+    
+    // Add preload if SDK exists
+    if let Some(ref sdk) = sdk_path {
+        if let Some(sdk_str) = sdk.to_str() {
+            cmd.arg("--preload").arg(sdk_str);
+        }
+    }
+    
+    cmd.arg(temp_file.to_str().unwrap());
+    
+    if let Some(ref cwd) = options.cwd {
+        cmd.current_dir(cwd);
+    }
+    
+    let output = cmd.output()
+        .map_err(|e| format!("Failed to execute TypeScript: {}", e))?;
+    
+    // Clean up temp file
+    let _ = std::fs::remove_file(&temp_file);
+    
+    Ok(ScriptletResult {
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        success: output.status.success(),
+    })
+}
+
+/// Execute transform scriptlet (get selected text, process, set selected text)
+#[cfg(target_os = "macos")]
+fn execute_transform(content: &str, options: &ScriptletExecOptions) -> Result<ScriptletResult, String> {
+    logging::log("EXEC", "Executing transform scriptlet");
+    
+    // Get selected text
+    let selected = selected_text::get_selected_text()
+        .map_err(|e| format!("Failed to get selected text: {}", e))?;
+    
+    // Create script that processes the input
+    // Wrap content in a function that receives selectedText and returns transformed text
+    let wrapper_script = format!(
+        r#"
+const selectedText = {};
+const transform = (text: string): string => {{
+{}
+}};
+const result = transform(selectedText);
+console.log(result);
+"#,
+        serde_json::to_string(&selected).unwrap_or_else(|_| "\"\"".to_string()),
+        content
+    );
+    
+    // Execute the transform script
+    let result = execute_typescript(&wrapper_script, options)?;
+    
+    if result.success {
+        // Set the transformed text back
+        let transformed = result.stdout.trim();
+        selected_text::set_selected_text(transformed)
+            .map_err(|e| format!("Failed to set selected text: {}", e))?;
+    }
+    
+    Ok(result)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn execute_transform(_content: &str, _options: &ScriptletExecOptions) -> Result<ScriptletResult, String> {
+    Err("Transform scriptlets are only supported on macOS".to_string())
+}
+
+/// Execute open command (open URL or file)
+fn execute_open(content: &str, _options: &ScriptletExecOptions) -> Result<ScriptletResult, String> {
+    logging::log("EXEC", &format!("Opening: {}", content.trim()));
+    
+    let target = content.trim();
+    
+    #[cfg(target_os = "macos")]
+    let cmd_name = "open";
+    #[cfg(target_os = "linux")]
+    let cmd_name = "xdg-open";
+    #[cfg(target_os = "windows")]
+    let cmd_name = "start";
+    
+    let output = Command::new(cmd_name)
+        .arg(target)
+        .output()
+        .map_err(|e| format!("Failed to open '{}': {}", target, e))?;
+    
+    Ok(ScriptletResult {
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        success: output.status.success(),
+    })
+}
+
+/// Execute edit command (open file in editor)
+fn execute_edit(content: &str, _options: &ScriptletExecOptions) -> Result<ScriptletResult, String> {
+    logging::log("EXEC", &format!("Editing: {}", content.trim()));
+    
+    let file_path = content.trim();
+    
+    // Get editor from environment or default
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| "code".to_string());
+    
+    // Find the editor executable
+    let editor_path = find_executable(&editor)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or(editor);
+    
+    let output = Command::new(&editor_path)
+        .arg(file_path)
+        .output()
+        .map_err(|e| format!("Failed to open editor '{}': {}", editor_path, e))?;
+    
+    Ok(ScriptletResult {
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        success: output.status.success(),
+    })
+}
+
+/// Execute paste command (set selected text via clipboard)
+#[cfg(target_os = "macos")]
+fn execute_paste(content: &str) -> Result<ScriptletResult, String> {
+    logging::log("EXEC", "Executing paste scriptlet");
+    
+    let text = content.trim();
+    
+    selected_text::set_selected_text(text)
+        .map_err(|e| format!("Failed to paste text: {}", e))?;
+    
+    Ok(ScriptletResult {
+        exit_code: 0,
+        stdout: String::new(),
+        stderr: String::new(),
+        success: true,
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn execute_paste(_content: &str) -> Result<ScriptletResult, String> {
+    Err("Paste scriptlets are only supported on macOS".to_string())
+}
+
+/// Execute type command (simulate keyboard typing)
+#[cfg(target_os = "macos")]
+fn execute_type(content: &str) -> Result<ScriptletResult, String> {
+    logging::log("EXEC", "Executing type scriptlet");
+    
+    let text = content.trim();
+    
+    // Use AppleScript to simulate typing
+    let script = format!(
+        r#"tell application "System Events" to keystroke "{}""#,
+        text.replace('\\', "\\\\").replace('"', "\\\"")
+    );
+    
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .output()
+        .map_err(|e| format!("Failed to type text: {}", e))?;
+    
+    Ok(ScriptletResult {
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        success: output.status.success(),
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn execute_type(_content: &str) -> Result<ScriptletResult, String> {
+    Err("Type scriptlets are only supported on macOS".to_string())
+}
+
+/// Execute submit command (paste + enter)
+#[cfg(target_os = "macos")]
+fn execute_submit(content: &str) -> Result<ScriptletResult, String> {
+    logging::log("EXEC", "Executing submit scriptlet");
+    
+    // First paste the text
+    let paste_result = execute_paste(content)?;
+    if !paste_result.success {
+        return Ok(paste_result);
+    }
+    
+    // Small delay to let paste complete
+    std::thread::sleep(Duration::from_millis(50));
+    
+    // Then press Enter using AppleScript
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(r#"tell application "System Events" to key code 36"#) // 36 is Return key
+        .output()
+        .map_err(|e| format!("Failed to press Enter: {}", e))?;
+    
+    Ok(ScriptletResult {
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        success: output.status.success(),
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn execute_submit(_content: &str) -> Result<ScriptletResult, String> {
+    Err("Submit scriptlets are only supported on macOS".to_string())
+}
+
+// ============================================================================
 // Selected Text Message Handlers
 // ============================================================================
 
 /// Result of handling a selected text message
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum SelectedTextHandleResult {
     /// Message was handled, here's the response to send back
     Handled(Message),
@@ -1882,5 +2415,267 @@ mod tests {
         let config = AutoSubmitConfig::default();
         assert_eq!(config.get_drop_value(), Some(r#"[{"path":"/tmp/test.txt"}]"#.to_string()),
             "Drop prompt should return test file array");
+    }
+
+    // ============================================================
+    // Scriptlet Execution Tests
+    // ============================================================
+    
+    use super::{run_scriptlet, ScriptletExecOptions, build_final_content, tool_extension};
+    use crate::scriptlets::Scriptlet;
+
+    #[test]
+    fn test_tool_extension() {
+        assert_eq!(tool_extension("ruby"), "rb");
+        assert_eq!(tool_extension("python"), "py");
+        assert_eq!(tool_extension("perl"), "pl");
+        assert_eq!(tool_extension("php"), "php");
+        assert_eq!(tool_extension("bash"), "sh");
+        assert_eq!(tool_extension("sh"), "sh");
+        assert_eq!(tool_extension("zsh"), "zsh");
+        assert_eq!(tool_extension("fish"), "fish");
+        assert_eq!(tool_extension("node"), "js");
+        assert_eq!(tool_extension("js"), "js");
+        assert_eq!(tool_extension("ts"), "ts");
+        assert_eq!(tool_extension("kit"), "ts");
+        assert_eq!(tool_extension("bun"), "ts");
+        assert_eq!(tool_extension("deno"), "ts");
+        assert_eq!(tool_extension("applescript"), "applescript");
+        assert_eq!(tool_extension("powershell"), "ps1");
+        assert_eq!(tool_extension("pwsh"), "ps1");
+        assert_eq!(tool_extension("cmd"), "bat");
+        assert_eq!(tool_extension("unknown"), "sh");
+    }
+
+    #[test]
+    fn test_build_final_content_no_modifications() {
+        let content = "echo hello";
+        let result = build_final_content(content, &None, &None);
+        assert_eq!(result, "echo hello");
+    }
+
+    #[test]
+    fn test_build_final_content_with_prepend() {
+        let content = "echo hello";
+        let prepend = Some("#!/bin/bash".to_string());
+        let result = build_final_content(content, &prepend, &None);
+        assert_eq!(result, "#!/bin/bash\necho hello");
+    }
+
+    #[test]
+    fn test_build_final_content_with_append() {
+        let content = "echo hello";
+        let append = Some("echo done".to_string());
+        let result = build_final_content(content, &None, &append);
+        assert_eq!(result, "echo hello\necho done");
+    }
+
+    #[test]
+    fn test_build_final_content_with_both() {
+        let content = "echo hello";
+        let prepend = Some("#!/bin/bash\nset -e".to_string());
+        let append = Some("echo done".to_string());
+        let result = build_final_content(content, &prepend, &append);
+        assert_eq!(result, "#!/bin/bash\nset -e\necho hello\necho done");
+    }
+
+    #[test]
+    fn test_build_final_content_handles_trailing_newlines() {
+        let content = "echo hello";
+        let prepend = Some("#!/bin/bash\n".to_string());
+        let result = build_final_content(content, &prepend, &None);
+        assert_eq!(result, "#!/bin/bash\necho hello");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_scriptlet_bash_echo() {
+        let scriptlet = Scriptlet::new(
+            "Echo Test".to_string(),
+            "bash".to_string(),
+            "echo hello".to_string(),
+        );
+        
+        let result = run_scriptlet(&scriptlet, ScriptletExecOptions::default());
+        assert!(result.is_ok(), "Expected success, got: {:?}", result);
+        
+        let result = result.unwrap();
+        assert!(result.success, "Script should succeed");
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("hello"), "Expected 'hello' in stdout: {}", result.stdout);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_scriptlet_bash_with_variable_substitution() {
+        let scriptlet = Scriptlet::new(
+            "Variable Test".to_string(),
+            "bash".to_string(),
+            "echo Hello {{name}}".to_string(),
+        );
+        
+        let mut inputs = HashMap::new();
+        inputs.insert("name".to_string(), "World".to_string());
+        
+        let options = ScriptletExecOptions {
+            inputs,
+            ..Default::default()
+        };
+        
+        let result = run_scriptlet(&scriptlet, options);
+        assert!(result.is_ok(), "Expected success, got: {:?}", result);
+        
+        let result = result.unwrap();
+        assert!(result.success);
+        assert!(result.stdout.contains("Hello World"), "Expected 'Hello World' in stdout: {}", result.stdout);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_scriptlet_bash_with_positional_args() {
+        let scriptlet = Scriptlet::new(
+            "Positional Test".to_string(),
+            "bash".to_string(),
+            "echo $1 and $2".to_string(),
+        );
+        
+        let options = ScriptletExecOptions {
+            positional_args: vec!["first".to_string(), "second".to_string()],
+            ..Default::default()
+        };
+        
+        let result = run_scriptlet(&scriptlet, options);
+        assert!(result.is_ok(), "Expected success, got: {:?}", result);
+        
+        let result = result.unwrap();
+        assert!(result.success);
+        assert!(result.stdout.contains("first and second"), "Expected 'first and second' in stdout: {}", result.stdout);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_scriptlet_with_prepend_append() {
+        let scriptlet = Scriptlet::new(
+            "Prepend Append Test".to_string(),
+            "bash".to_string(),
+            "echo middle".to_string(),
+        );
+        
+        let options = ScriptletExecOptions {
+            prepend: Some("echo start".to_string()),
+            append: Some("echo end".to_string()),
+            ..Default::default()
+        };
+        
+        let result = run_scriptlet(&scriptlet, options);
+        assert!(result.is_ok(), "Expected success, got: {:?}", result);
+        
+        let result = result.unwrap();
+        assert!(result.success);
+        let stdout = result.stdout;
+        assert!(stdout.contains("start"), "Should contain 'start': {}", stdout);
+        assert!(stdout.contains("middle"), "Should contain 'middle': {}", stdout);
+        assert!(stdout.contains("end"), "Should contain 'end': {}", stdout);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_scriptlet_with_cwd() {
+        let scriptlet = Scriptlet::new(
+            "CWD Test".to_string(),
+            "bash".to_string(),
+            "pwd".to_string(),
+        );
+        
+        let options = ScriptletExecOptions {
+            cwd: Some(PathBuf::from("/tmp")),
+            ..Default::default()
+        };
+        
+        let result = run_scriptlet(&scriptlet, options);
+        assert!(result.is_ok(), "Expected success, got: {:?}", result);
+        
+        let result = result.unwrap();
+        assert!(result.success);
+        // /tmp might be symlinked to /private/tmp on macOS
+        assert!(
+            result.stdout.contains("/tmp") || result.stdout.contains("/private/tmp"),
+            "Expected '/tmp' in stdout: {}", result.stdout
+        );
+    }
+
+    #[test]
+    fn test_run_scriptlet_template_returns_content() {
+        let scriptlet = Scriptlet::new(
+            "Template Test".to_string(),
+            "template".to_string(),
+            "Hello {{name}}!".to_string(),
+        );
+        
+        let mut inputs = HashMap::new();
+        inputs.insert("name".to_string(), "World".to_string());
+        
+        let options = ScriptletExecOptions {
+            inputs,
+            ..Default::default()
+        };
+        
+        let result = run_scriptlet(&scriptlet, options);
+        assert!(result.is_ok(), "Expected success, got: {:?}", result);
+        
+        let result = result.unwrap();
+        assert!(result.success);
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "Hello World!");
+    }
+
+    #[test]
+    fn test_run_scriptlet_with_conditionals() {
+        let scriptlet = Scriptlet::new(
+            "Conditional Test".to_string(),
+            "template".to_string(),
+            "{{#if formal}}Dear Sir{{else}}Hey there{{/if}}".to_string(),
+        );
+        
+        let mut flags = HashMap::new();
+        flags.insert("formal".to_string(), true);
+        
+        let options = ScriptletExecOptions {
+            flags,
+            ..Default::default()
+        };
+        
+        let result = run_scriptlet(&scriptlet, options);
+        assert!(result.is_ok());
+        
+        let result = result.unwrap();
+        assert!(result.stdout.contains("Dear Sir"), "Expected 'Dear Sir' in output: {}", result.stdout);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_scriptlet_open() {
+        // Just test that open doesn't error on a valid path
+        // We can't really verify it opens, but we can test the function runs
+        let scriptlet = Scriptlet::new(
+            "Open Test".to_string(),
+            "open".to_string(),
+            "/tmp".to_string(),
+        );
+        
+        let result = run_scriptlet(&scriptlet, ScriptletExecOptions::default());
+        // This should succeed on macOS/Linux with /tmp
+        assert!(result.is_ok(), "Expected success, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_scriptlet_exec_options_default() {
+        let options = ScriptletExecOptions::default();
+        assert!(options.cwd.is_none());
+        assert!(options.prepend.is_none());
+        assert!(options.append.is_none());
+        assert!(options.inputs.is_empty());
+        assert!(options.positional_args.is_empty());
+        assert!(options.flags.is_empty());
     }
 }

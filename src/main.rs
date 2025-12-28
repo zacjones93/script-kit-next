@@ -56,6 +56,9 @@ mod app_launcher;
 // Frecency tracking for script usage
 mod frecency;
 
+// Scriptlet parsing and variable substitution
+mod scriptlets;
+
 use tray::{TrayManager, TrayMenuAction};
 use editor::EditorPrompt;
 use window_resize::{ViewType, height_for_view, resize_first_window_to_height, initial_window_height, reset_resize_debounce, defer_resize_to_view};
@@ -504,6 +507,8 @@ enum PromptMessage {
     UnhandledMessage { message_type: String },
     /// Request to get current UI state - triggers StateResult response
     GetState { request_id: String },
+    /// Force submit the current prompt with a value (from SDK's submit() function)
+    ForceSubmit { value: serde_json::Value },
 }
 
 /// External commands that can be sent to the app via stdin
@@ -1461,9 +1466,129 @@ impl ScriptListApp {
         
         match action_id.as_str() {
             "create_script" => {
-                logging::log("UI", "Create script action - opening dialog");
-                // TODO: Implement create script dialog
-                self.last_output = Some(SharedString::from("Create script action (TODO)"));
+                logging::log("UI", "Create script action - opening scripts folder");
+                // Open ~/.kenv/scripts/ in Finder for now (future: create script dialog)
+                let scripts_dir = shellexpand::tilde("~/.kenv/scripts").to_string();
+                std::thread::spawn(move || {
+                    use std::process::Command;
+                    match Command::new("open").arg(&scripts_dir).spawn() {
+                        Ok(_) => logging::log("UI", &format!("Opened scripts folder: {}", scripts_dir)),
+                        Err(e) => logging::log("ERROR", &format!("Failed to open scripts folder: {}", e)),
+                    }
+                });
+                self.last_output = Some(SharedString::from("Opened scripts folder"));
+            }
+            "run_script" => {
+                logging::log("UI", "Run script action");
+                self.execute_selected(cx);
+            }
+            "view_logs" => {
+                logging::log("UI", "View logs action");
+                self.toggle_logs(cx);
+            }
+            "reveal_in_finder" => {
+                logging::log("UI", "Reveal in Finder action");
+                let filtered = self.filtered_results();
+                if let Some(result) = filtered.get(self.selected_index) {
+                    match result {
+                        scripts::SearchResult::Script(script_match) => {
+                            let path_str = script_match.script.path.to_string_lossy().to_string();
+                            std::thread::spawn(move || {
+                                use std::process::Command;
+                                match Command::new("open").arg("-R").arg(&path_str).spawn() {
+                                    Ok(_) => logging::log("UI", &format!("Revealed in Finder: {}", path_str)),
+                                    Err(e) => logging::log("ERROR", &format!("Failed to reveal in Finder: {}", e)),
+                                }
+                            });
+                            self.last_output = Some(SharedString::from("Revealed in Finder"));
+                        }
+                        scripts::SearchResult::Scriptlet(_) => {
+                            self.last_output = Some(SharedString::from("Cannot reveal scriptlets in Finder"));
+                        }
+                        scripts::SearchResult::BuiltIn(_) => {
+                            self.last_output = Some(SharedString::from("Cannot reveal built-in features"));
+                        }
+                        scripts::SearchResult::App(app_match) => {
+                            let path_str = app_match.app.path.to_string_lossy().to_string();
+                            std::thread::spawn(move || {
+                                use std::process::Command;
+                                match Command::new("open").arg("-R").arg(&path_str).spawn() {
+                                    Ok(_) => logging::log("UI", &format!("Revealed app in Finder: {}", path_str)),
+                                    Err(e) => logging::log("ERROR", &format!("Failed to reveal app in Finder: {}", e)),
+                                }
+                            });
+                            self.last_output = Some(SharedString::from("Revealed app in Finder"));
+                        }
+                        scripts::SearchResult::Window(_) => {
+                            self.last_output = Some(SharedString::from("Cannot reveal windows in Finder"));
+                        }
+                    }
+                } else {
+                    self.last_output = Some(SharedString::from("No item selected"));
+                }
+            }
+            "copy_path" => {
+                logging::log("UI", "Copy path action");
+                let filtered = self.filtered_results();
+                if let Some(result) = filtered.get(self.selected_index) {
+                    match result {
+                        scripts::SearchResult::Script(script_match) => {
+                            let path_str = script_match.script.path.to_string_lossy().to_string();
+                            use arboard::Clipboard;
+                            match Clipboard::new() {
+                                Ok(mut clipboard) => {
+                                    match clipboard.set_text(&path_str) {
+                                        Ok(_) => {
+                                            logging::log("UI", &format!("Copied path to clipboard: {}", path_str));
+                                            self.last_output = Some(SharedString::from(format!("Copied: {}", path_str)));
+                                        }
+                                        Err(e) => {
+                                            logging::log("ERROR", &format!("Failed to copy path: {}", e));
+                                            self.last_output = Some(SharedString::from("Failed to copy path"));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    logging::log("ERROR", &format!("Failed to access clipboard: {}", e));
+                                    self.last_output = Some(SharedString::from("Failed to access clipboard"));
+                                }
+                            }
+                        }
+                        scripts::SearchResult::Scriptlet(_) => {
+                            self.last_output = Some(SharedString::from("Cannot copy scriptlet path"));
+                        }
+                        scripts::SearchResult::BuiltIn(_) => {
+                            self.last_output = Some(SharedString::from("Cannot copy built-in path"));
+                        }
+                        scripts::SearchResult::App(app_match) => {
+                            let path_str = app_match.app.path.to_string_lossy().to_string();
+                            use arboard::Clipboard;
+                            match Clipboard::new() {
+                                Ok(mut clipboard) => {
+                                    match clipboard.set_text(&path_str) {
+                                        Ok(_) => {
+                                            logging::log("UI", &format!("Copied app path to clipboard: {}", path_str));
+                                            self.last_output = Some(SharedString::from(format!("Copied: {}", path_str)));
+                                        }
+                                        Err(e) => {
+                                            logging::log("ERROR", &format!("Failed to copy app path: {}", e));
+                                            self.last_output = Some(SharedString::from("Failed to copy path"));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    logging::log("ERROR", &format!("Failed to access clipboard: {}", e));
+                                    self.last_output = Some(SharedString::from("Failed to access clipboard"));
+                                }
+                            }
+                        }
+                        scripts::SearchResult::Window(_) => {
+                            self.last_output = Some(SharedString::from("Cannot copy window path"));
+                        }
+                    }
+                } else {
+                    self.last_output = Some(SharedString::from("No item selected"));
+                }
             }
             "edit_script" => {
                 logging::log("UI", "Edit script action");
@@ -1582,12 +1707,33 @@ impl ScriptListApp {
                 
                 let mut stdin = split.stdin;
                 let mut stdout_reader = split.stdout_reader;
-                // Capture stderr for error reporting
+                // Capture stderr for error reporting - we'll read it in real-time for debugging
                 let stderr_handle = split.stderr;
                 // CRITICAL: Keep process_handle and child alive - they kill the process on drop!
                 // We move them into the reader thread so they live until the script exits.
                 let _process_handle = split.process_handle;
                 let mut _child = split.child;
+                
+                // Stderr reader thread - forwards script stderr to logs in real-time
+                if let Some(stderr) = stderr_handle {
+                    std::thread::spawn(move || {
+                        use std::io::BufRead;
+                        let reader = std::io::BufReader::new(stderr);
+                        for line in reader.lines() {
+                            match line {
+                                Ok(l) => logging::log("SCRIPT", &l),
+                                Err(e) => {
+                                    logging::log("SCRIPT", &format!("stderr read error: {}", e));
+                                    break;
+                                }
+                            }
+                        }
+                        logging::log("SCRIPT", "stderr reader exiting");
+                    });
+                }
+                
+                // Now stderr_handle is consumed, we pass None to reader thread
+                let stderr_handle: Option<std::process::ChildStderr> = None;
                 
                 // Channel for sending responses from UI to writer thread
                 let (response_tx, response_rx) = mpsc::channel::<Message>();
@@ -1599,6 +1745,26 @@ impl ScriptListApp {
                 // Writer thread - handles sending responses to script
                 std::thread::spawn(move || {
                     use std::io::Write;
+                    use std::os::unix::io::AsRawFd;
+                    
+                    // Log the stdin file descriptor for debugging
+                    let fd = stdin.as_raw_fd();
+                    logging::log("EXEC", &format!("Writer thread started, stdin fd={}", fd));
+                    
+                    // Check if fd is a valid pipe
+                    #[cfg(unix)]
+                    {
+                        let stat_result = unsafe {
+                            let mut stat: libc::stat = std::mem::zeroed();
+                            libc::fstat(fd, &mut stat)
+                        };
+                        if stat_result == 0 {
+                            logging::log("EXEC", &format!("fd={} fstat succeeded", fd));
+                        } else {
+                            logging::log("EXEC", &format!("fd={} fstat FAILED: errno={}", fd, std::io::Error::last_os_error()));
+                        }
+                    }
+                    
                     loop {
                         match response_rx.recv() {
                             Ok(response) => {
@@ -1609,16 +1775,28 @@ impl ScriptListApp {
                                         continue;
                                     }
                                 };
-                                logging::log("EXEC", &format!("Sending to script: {}", json));
-                                if let Err(e) = writeln!(stdin, "{}", json) {
-                                    logging::log("EXEC", &format!("Failed to write: {}", e));
-                                    break;
+                                logging::log("EXEC", &format!("Writing to stdin fd={}: {}", fd, json));
+                                let bytes = format!("{}\n", json);
+                                let bytes_len = bytes.len();
+                                
+                                // Check fd validity before write
+                                let fcntl_result = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+                                logging::log("EXEC", &format!("Pre-write fcntl(F_GETFD) on fd={}: {}", fd, fcntl_result));
+                                
+                                match stdin.write_all(bytes.as_bytes()) {
+                                    Ok(()) => {
+                                        logging::log("EXEC", &format!("Write succeeded: {} bytes to fd={}", bytes_len, fd));
+                                    }
+                                    Err(e) => {
+                                        logging::log("EXEC", &format!("Failed to write {} bytes: {} (kind={:?})", bytes_len, e, e.kind()));
+                                        break;
+                                    }
                                 }
                                 if let Err(e) = stdin.flush() {
-                                    logging::log("EXEC", &format!("Failed to flush: {}", e));
+                                    logging::log("EXEC", &format!("Failed to flush fd={}: {}", fd, e));
                                     break;
                                 }
-                                logging::log("EXEC", "Response sent to script");
+                                logging::log("EXEC", &format!("Flush succeeded for fd={}", fd));
                             }
                             Err(_) => {
                                 logging::log("EXEC", "Response channel closed, writer exiting");
@@ -1626,6 +1804,7 @@ impl ScriptListApp {
                             }
                         }
                     }
+                    logging::log("EXEC", "Writer thread exiting");
                 });
                 
                 // Reader thread - handles receiving messages from script (blocking is OK here)
@@ -2102,6 +2281,9 @@ impl ScriptListApp {
                                                 Message::Exit { .. } => {
                                                     Some(PromptMessage::ScriptExit)
                                                 }
+                                                Message::ForceSubmit { value } => {
+                                                    Some(PromptMessage::ForceSubmit { value })
+                                                }
                                     Message::Hide {} => {
                                         Some(PromptMessage::HideWindow)
                                     }
@@ -2247,12 +2429,87 @@ impl ScriptListApp {
     }
     
     /// Execute a scriptlet (simple code snippet from .md file)
-    fn execute_scriptlet(&mut self, scriptlet: &scripts::Scriptlet, _cx: &mut Context<Self>) {
-        logging::log("EXEC", &format!("Executing scriptlet: {}", scriptlet.name));
+    fn execute_scriptlet(&mut self, scriptlet: &scripts::Scriptlet, cx: &mut Context<Self>) {
+        logging::log("EXEC", &format!("Executing scriptlet: {} (tool: {})", scriptlet.name, scriptlet.tool));
         
-        // For now, just log it - scriptlets are passive code snippets
-        // Future implementation could copy to clipboard, execute, or display
-        self.last_output = Some(SharedString::from(format!("Scriptlet: {}", scriptlet.name)));
+        // Convert scripts::Scriptlet to scriptlets::Scriptlet for executor
+        let exec_scriptlet = scriptlets::Scriptlet {
+            name: scriptlet.name.clone(),
+            command: scriptlet.command.clone().unwrap_or_else(|| {
+                // Generate command slug from name if not present
+                scriptlet.name.to_lowercase().replace(' ', "-")
+            }),
+            tool: scriptlet.tool.clone(),
+            scriptlet_content: scriptlet.code.clone(),
+            inputs: vec![], // TODO: Parse inputs from code if needed
+            group: scriptlet.group.clone().unwrap_or_default(),
+            preview: None,
+            metadata: scriptlets::ScriptletMetadata {
+                shortcut: scriptlet.shortcut.clone(),
+                expand: scriptlet.expand.clone(),
+                description: scriptlet.description.clone(),
+                ..Default::default()
+            },
+            kenv: None,
+            source_path: scriptlet.file_path.clone(),
+        };
+        
+        // Execute with default options (no inputs for now)
+        let options = executor::ScriptletExecOptions::default();
+        
+        match executor::run_scriptlet(&exec_scriptlet, options) {
+            Ok(result) => {
+                if result.success {
+                    logging::log("EXEC", &format!(
+                        "Scriptlet '{}' succeeded: exit={}", 
+                        scriptlet.name, result.exit_code
+                    ));
+                    
+                    // Store output if any
+                    if !result.stdout.is_empty() {
+                        self.last_output = Some(SharedString::from(result.stdout.clone()));
+                    }
+                    
+                    // Hide window after successful execution
+                    WINDOW_VISIBLE.store(false, Ordering::SeqCst);
+                    cx.hide();
+                } else {
+                    // Execution failed (non-zero exit code)
+                    let error_msg = if !result.stderr.is_empty() {
+                        result.stderr.clone()
+                    } else {
+                        format!("Exit code: {}", result.exit_code)
+                    };
+                    
+                    logging::log("ERROR", &format!(
+                        "Scriptlet '{}' failed: {}", 
+                        scriptlet.name, error_msg
+                    ));
+                    
+                    self.toast_manager.push(
+                        components::toast::Toast::error(
+                            format!("Scriptlet failed: {}", error_msg),
+                            &self.theme
+                        ).duration_ms(Some(5000))
+                    );
+                    cx.notify();
+                }
+            }
+            Err(e) => {
+                logging::log("ERROR", &format!(
+                    "Failed to execute scriptlet '{}': {}", 
+                    scriptlet.name, e
+                ));
+                
+                self.toast_manager.push(
+                    components::toast::Toast::error(
+                        format!("Failed to execute: {}", e),
+                        &self.theme
+                    ).duration_ms(Some(5000))
+                );
+                cx.notify();
+            }
+        }
     }
     
     /// Execute a built-in feature
@@ -2840,6 +3097,33 @@ impl ScriptListApp {
                     }
                 } else {
                     logging::log("ERROR", "No response sender available for state result");
+                }
+            }
+            PromptMessage::ForceSubmit { value } => {
+                logging::log("UI", &format!("ForceSubmit received with value: {:?}", value));
+                
+                // Get the current prompt ID and submit the value
+                let prompt_id = match &self.current_view {
+                    AppView::ArgPrompt { id, .. } => Some(id.clone()),
+                    AppView::DivPrompt { id, .. } => Some(id.clone()),
+                    AppView::FormPrompt { id, .. } => Some(id.clone()),
+                    AppView::TermPrompt { id, .. } => Some(id.clone()),
+                    AppView::EditorPrompt { id, .. } => Some(id.clone()),
+                    _ => None,
+                };
+                
+                if let Some(id) = prompt_id {
+                    // Convert serde_json::Value to String for submission
+                    let value_str = match &value {
+                        serde_json::Value::String(s) => s.clone(),
+                        serde_json::Value::Null => String::new(),
+                        other => other.to_string(),
+                    };
+                    
+                    logging::log("UI", &format!("ForceSubmit: submitting '{}' for prompt '{}'", value_str, id));
+                    self.submit_prompt_response(id, Some(value_str), cx);
+                } else {
+                    logging::log("WARN", "ForceSubmit received but no active prompt to submit to");
                 }
             }
          }

@@ -38,3 +38,9 @@ pub mod file_search;
 // Built-in features registry
 pub mod builtins;
 pub mod app_launcher;
+
+// Frecency tracking for script usage
+pub mod frecency;
+
+// Scriptlet parsing and variable substitution
+pub mod scriptlets;

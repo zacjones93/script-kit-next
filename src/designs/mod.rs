@@ -499,8 +499,9 @@ mod tests {
         assert_eq!(get_item_height(DesignVariant::Compact), COMPACT_ITEM_HEIGHT);
         assert_eq!(get_item_height(DesignVariant::Compact), 24.0);
         
-        // Default and others use standard height (40px - tighter layout)
+        // Default and others use standard height (40px - matching LIST_ITEM_HEIGHT constant)
         assert_eq!(get_item_height(DesignVariant::Default), crate::list_item::LIST_ITEM_HEIGHT);
+        assert_eq!(get_item_height(DesignVariant::Default), 40.0);
         assert_eq!(get_item_height(DesignVariant::Brutalist), crate::list_item::LIST_ITEM_HEIGHT);
     }
     

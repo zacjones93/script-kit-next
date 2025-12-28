@@ -401,7 +401,7 @@ impl DesignTokens for DefaultDesignTokens {
     }
 
     fn item_height(&self) -> f32 {
-        40.0 // Compact list item height (reduced from 52px to match original Script Kit)
+        40.0 // Standard list item height matching LIST_ITEM_HEIGHT constant
     }
 
     fn variant(&self) -> DesignVariant {
@@ -876,7 +876,7 @@ impl DesignTokens for BrutalistDesignTokens {
     }
 
     fn item_height(&self) -> f32 {
-        40.0 // Updated to match tighter layout
+        40.0 // Standard list item height matching LIST_ITEM_HEIGHT constant
     }
 
     fn variant(&self) -> DesignVariant {
@@ -1061,7 +1061,7 @@ impl DesignTokens for NeonCyberpunkDesignTokens {
     }
 
     fn item_height(&self) -> f32 {
-        40.0 // Updated to match tighter layout
+        34.0 // Compact list item height matching LIST_ITEM_HEIGHT constant
     }
 
     fn variant(&self) -> DesignVariant {
@@ -1181,7 +1181,7 @@ impl DesignTokens for PaperDesignTokens {
     }
 
     fn item_height(&self) -> f32 {
-        40.0 // Updated to match tighter layout
+        34.0 // Compact list item height matching LIST_ITEM_HEIGHT constant
     }
 
     fn variant(&self) -> DesignVariant {
@@ -1572,7 +1572,7 @@ pub type DesignTokensBox = Box<dyn DesignTokens>;
 /// - Use `AnyElement` as the return type to allow flexible element trees
 /// - Access app state through the provided app reference
 /// - Follow the project's theme system
-/// - Use `LIST_ITEM_HEIGHT` (40.0) for consistent item sizing
+/// - Use `LIST_ITEM_HEIGHT` (34.0) for consistent item sizing
 pub trait DesignRenderer<App>: Send + Sync {
     /// Render the script list in this design's style
     ///
