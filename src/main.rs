@@ -760,6 +760,8 @@ struct ScriptListApp {
     current_design: DesignVariant,
     // Toast manager for notification queue
     toast_manager: ToastManager,
+    // Cache for decoded clipboard images (entry_id -> RenderImage)
+    clipboard_image_cache: std::collections::HashMap<String, Arc<gpui::RenderImage>>,
 }
 
 impl ScriptListApp {
@@ -910,6 +912,8 @@ impl ScriptListApp {
             current_design: DesignVariant::default(),
             // Toast manager: initialize for error notifications
             toast_manager: ToastManager::new(),
+            // Clipboard image cache: decoded RenderImages for thumbnails/preview
+            clipboard_image_cache: std::collections::HashMap::new(),
         }
     }
     
@@ -4858,6 +4862,20 @@ impl ScriptListApp {
         let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
         let box_shadows = self.create_box_shadows();
         
+        // Pre-decode and cache images for visible entries
+        // Do this ONCE before rendering, not inside the render closure
+        for entry in &entries {
+            if entry.content_type == clipboard_history::ContentType::Image 
+               && !self.clipboard_image_cache.contains_key(&entry.id) {
+                if let Some(render_image) = clipboard_history::decode_to_render_image(&entry.content) {
+                    self.clipboard_image_cache.insert(entry.id.clone(), render_image);
+                }
+            }
+        }
+        
+        // Clone the cache for use in closures
+        let image_cache = self.clipboard_image_cache.clone();
+        
         // Filter entries based on current filter
         let filtered_entries: Vec<_> = if filter.is_empty() {
             entries.iter().enumerate().collect()
@@ -4986,6 +5004,7 @@ impl ScriptListApp {
             // Clone data for the closure
             let entries_for_closure: Vec<_> = filtered_entries.iter().map(|(i, e)| (*i, (*e).clone())).collect();
             let selected = selected_index;
+            let image_cache_for_list = image_cache.clone();
             
             uniform_list(
                 "clipboard-history",
@@ -4995,9 +5014,23 @@ impl ScriptListApp {
                         if let Some((_, entry)) = entries_for_closure.get(ix) {
                             let is_selected = ix == selected;
                             
-                            // Truncate content for display
+                            // Get cached thumbnail for images
+                            let cached_image = if entry.content_type == clipboard_history::ContentType::Image {
+                                image_cache_for_list.get(&entry.id).cloned()
+                            } else {
+                                None
+                            };
+                            
+                            // Truncate content for display (show dimensions for images)
                             let display_content = match entry.content_type {
-                                clipboard_history::ContentType::Image => "[Image]".to_string(),
+                                clipboard_history::ContentType::Image => {
+                                    // Show image dimensions instead of "[Image]"
+                                    if let Some((w, h)) = clipboard_history::get_image_dimensions(&entry.content) {
+                                        format!("{}×{} image", w, h)
+                                    } else {
+                                        "Image".to_string()
+                                    }
+                                }
                                 clipboard_history::ContentType::Text => {
                                     let truncated: String = entry.content.chars().take(50).collect();
                                     if entry.content.len() > 50 {
@@ -5028,13 +5061,19 @@ impl ScriptListApp {
                                 display_content
                             };
                             
+                            // Build list item with optional thumbnail
+                            let mut item = ListItem::new(name, list_colors)
+                                .description_opt(Some(relative_time))
+                                .selected(is_selected);
+                            
+                            // Add thumbnail for images
+                            if let Some(render_image) = cached_image {
+                                item = item.icon_image(render_image);
+                            }
+                            
                             div()
                                 .id(ix)
-                                .child(
-                                    ListItem::new(name, list_colors)
-                                        .description_opt(Some(relative_time))
-                                        .selected(is_selected)
-                                )
+                                .child(item)
                         } else {
                             div().id(ix).h(px(LIST_ITEM_HEIGHT))
                         }
@@ -5048,7 +5087,7 @@ impl ScriptListApp {
         
         // Build preview panel for selected entry
         let selected_entry = filtered_entries.get(selected_index).map(|(_, e)| (*e).clone());
-        let preview_panel = self.render_clipboard_preview_panel(&selected_entry, &design_colors, &design_spacing, &design_typography, &design_visual);
+        let preview_panel = self.render_clipboard_preview_panel(&selected_entry, &image_cache, &design_colors, &design_spacing, &design_typography, &design_visual);
         
         div()
             .flex()
@@ -5159,6 +5198,7 @@ impl ScriptListApp {
     fn render_clipboard_preview_panel(
         &self,
         selected_entry: &Option<clipboard_history::ClipboardEntry>,
+        image_cache: &std::collections::HashMap<String, Arc<gpui::RenderImage>>,
         colors: &designs::DesignColors,
         spacing: &designs::DesignSpacing,
         typography: &designs::DesignTypography,
@@ -5292,15 +5332,73 @@ impl ScriptListApp {
                             );
                     }
                     clipboard_history::ContentType::Image => {
-                        // Parse image metadata from content string
-                        // Format: "rgba:W:H:base64data"
-                        let parts: Vec<&str> = entry.content.splitn(4, ':').collect();
-                        let (width, height) = if parts.len() >= 3 {
-                            let w = parts[1].parse::<u32>().unwrap_or(0);
-                            let h = parts[2].parse::<u32>().unwrap_or(0);
-                            (w, h)
+                        // Get image dimensions
+                        let (width, height) = clipboard_history::get_image_dimensions(&entry.content)
+                            .unwrap_or((0, 0));
+                        
+                        // Try to get cached render image
+                        let cached_image = image_cache.get(&entry.id).cloned();
+                        
+                        let image_container = if let Some(render_image) = cached_image {
+                            // Calculate display size that fits in the preview panel
+                            // Max size is 300x300, maintain aspect ratio
+                            let max_size: f32 = 300.0;
+                            let (display_w, display_h) = if width > 0 && height > 0 {
+                                let w = width as f32;
+                                let h = height as f32;
+                                let scale = (max_size / w).min(max_size / h).min(1.0);
+                                (w * scale, h * scale)
+                            } else {
+                                (max_size, max_size)
+                            };
+                            
+                            div()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap_2()
+                                // Actual image thumbnail
+                                .child(
+                                    gpui::img(move |_window: &mut Window, _cx: &mut App| {
+                                        Some(Ok(render_image.clone()))
+                                    })
+                                    .w(px(display_w))
+                                    .h(px(display_h))
+                                    .object_fit(gpui::ObjectFit::Contain)
+                                    .rounded(px(visual.radius_sm))
+                                )
+                                // Dimensions label below image
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(rgb(text_secondary))
+                                        .child(format!("{}×{} pixels", width, height))
+                                )
                         } else {
-                            (0, 0)
+                            // Fallback if image not in cache (shouldn't happen)
+                            div()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_2xl()
+                                        .child("🖼️")
+                                )
+                                .child(
+                                    div()
+                                        .text_lg()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(rgb(text_primary))
+                                        .child(format!("{}×{}", width, height))
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(rgb(text_muted))
+                                        .child("Loading image...")
+                                )
                         };
                         
                         panel = panel.child(
@@ -5313,34 +5411,8 @@ impl ScriptListApp {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .items_center()
-                                        .gap_2()
-                                        // Image icon
-                                        .child(
-                                            div()
-                                                .text_2xl()
-                                                .child("🖼️")
-                                        )
-                                        // Dimensions
-                                        .child(
-                                            div()
-                                                .text_lg()
-                                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                .text_color(rgb(text_primary))
-                                                .child(format!("{}×{}", width, height))
-                                        )
-                                        // Label
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(rgb(text_muted))
-                                                .child("Image data")
-                                        )
-                                )
+                                .overflow_hidden()
+                                .child(image_container)
                         );
                     }
                 }

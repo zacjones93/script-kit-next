@@ -22,7 +22,9 @@
 use anyhow::{Context, Result};
 use arboard::Clipboard;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use gpui::RenderImage;
 use rusqlite::{params, Connection};
+use smallvec::SmallVec;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
@@ -555,6 +557,64 @@ fn decode_base64_image(content: &str) -> Option<arboard::ImageData<'static>> {
         height,
         bytes: bytes.into(),
     })
+}
+
+/// Decode a clipboard image content string to GPUI RenderImage
+///
+/// Parses the RGBA format "rgba:{width}:{height}:{base64_data}" and creates
+/// a RenderImage suitable for display in GPUI. Returns an Arc<RenderImage>
+/// for efficient caching.
+///
+/// **IMPORTANT**: Call this ONCE per entry and cache the result. Do NOT
+/// decode during rendering as this is expensive.
+pub fn decode_to_render_image(content: &str) -> Option<Arc<RenderImage>> {
+    // Format: "rgba:{width}:{height}:{base64_data}"
+    let parts: Vec<&str> = content.splitn(4, ':').collect();
+    if parts.len() != 4 || parts[0] != "rgba" {
+        warn!("Invalid clipboard image format, expected rgba:W:H:data");
+        return None;
+    }
+
+    let width: u32 = parts[1].parse().ok()?;
+    let height: u32 = parts[2].parse().ok()?;
+    let rgba_bytes = BASE64.decode(parts[3]).ok()?;
+
+    // Verify byte count matches dimensions (RGBA = 4 bytes per pixel)
+    let expected_bytes = (width as usize) * (height as usize) * 4;
+    if rgba_bytes.len() != expected_bytes {
+        warn!(
+            "Clipboard image byte count mismatch: expected {}, got {}",
+            expected_bytes,
+            rgba_bytes.len()
+        );
+        return None;
+    }
+
+    // Create image::RgbaImage from raw bytes
+    let rgba_image = image::RgbaImage::from_raw(width, height, rgba_bytes)?;
+
+    // Create Frame from RGBA buffer
+    let frame = image::Frame::new(rgba_image);
+
+    // Create RenderImage with a single frame
+    let render_image = RenderImage::new(SmallVec::from_elem(frame, 1));
+
+    debug!(width, height, "Decoded clipboard image to RenderImage");
+    Some(Arc::new(render_image))
+}
+
+/// Get image dimensions from content string without decoding
+///
+/// Returns (width, height) if the content is a valid image format.
+pub fn get_image_dimensions(content: &str) -> Option<(u32, u32)> {
+    let parts: Vec<&str> = content.splitn(4, ':').collect();
+    if parts.len() >= 3 && parts[0] == "rgba" {
+        let width: u32 = parts[1].parse().ok()?;
+        let height: u32 = parts[2].parse().ok()?;
+        Some((width, height))
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
