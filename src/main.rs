@@ -77,7 +77,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use protocol::{Message, Choice};
 use actions::{ActionsDialog, ScriptInfo};
 use syntax::highlight_code_lines;
-use panel::DEFAULT_PLACEHOLDER;
+use panel::{DEFAULT_PLACEHOLDER, CURSOR_HEIGHT_LG, CURSOR_MARGIN_Y};
 
 /// Channel for sending prompt messages from script thread to UI
 #[allow(dead_code)]
@@ -4675,7 +4675,8 @@ impl ScriptListApp {
                             .when(filter_is_empty, |d| d.child(
                                 div()
                                     .w(px(design_visual.border_normal))
-                                    .h(px(design_typography.font_size_lg * design_typography.line_height_normal))
+                                    .h(px(CURSOR_HEIGHT_LG))
+                                    .my(px(CURSOR_MARGIN_Y))
                                     .mr(px(design_spacing.padding_xs))
                                     .when(self.focused_input == FocusedInput::MainFilter && self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
@@ -4683,7 +4684,8 @@ impl ScriptListApp {
                             .when(!filter_is_empty, |d| d.child(
                                 div()
                                     .w(px(design_visual.border_normal))
-                                    .h(px(design_typography.font_size_lg * design_typography.line_height_normal))
+                                    .h(px(CURSOR_HEIGHT_LG))
+                                    .my(px(CURSOR_MARGIN_Y))
                                     .ml(px(design_visual.border_normal))
                                     .when(self.focused_input == FocusedInput::MainFilter && self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
@@ -4855,26 +4857,30 @@ impl ScriptListApp {
                             .min_h(px(0.))  // Allow shrinking
                             .child(list_element)
                     )
-                    // Right side: Preview panel (50% width)
-                    // CONDITIONAL: Show actions dialog OR normal preview
+                    // Right side: Preview panel (50% width) with actions overlay
+                    // Preview ALWAYS renders, actions panel overlays on top when visible
                     .child(
                         div()
+                            .relative()   // Enable absolute positioning for overlay
                             .w_1_2()      // 50% width
                             .h_full()     // Take full height
                             .min_h(px(0.))  // Allow shrinking
                             .overflow_hidden()
-                            // When NOT in actions mode, show normal preview
-                            .when(!self.show_actions_popup, |d| d.child(self.render_preview_panel(cx)))
-                            // When IN actions mode, show actions dialog inline
-                            // Use flex + justify_end to position dialog closer to right edge
+                            // Preview panel ALWAYS renders (visible behind actions overlay)
+                            .child(self.render_preview_panel(cx))
+                            // Actions dialog overlays on top using absolute positioning
                             .when_some(
                                 if self.show_actions_popup { self.actions_dialog.clone() } else { None },
-                                |d, dialog| d
-                                    .flex()
-                                    .justify_end()
-                                    .pr(px(8.))  // Small padding from right edge
-                                    .pt(px(8.))  // Small padding from top
-                                    .child(dialog)
+                                |d, dialog| d.child(
+                                    div()
+                                        .absolute()
+                                        .inset_0()    // Cover entire preview area
+                                        .flex()
+                                        .justify_end()
+                                        .pr(px(8.))   // Small padding from right edge
+                                        .pt(px(8.))   // Small padding from top
+                                        .child(dialog)
+                                )
                             )
                     ),
             );
@@ -5085,7 +5091,8 @@ impl ScriptListApp {
                             .when(input_is_empty, |d| d.child(
                                 div()
                                     .w(px(design_visual.border_normal))
-                                    .h(px(design_typography.font_size_lg * design_typography.line_height_normal))
+                                    .h(px(CURSOR_HEIGHT_LG))
+                                    .my(px(CURSOR_MARGIN_Y))
                                     .mr(px(design_spacing.padding_xs))
                                     .when(self.focused_input == FocusedInput::ArgPrompt && self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
@@ -5093,7 +5100,8 @@ impl ScriptListApp {
                             .when(!input_is_empty, |d| d.child(
                                 div()
                                     .w(px(design_visual.border_normal))
-                                    .h(px(design_typography.font_size_lg * design_typography.line_height_normal))
+                                    .h(px(CURSOR_HEIGHT_LG))
+                                    .my(px(CURSOR_MARGIN_Y))
                                     .ml(px(design_visual.border_normal))
                                     .when(self.focused_input == FocusedInput::ArgPrompt && self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
@@ -5760,7 +5768,8 @@ impl ScriptListApp {
                             .when(input_is_empty, |d| d.child(
                                 div()
                                     .w(px(design_visual.border_normal))
-                                    .h(px(design_typography.font_size_lg * design_typography.line_height_normal))
+                                    .h(px(CURSOR_HEIGHT_LG))
+                                    .my(px(CURSOR_MARGIN_Y))
                                     .mr(px(design_spacing.padding_xs))
                                     .when(self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
@@ -5768,7 +5777,8 @@ impl ScriptListApp {
                             .when(!input_is_empty, |d| d.child(
                                 div()
                                     .w(px(design_visual.border_normal))
-                                    .h(px(design_typography.font_size_lg * design_typography.line_height_normal))
+                                    .h(px(CURSOR_HEIGHT_LG))
+                                    .my(px(CURSOR_MARGIN_Y))
                                     .ml(px(design_visual.border_normal))
                                     .when(self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
@@ -6282,7 +6292,8 @@ impl ScriptListApp {
                             .when(input_is_empty, |d| d.child(
                                 div()
                                     .w(px(design_visual.border_normal))
-                                    .h(px(design_typography.font_size_lg * design_typography.line_height_normal))
+                                    .h(px(CURSOR_HEIGHT_LG))
+                                    .my(px(CURSOR_MARGIN_Y))
                                     .mr(px(design_spacing.padding_xs))
                                     .when(self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
@@ -6290,7 +6301,8 @@ impl ScriptListApp {
                             .when(!input_is_empty, |d| d.child(
                                 div()
                                     .w(px(design_visual.border_normal))
-                                    .h(px(design_typography.font_size_lg * design_typography.line_height_normal))
+                                    .h(px(CURSOR_HEIGHT_LG))
+                                    .my(px(CURSOR_MARGIN_Y))
                                     .ml(px(design_visual.border_normal))
                                     .when(self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
@@ -6594,7 +6606,8 @@ impl ScriptListApp {
                             .when(input_is_empty, |d| d.child(
                                 div()
                                     .w(px(design_visual.border_normal))
-                                    .h(px(design_typography.font_size_lg * design_typography.line_height_normal))
+                                    .h(px(CURSOR_HEIGHT_LG))
+                                    .my(px(CURSOR_MARGIN_Y))
                                     .mr(px(design_spacing.padding_xs))
                                     .when(self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
@@ -6602,7 +6615,8 @@ impl ScriptListApp {
                             .when(!input_is_empty, |d| d.child(
                                 div()
                                     .w(px(design_visual.border_normal))
-                                    .h(px(design_typography.font_size_lg * design_typography.line_height_normal))
+                                    .h(px(CURSOR_HEIGHT_LG))
+                                    .my(px(CURSOR_MARGIN_Y))
                                     .ml(px(design_visual.border_normal))
                                     .when(self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))

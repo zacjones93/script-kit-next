@@ -509,8 +509,16 @@ impl Render for ActionsDialog {
         // Focus border color (accent with transparency)
         let focus_border_color = rgba(hex_with_alpha(accent_color_hex, 0x60));
         
+        // Input container with fixed height and width to prevent any layout shifts
+        // The entire row is constrained to prevent resizing when text is entered
         let input_container = div()
-            .w_full()
+            .w(px(POPUP_WIDTH))  // Match parent width exactly
+            .min_w(px(POPUP_WIDTH))
+            .max_w(px(POPUP_WIDTH))
+            .h(px(44.0))  // Fixed height for the input row
+            .min_h(px(44.0))
+            .max_h(px(44.0))
+            .overflow_hidden()  // Prevent any content from causing shifts
             .px(px(spacing.item_padding_x))
             .py(px(spacing.item_padding_y + 2.0)) // Slightly more vertical padding
             .bg(search_box_bg)
@@ -521,17 +529,23 @@ impl Render for ActionsDialog {
             .items_center()
             .gap(px(spacing.gap_md))
             .child(
-                // Search icon or indicator
+                // Search icon or indicator - fixed width to prevent shifts
                 div()
+                    .w(px(24.0))  // Fixed width for the icon container
+                    .min_w(px(24.0))
                     .text_color(dimmed_text)
                     .text_xs()
                     .child("⌘K"),
             )
             .child(
                 // Search input field with focus indicator
-                // Use fixed width instead of flex_1 to prevent layout shift when typing
+                // Use fixed width AND min/max constraints to absolutely prevent resize when typing
+                // The container itself has overflow_hidden to clip any content that might shift
                 div()
                     .w(px(240.0))
+                    .min_w(px(240.0))
+                    .max_w(px(240.0))
+                    .overflow_hidden()
                     .px(px(spacing.padding_sm))
                     .py(px(spacing.padding_xs))
                     .bg(if self.search_text.is_empty() { rgba(0x00000000) } else { 
@@ -559,24 +573,26 @@ impl Render for ActionsDialog {
                     } else {
                         primary_text
                     })
-                    // ALWAYS render cursor div to prevent layout shift, only show bg when visible
+                    // ALWAYS render cursor div with consistent margin to prevent layout shift
+                    // When empty, cursor is at the start before placeholder text
                     .when(self.search_text.is_empty(), |d| {
                         d.child(
                             div()
                                 .w(px(2.))
                                 .h(px(16.))
-                                .mr(px(4.))
+                                .mr(px(2.))  // Use consistent 2px margin
                                 .rounded(px(1.))
                                 .when(self.cursor_visible, |d| d.bg(accent_color))
                         )
                     })
                     .child(search_display)
+                    // When has text, cursor is at the end after the text
                     .when(!self.search_text.is_empty(), |d| {
                         d.child(
                             div()
                                 .w(px(2.))
                                 .h(px(16.))
-                                .ml(px(2.))
+                                .ml(px(2.))  // Consistent 2px margin
                                 .rounded(px(1.))
                                 .when(self.cursor_visible, |d| d.bg(accent_color))
                         )
