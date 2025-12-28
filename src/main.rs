@@ -4682,44 +4682,15 @@ impl ScriptListApp {
                                     .when(self.focused_input == FocusedInput::MainFilter && self.cursor_visible, |d| d.bg(rgb(text_primary)))
                             ))
                     )
-                    // CONDITIONAL: When NOT in actions mode, show Run button + Actions button
-                    // When IN actions mode, show actions search input instead
-                    .when(!self.show_actions_popup, |d| {
+                    // CLS-FREE ACTIONS AREA: Fixed-size relative container with stacked children
+                    // Both states are always rendered at the same position, visibility toggled via opacity
+                    // This prevents any layout shift when toggling between Run/Actions and search input
+                    .child({
                         let button_colors = ButtonColors::from_theme(&self.theme);
                         let handle_run = cx.entity().downgrade();
                         let handle_actions = cx.entity().downgrade();
-                        d
-                            // Run button with click handler
-                            .child(
-                                Button::new("Run", button_colors)
-                                    .variant(ButtonVariant::Ghost)
-                                    .shortcut("↵")
-                                    .on_click(Box::new(move |_, _window, cx| {
-                                        if let Some(app) = handle_run.upgrade() {
-                                            app.update(cx, |this, cx| {
-                                                this.execute_selected(cx);
-                                            });
-                                        }
-                                    }))
-                            )
-                            .child(div().text_color(rgb(text_dimmed)).child("|"))
-                            // Actions button with click handler
-                            .child(
-                                Button::new("Actions", button_colors)
-                                    .variant(ButtonVariant::Ghost)
-                                    .shortcut("⌘ K")
-                                    .on_click(Box::new(move |_, window, cx| {
-                                        if let Some(app) = handle_actions.upgrade() {
-                                            app.update(cx, |this, cx| {
-                                                this.toggle_actions(cx, window);
-                                            });
-                                        }
-                                    }))
-                            )
-                            .child(div().text_color(rgb(text_dimmed)).child("|"))
-                    })
-                    // CONDITIONAL: When IN actions mode, show actions search input
-                    .when(self.show_actions_popup, |d| {
+                        let show_actions = self.show_actions_popup;
+                        
                         // Get actions search text from the dialog
                         let search_text = self.actions_dialog.as_ref()
                             .map(|dialog| dialog.read(cx).search_text.clone())
@@ -4728,58 +4699,110 @@ impl ScriptListApp {
                         let search_display = if search_is_empty {
                             SharedString::from("Search actions...")
                         } else {
-                            SharedString::from(search_text)
+                            SharedString::from(search_text.clone())
                         };
                         
-                        d.child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(8.))
-                                // ⌘K indicator
-                                .child(
-                                    div()
-                                        .text_color(rgb(text_dimmed))
-                                        .text_xs()
-                                        .child("⌘K")
-                                )
-                                // Search input display
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .items_center()
-                                        .px(px(8.))
-                                        .py(px(4.))
-                                        .rounded(px(6.))
-                                        .bg(rgba((theme.colors.background.search_box << 8) | 0x80))
-                                        .border_1()
-                                        .border_color(rgba((accent_color << 8) | 0x40))
-                                        .text_sm()
-                                        .text_color(if search_is_empty { rgb(text_muted) } else { rgb(text_primary) })
-                                        // Cursor before placeholder when empty
-                                        .when(search_is_empty, |d| d.child(
-                                            div()
-                                                .w(px(2.))
-                                                .h(px(16.))
-                                                .mr(px(4.))
-                                                .rounded(px(1.))
-                                                .when(self.focused_input == FocusedInput::ActionsSearch && self.cursor_visible, |d| d.bg(rgb(accent_color)))
-                                        ))
-                                        .child(search_display)
-                                        // Cursor after text when not empty
-                                        .when(!search_is_empty, |d| d.child(
-                                            div()
-                                                .w(px(2.))
-                                                .h(px(16.))
-                                                .ml(px(2.))
-                                                .rounded(px(1.))
-                                                .when(self.focused_input == FocusedInput::ActionsSearch && self.cursor_visible, |d| d.bg(rgb(accent_color)))
-                                        ))
-                                )
-                                .child(div().text_color(rgb(text_dimmed)).child("|"))
-                        )
+                        // Outer container: relative positioned, fixed height to match header
+                        div()
+                            .relative()
+                            .h(px(28.))  // Fixed height to prevent vertical CLS
+                            .flex()
+                            .items_center()
+                            // Run + Actions buttons - absolute positioned, hidden when actions shown
+                            .child(
+                                div()
+                                    .absolute()
+                                    .inset_0()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .justify_end()
+                                    // Visibility: hidden when actions popup is shown
+                                    .when(show_actions, |d| d.opacity(0.).invisible())
+                                    // Run button with click handler
+                                    .child(
+                                        Button::new("Run", button_colors)
+                                            .variant(ButtonVariant::Ghost)
+                                            .shortcut("↵")
+                                            .on_click(Box::new(move |_, _window, cx| {
+                                                if let Some(app) = handle_run.upgrade() {
+                                                    app.update(cx, |this, cx| {
+                                                        this.execute_selected(cx);
+                                                    });
+                                                }
+                                            }))
+                                    )
+                                    .child(div().text_color(rgb(text_dimmed)).child("|"))
+                                    // Actions button with click handler
+                                    .child(
+                                        Button::new("Actions", button_colors)
+                                            .variant(ButtonVariant::Ghost)
+                                            .shortcut("⌘ K")
+                                            .on_click(Box::new(move |_, window, cx| {
+                                                if let Some(app) = handle_actions.upgrade() {
+                                                    app.update(cx, |this, cx| {
+                                                        this.toggle_actions(cx, window);
+                                                    });
+                                                }
+                                            }))
+                                    )
+                                    .child(div().text_color(rgb(text_dimmed)).child("|"))
+                            )
+                            // Actions search input - absolute positioned, visible when actions shown
+                            .child(
+                                div()
+                                    .absolute()
+                                    .inset_0()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .justify_end()
+                                    .gap(px(8.))
+                                    // Visibility: hidden when actions popup is NOT shown
+                                    .when(!show_actions, |d| d.opacity(0.).invisible())
+                                    // ⌘K indicator
+                                    .child(
+                                        div()
+                                            .text_color(rgb(text_dimmed))
+                                            .text_xs()
+                                            .child("⌘K")
+                                    )
+                                    // Search input display - matches main input style
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .px(px(8.))
+                                            .py(px(4.))
+                                            .rounded(px(6.))
+                                            .bg(rgba((theme.colors.background.search_box << 8) | 0x80))
+                                            .border_1()
+                                            .border_color(rgba((accent_color << 8) | 0x40))
+                                            .text_sm()
+                                            .text_color(if search_is_empty { rgb(text_muted) } else { rgb(text_primary) })
+                                            // Cursor before placeholder when empty
+                                            .when(search_is_empty, |d| d.child(
+                                                div()
+                                                    .w(px(2.))
+                                                    .h(px(16.))
+                                                    .mr(px(4.))
+                                                    .rounded(px(1.))
+                                                    .when(self.focused_input == FocusedInput::ActionsSearch && self.cursor_visible, |d| d.bg(rgb(accent_color)))
+                                            ))
+                                            .child(search_display)
+                                            // Cursor after text when not empty
+                                            .when(!search_is_empty, |d| d.child(
+                                                div()
+                                                    .w(px(2.))
+                                                    .h(px(16.))
+                                                    .ml(px(2.))
+                                                    .rounded(px(1.))
+                                                    .when(self.focused_input == FocusedInput::ActionsSearch && self.cursor_visible, |d| d.bg(rgb(accent_color)))
+                                            ))
+                                    )
+                                    .child(div().text_color(rgb(text_dimmed)).child("|"))
+                            )
                     })
                     // Script Kit Logo - ALWAYS visible
                     .child(
