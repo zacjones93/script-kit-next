@@ -19,8 +19,9 @@ pub enum IconKind {
 }
 
 /// Fixed height for list items (same as main script list)
-/// Reduced from 52px to 34px for tighter, more compact layout matching original Script Kit design
-pub const LIST_ITEM_HEIGHT: f32 = 34.0;
+/// Height of 46px provides comfortable spacing for both name-only and name+description items
+/// Content: name (18px line-height) + description (14px line-height) = 32px + 14px vertical padding
+pub const LIST_ITEM_HEIGHT: f32 = 46.0;
 
 /// Pre-computed colors for ListItem rendering
 /// 
@@ -326,11 +327,13 @@ impl RenderOnce for ListItem {
             div()
         };
         
-        // Build the inner content div with all styling (reduced horizontal padding)
+        // Build the inner content div with all styling
+        // Horizontal padding px(12.) and vertical padding py(6.) for comfortable spacing
         let inner_content = div()
             .w_full()
             .h_full()
-            .px(px(8.))
+            .px(px(12.))
+            .py(px(6.))
             .bg(if self.selected { selected_bg } else { rgba(0x00000000) })
             .hover(|s| s.bg(hover_bg))
             .text_color(if self.selected { rgb(colors.text_primary) } else { rgb(colors.text_secondary) })
@@ -362,11 +365,12 @@ impl RenderOnce for ListItem {
             ElementId::NamedInteger("list-item".into(), element_idx as u64)
         };
         
-        // Base container with ID for stateful interactivity (reduced horizontal padding)
+        // Base container with ID for stateful interactivity
+        // Horizontal padding px(4.) to provide slight inset from window edge
         let mut container = div()
             .w_full()
             .h(px(LIST_ITEM_HEIGHT))
-            .px(px(8.))
+            .px(px(4.))
             .flex()
             .items_center()
             .id(element_id);
