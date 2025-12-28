@@ -5365,6 +5365,7 @@ dependencies = [
  "cocoa 0.26.0",
  "core-graphics 0.24.0",
  "dirs 5.0.1",
+ "filetime",
  "get-selected-text",
  "global-hotkey",
  "gpui",

@@ -24,6 +24,7 @@
 
 use anyhow::{Context, Result};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, OnceLock};
@@ -76,6 +77,122 @@ const APP_DIRECTORIES: &[&str] = &[
     "/Applications/Utilities",
 ];
 
+/// Get the icon cache directory path (~/.kenv/cache/app-icons/)
+fn get_icon_cache_dir() -> Option<PathBuf> {
+    let kenv = PathBuf::from(shellexpand::tilde("~/.kenv").as_ref());
+    Some(kenv.join("cache").join("app-icons"))
+}
+
+/// Generate a unique cache key from an app path using a hash
+fn hash_path(path: &Path) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    let mut hasher = DefaultHasher::new();
+    path.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Get cached icon or extract fresh one if cache is stale/missing
+///
+/// Cache invalidation is based on the app bundle's modification time.
+/// The cache file's mtime is set to match the app's mtime for easy comparison.
+#[cfg(target_os = "macos")]
+fn get_or_extract_icon(app_path: &Path) -> Option<Vec<u8>> {
+    let cache_dir = get_icon_cache_dir()?;
+    let cache_key = hash_path(app_path);
+    let cache_file = cache_dir.join(format!("{}.png", cache_key));
+
+    // Get app's modification time
+    let app_mtime = app_path.metadata().ok()?.modified().ok()?;
+
+    // Check if cache file exists and is valid
+    if cache_file.exists() {
+        if let Ok(cache_meta) = cache_file.metadata() {
+            if let Ok(cache_mtime) = cache_meta.modified() {
+                // Cache is valid if its mtime matches or is newer than app mtime
+                if cache_mtime >= app_mtime {
+                    // Load from cache
+                    if let Ok(png_bytes) = std::fs::read(&cache_file) {
+                        debug!(
+                            app = %app_path.display(),
+                            cache_file = %cache_file.display(),
+                            "Loaded icon from cache"
+                        );
+                        return Some(png_bytes);
+                    }
+                }
+            }
+        }
+    }
+
+    // Cache miss or stale - extract fresh icon
+    let png_bytes = extract_app_icon(app_path)?;
+
+    // Save to cache
+    if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+        warn!(
+            error = %e,
+            cache_dir = %cache_dir.display(),
+            "Failed to create icon cache directory"
+        );
+    } else if let Err(e) = std::fs::write(&cache_file, &png_bytes) {
+        warn!(
+            error = %e,
+            cache_file = %cache_file.display(),
+            "Failed to write icon to cache"
+        );
+    } else {
+        // Set cache file mtime to app mtime for future comparison
+        let file_time = filetime::FileTime::from_system_time(app_mtime);
+        if let Err(e) = filetime::set_file_mtime(&cache_file, file_time) {
+            warn!(
+                error = %e,
+                cache_file = %cache_file.display(),
+                "Failed to set cache file mtime"
+            );
+        } else {
+            debug!(
+                app = %app_path.display(),
+                cache_file = %cache_file.display(),
+                "Saved icon to cache"
+            );
+        }
+    }
+
+    Some(png_bytes)
+}
+
+/// Get icon cache statistics
+///
+/// Returns (cache_file_count, total_size_bytes) for the icon cache directory.
+/// Useful for logging and monitoring cache behavior.
+#[allow(dead_code)]
+pub fn get_icon_cache_stats() -> (usize, u64) {
+    let cache_dir = match get_icon_cache_dir() {
+        Some(dir) => dir,
+        None => return (0, 0),
+    };
+
+    if !cache_dir.exists() {
+        return (0, 0);
+    }
+
+    let mut count = 0;
+    let mut total_size = 0u64;
+
+    if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+        for entry in entries.flatten() {
+            if let Ok(metadata) = entry.metadata() {
+                if metadata.is_file() {
+                    count += 1;
+                    total_size += metadata.len();
+                }
+            }
+        }
+    }
+
+    (count, total_size)
+}
+
 /// Scan for installed macOS applications
 ///
 /// This function scans standard macOS application directories and returns
@@ -88,15 +205,21 @@ const APP_DIRECTORIES: &[&str] = &[
 /// # Performance
 /// Initial scan may take ~100ms depending on the number of installed apps.
 /// Subsequent calls return immediately from cache.
+/// Icons are loaded from disk cache (~/.kenv/cache/app-icons/) when available.
 pub fn scan_applications() -> &'static Vec<AppInfo> {
     APP_CACHE.get_or_init(|| {
         let start = Instant::now();
         let apps = scan_all_directories();
         let duration_ms = start.elapsed().as_millis();
 
+        // Get cache stats for logging
+        let (cache_count, cache_size) = get_icon_cache_stats();
+
         info!(
             app_count = apps.len(),
             duration_ms = duration_ms,
+            icon_cache_files = cache_count,
+            icon_cache_size_kb = cache_size / 1024,
             "Scanned applications"
         );
 
@@ -197,10 +320,11 @@ fn parse_app_bundle(path: &Path) -> Option<AppInfo> {
     // Try to extract bundle identifier from Info.plist
     let bundle_id = extract_bundle_id(path);
 
-    // Extract and pre-decode icon using NSWorkspace (macOS only)
+    // Extract and pre-decode icon using disk cache (macOS only)
+    // Uses get_or_extract_icon() which checks disk cache first, only extracts if stale/missing
     // Pre-decoding here is CRITICAL for performance - avoids PNG decode on every render
     #[cfg(target_os = "macos")]
-    let icon = extract_app_icon(path).and_then(|png_bytes| {
+    let icon = get_or_extract_icon(path).and_then(|png_bytes| {
         crate::list_item::decode_png_to_render_image(&png_bytes).ok()
     });
     #[cfg(not(target_os = "macos"))]
@@ -540,4 +664,99 @@ mod tests {
 
     // Note: launch_application is not tested automatically to avoid
     // actually launching apps during test runs. It can be tested manually.
+
+    #[test]
+    fn test_get_icon_cache_dir() {
+        let cache_dir = get_icon_cache_dir();
+        assert!(cache_dir.is_some(), "Should return a cache directory path");
+
+        let dir = cache_dir.unwrap();
+        assert!(
+            dir.ends_with("cache/app-icons"),
+            "Cache dir should end with cache/app-icons: {:?}",
+            dir
+        );
+        assert!(
+            dir.to_string_lossy().contains(".kenv"),
+            "Cache dir should be under .kenv: {:?}",
+            dir
+        );
+    }
+
+    #[test]
+    fn test_hash_path() {
+        let path1 = Path::new("/Applications/Safari.app");
+        let path2 = Path::new("/Applications/Safari.app");
+        let path3 = Path::new("/Applications/Finder.app");
+
+        // Same path should produce same hash
+        assert_eq!(
+            hash_path(path1),
+            hash_path(path2),
+            "Same path should produce same hash"
+        );
+
+        // Different paths should produce different hashes
+        assert_ne!(
+            hash_path(path1),
+            hash_path(path3),
+            "Different paths should produce different hashes"
+        );
+
+        // Hash should be 16 hex characters
+        let hash = hash_path(path1);
+        assert_eq!(hash.len(), 16, "Hash should be 16 characters");
+        assert!(
+            hash.chars().all(|c| c.is_ascii_hexdigit()),
+            "Hash should be hex characters: {}",
+            hash
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_get_or_extract_icon_caches() {
+        // Test that get_or_extract_icon properly caches icons
+        let calculator_path = Path::new("/System/Applications/Calculator.app");
+        if !calculator_path.exists() {
+            return;
+        }
+
+        // First call - may or may not hit cache
+        let icon1 = get_or_extract_icon(calculator_path);
+        assert!(icon1.is_some(), "Should extract Calculator icon");
+
+        // Second call should hit cache
+        let icon2 = get_or_extract_icon(calculator_path);
+        assert!(icon2.is_some(), "Should load Calculator icon from cache");
+
+        // Both should have the same content
+        let bytes1 = icon1.unwrap();
+        let bytes2 = icon2.unwrap();
+        assert_eq!(
+            bytes1, bytes2,
+            "Cached icon should match extracted icon"
+        );
+
+        // Verify cache file exists
+        let cache_dir = get_icon_cache_dir().unwrap();
+        let cache_key = hash_path(calculator_path);
+        let cache_file = cache_dir.join(format!("{}.png", cache_key));
+        assert!(
+            cache_file.exists(),
+            "Cache file should exist: {:?}",
+            cache_file
+        );
+    }
+
+    #[test]
+    fn test_get_icon_cache_stats() {
+        let (count, size) = get_icon_cache_stats();
+        // We can't make strong assertions about exact counts since
+        // other tests may have populated the cache, but we can check types
+        assert!(
+            count == 0 || size > 0,
+            "If there are cached files, size should be non-zero"
+        );
+    }
 }

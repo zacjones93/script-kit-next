@@ -68,6 +68,9 @@ base64 = "0.22"
 # Image decoding for app icons
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+# File modification time handling for icon cache
+filetime = "0.2"
+
 [features]
 default = []
 # Enable tests that interact with system APIs (clipboard, accessibility, hotkeys)
