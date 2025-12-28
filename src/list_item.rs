@@ -23,9 +23,9 @@ pub enum IconKind {
 pub const LIST_ITEM_HEIGHT: f32 = 40.0;
 
 /// Fixed height for section headers (RECENT, MAIN, etc.)
-/// Total height includes: pt(4px) + text (~10px) + pb(4px) = ~18px
-/// Compact height for minimal visual separation
-pub const SECTION_HEADER_HEIGHT: f32 = 18.0;
+/// Total height includes: pt(16px) + text (~8px) + pb(4px) = ~28px
+/// Using 24px as the uniform_list height for consistent calculations
+pub const SECTION_HEADER_HEIGHT: f32 = 24.0;
 
 /// Enum for grouped list items - supports both regular items and section headers
 /// 
@@ -487,7 +487,7 @@ pub fn icon_from_png(png_data: &[u8]) -> Option<IconKind> {
 /// - Small font (~11-12px via text_xs)
 /// - Medium font weight
 /// - Muted color
-/// - Vertical spacing: pt(4px) pb(4px) - compact top padding
+/// - Vertical spacing: pt(16px) pb(4px)
 /// - Horizontal padding: px(16px) matching list items
 /// - No background, no border
 /// 
@@ -504,7 +504,7 @@ pub fn render_section_header(label: &str, colors: ListItemColors) -> impl IntoEl
     div()
         .w_full()
         .h(px(SECTION_HEADER_HEIGHT))
-        .pt(px(4.))
+        .pt(px(16.))
         .pb(px(4.))
         .px(px(16.))
         .flex()

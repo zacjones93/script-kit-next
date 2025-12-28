@@ -79,9 +79,6 @@ use actions::{ActionsDialog, ScriptInfo};
 use syntax::highlight_code_lines;
 use panel::{DEFAULT_PLACEHOLDER, CURSOR_HEIGHT_LG, CURSOR_MARGIN_Y};
 
-/// Width of the left accent bar for selected items (matches actions.rs)
-pub const ACCENT_BAR_WIDTH: f32 = 3.0;
-
 /// Channel for sending prompt messages from script thread to UI
 #[allow(dead_code)]
 type PromptChannel = (mpsc::Sender<PromptMessage>, mpsc::Receiver<PromptMessage>);
@@ -4395,24 +4392,11 @@ impl ScriptListApp {
                                             colors,
                                         );
                                         
-                                        // Get accent color for the left bar
-                                        let accent_color = rgb(colors.accent_selected);
-                                        
                                         // Wrap in div with hover handler for hover-to-select behavior
-                                        // Add left accent bar (3px width) - visible when selected
                                         items.push(
                                             div()
                                                 .id(ElementId::NamedInteger("script-item".into(), ix as u64))
                                                 .on_hover(hover_handler)
-                                                .flex()
-                                                .flex_row()
-                                                .items_center()
-                                                .child(
-                                                    div()
-                                                        .w(px(ACCENT_BAR_WIDTH))
-                                                        .h_full()
-                                                        .bg(if is_selected { accent_color } else { rgba(0x00000000) })
-                                                )
                                                 .child(item_element),
                                         );
                                     }
@@ -4792,17 +4776,27 @@ impl ScriptListApp {
                                             .child("⌘K")
                                     )
                                     // Search input display - matches main input style
+                                    // CRITICAL: Fixed width prevents resize when typing
                                     .child(
                                         div()
+                                            .flex_shrink_0()  // PREVENT flexbox from shrinking this
+                                            .w(px(160.0))     // Fixed width for header input
+                                            .min_w(px(160.0))
+                                            .max_w(px(160.0))
+                                            .h(px(24.0))      // Fixed height
+                                            .min_h(px(24.0))
+                                            .max_h(px(24.0))
+                                            .overflow_hidden()
                                             .flex()
                                             .flex_row()
                                             .items_center()
                                             .px(px(8.))
-                                            .py(px(4.))
                                             .rounded(px(6.))
-                                            .bg(rgba((theme.colors.background.search_box << 8) | 0x80))
+                                            // ALWAYS show background - just vary intensity
+                                            .bg(rgba((theme.colors.background.search_box << 8) | if search_is_empty { 0x40 } else { 0x80 }))
                                             .border_1()
-                                            .border_color(rgba((accent_color << 8) | 0x40))
+                                            // ALWAYS show border - just vary intensity
+                                            .border_color(rgba((accent_color << 8) | if search_is_empty { 0x20 } else { 0x40 }))
                                             .text_sm()
                                             .text_color(if search_is_empty { rgb(text_muted) } else { rgb(text_primary) })
                                             // Cursor before placeholder when empty
@@ -4810,7 +4804,7 @@ impl ScriptListApp {
                                                 div()
                                                     .w(px(2.))
                                                     .h(px(16.))
-                                                    .mr(px(4.))
+                                                    .mr(px(2.))  // Consistent 2px margin
                                                     .rounded(px(1.))
                                                     .when(self.focused_input == FocusedInput::ActionsSearch && self.cursor_visible, |d| d.bg(rgb(accent_color)))
                                             ))
@@ -4820,7 +4814,7 @@ impl ScriptListApp {
                                                 div()
                                                     .w(px(2.))
                                                     .h(px(16.))
-                                                    .ml(px(2.))
+                                                    .ml(px(2.))  // Consistent 2px margin
                                                     .rounded(px(1.))
                                                     .when(self.focused_input == FocusedInput::ActionsSearch && self.cursor_visible, |d| d.bg(rgb(accent_color)))
                                             ))
@@ -5039,27 +5033,15 @@ impl ScriptListApp {
                         if let Some((_, choice)) = filtered_choices.get(ix) {
                             let is_selected = ix == arg_selected_index;
                             
-                            // Get accent color for the left bar
-                            let accent_color = rgb(arg_list_colors.accent_selected);
-                            
                             // Use shared ListItem component for consistent design
-                            // Add left accent bar (3px width) - visible when selected
                             div()
                                 .id(ix)
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .child(
-                                    div()
-                                        .w(px(ACCENT_BAR_WIDTH))
-                                        .h_full()
-                                        .bg(if is_selected { accent_color } else { rgba(0x00000000) })
-                                )
                                 .child(
                                     ListItem::new(choice.name.clone(), arg_list_colors)
                                         .description_opt(choice.description.clone())
                                         .selected(is_selected)
                                         .with_accent_bar(true)
+                                        .index(ix)
                                 )
                         } else {
                             div().id(ix).h(px(LIST_ITEM_HEIGHT))
