@@ -489,6 +489,8 @@ enum PromptMessage {
         script_path: String,
         suggestions: Vec<String>,
     },
+    /// Unhandled message type from script - shows warning toast
+    UnhandledMessage { message_type: String },
 }
 
 /// External commands that can be sent to the app via stdin
@@ -1919,7 +1921,17 @@ impl ScriptListApp {
                                     Message::Browse { url } => {
                                         Some(PromptMessage::OpenBrowser { url })
                                     }
-                                    _ => None,
+                                    other => {
+                                        // Get the message type name for user feedback
+                                        let msg_type = format!("{:?}", other);
+                                        // Extract just the variant name (before any {})
+                                        let type_name = msg_type.split('{').next()
+                                            .unwrap_or(&msg_type)
+                                            .trim()
+                                            .to_string();
+                                        logging::log("WARN", &format!("Unhandled message type: {}", type_name));
+                                        Some(PromptMessage::UnhandledMessage { message_type: type_name })
+                                    }
                                 };
                                 
                                 if let Some(prompt_msg) = prompt_msg {
@@ -2374,6 +2386,17 @@ impl ScriptListApp {
                 let toast_id = self.toast_manager.push(toast);
                 logging::log("UI", &format!("Toast created for script error: {} (id: {})", script_path, toast_id));
                 
+                cx.notify();
+            }
+            PromptMessage::UnhandledMessage { message_type } => {
+                logging::log("WARN", &format!("Displaying unhandled message warning: {}", message_type));
+                
+                let toast = Toast::warning(
+                    format!("'{}' is not yet implemented", message_type),
+                    &self.theme
+                ).duration_ms(Some(5000));
+                
+                self.toast_manager.push(toast);
                 cx.notify();
             }
          }
