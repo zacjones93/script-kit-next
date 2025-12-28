@@ -4926,9 +4926,15 @@ impl ScriptListApp {
                 "enter" => {
                     let filtered = this.filtered_arg_choices();
                     if let Some((_, choice)) = filtered.get(this.arg_selected_index) {
+                        // Case 1: There are filtered choices - submit the selected one
                         let value = choice.value.clone();
                         this.submit_prompt_response(prompt_id.clone(), Some(value), cx);
+                    } else if !this.arg_input_text.is_empty() {
+                        // Case 2: No choices but user typed something - submit input_text
+                        let value = this.arg_input_text.clone();
+                        this.submit_prompt_response(prompt_id.clone(), Some(value), cx);
                     }
+                    // Case 3: No choices and no input - do nothing (prevent empty submissions)
                 }
                 "escape" => {
                     logging::log("KEY", "ESC in ArgPrompt - canceling script");

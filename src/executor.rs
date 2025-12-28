@@ -2652,7 +2652,8 @@ mod tests {
         assert!(result.stdout.contains("Dear Sir"), "Expected 'Dear Sir' in output: {}", result.stdout);
     }
 
-    #[cfg(unix)]
+    // This test actually opens Finder to /tmp, so it's a system test
+    #[cfg(all(unix, feature = "system-tests"))]
     #[test]
     fn test_run_scriptlet_open() {
         // Just test that open doesn't error on a valid path
