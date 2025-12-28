@@ -239,7 +239,11 @@ fn set_via_clipboard_fallback(text: &str) -> Result<()> {
 
 /// Simulate Cmd+V paste using Core Graphics events.
 /// This is more reliable on macOS than using enigo.
-fn simulate_paste_with_cg() -> Result<()> {
+///
+/// # Usage
+/// Call this after copying content to the clipboard and hiding the window.
+/// The function will simulate Cmd+V to paste into the currently focused app.
+pub fn simulate_paste_with_cg() -> Result<()> {
     use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, CGKeyCode};
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 

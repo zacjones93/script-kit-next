@@ -4928,17 +4928,27 @@ impl ScriptListApp {
                         }
                     }
                     "enter" => {
-                        // Copy selected entry to clipboard and hide window
+                        // Copy selected entry to clipboard, hide window, then paste
                         if let Some((_, entry)) = filtered_entries.get(*selected_index) {
                             logging::log("EXEC", &format!("Copying clipboard entry: {}", entry.id));
                             if let Err(e) = clipboard_history::copy_entry_to_clipboard(&entry.id) {
                                 logging::log("ERROR", &format!("Failed to copy entry: {}", e));
                             } else {
                                 logging::log("EXEC", "Entry copied to clipboard");
-                                // Hide window after pasting
+                                // Hide window first
                                 WINDOW_VISIBLE.store(false, Ordering::SeqCst);
                                 cx.hide();
                                 NEEDS_RESET.store(true, Ordering::SeqCst);
+                                
+                                // Simulate Cmd+V paste after a brief delay to let focus return
+                                std::thread::spawn(|| {
+                                    std::thread::sleep(std::time::Duration::from_millis(100));
+                                    if let Err(e) = selected_text::simulate_paste_with_cg() {
+                                        logging::log("ERROR", &format!("Failed to simulate paste: {}", e));
+                                    } else {
+                                        logging::log("EXEC", "Simulated Cmd+V paste");
+                                    }
+                                });
                             }
                         }
                     }
