@@ -19,8 +19,8 @@ use gpui::*;
 
 use super::{DesignRenderer, DesignVariant};
 
-/// Fixed height for list items
-const LIST_ITEM_HEIGHT: f32 = 52.0;
+/// Fixed height for list items (tighter layout to match original Script Kit)
+const LIST_ITEM_HEIGHT: f32 = 40.0;
 
 /// Pre-computed colors for glassmorphism rendering
 #[derive(Clone, Copy)]

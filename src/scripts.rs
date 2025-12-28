@@ -49,12 +49,20 @@ pub struct BuiltInMatch {
     pub score: i32,
 }
 
-/// Unified search result that can be a Script, Scriptlet, or BuiltIn
+/// Represents a scored match result for fuzzy search on applications
+#[derive(Clone, Debug)]
+pub struct AppMatch {
+    pub app: crate::app_launcher::AppInfo,
+    pub score: i32,
+}
+
+/// Unified search result that can be a Script, Scriptlet, BuiltIn, or App
 #[derive(Clone, Debug)]
 pub enum SearchResult {
     Script(ScriptMatch),
     Scriptlet(ScriptletMatch),
     BuiltIn(BuiltInMatch),
+    App(AppMatch),
 }
 
 impl SearchResult {
@@ -64,6 +72,7 @@ impl SearchResult {
             SearchResult::Script(sm) => &sm.script.name,
             SearchResult::Scriptlet(sm) => &sm.scriptlet.name,
             SearchResult::BuiltIn(bm) => &bm.entry.name,
+            SearchResult::App(am) => &am.app.name,
         }
     }
 
@@ -73,6 +82,7 @@ impl SearchResult {
             SearchResult::Script(sm) => sm.script.description.as_deref(),
             SearchResult::Scriptlet(sm) => sm.scriptlet.description.as_deref(),
             SearchResult::BuiltIn(bm) => Some(&bm.entry.description),
+            SearchResult::App(am) => am.app.path.to_str(),
         }
     }
 
@@ -82,6 +92,7 @@ impl SearchResult {
             SearchResult::Script(sm) => sm.score,
             SearchResult::Scriptlet(sm) => sm.score,
             SearchResult::BuiltIn(bm) => bm.score,
+            SearchResult::App(am) => am.score,
         }
     }
 
@@ -91,6 +102,7 @@ impl SearchResult {
             SearchResult::Script(_) => "Script",
             SearchResult::Scriptlet(_) => "Snippet",
             SearchResult::BuiltIn(_) => "Built-in",
+            SearchResult::App(_) => "App",
         }
     }
 }
@@ -585,6 +597,68 @@ pub fn fuzzy_search_builtins(entries: &[BuiltInEntry], query: &str) -> Vec<Built
     matches
 }
 
+/// Fuzzy search applications by query string
+/// Searches across name and bundle_id
+/// Returns results sorted by relevance score (highest first)
+pub fn fuzzy_search_apps(apps: &[crate::app_launcher::AppInfo], query: &str) -> Vec<AppMatch> {
+    if query.is_empty() {
+        // If no query, return all apps with equal score, sorted by name
+        return apps.iter().map(|a| AppMatch {
+            app: a.clone(),
+            score: 0,
+        }).collect();
+    }
+
+    let query_lower = query.to_lowercase();
+    let mut matches = Vec::new();
+
+    for app in apps {
+        let mut score = 0i32;
+        let name_lower = app.name.to_lowercase();
+
+        // Score by name match - highest priority
+        if let Some(pos) = name_lower.find(&query_lower) {
+            // Bonus for exact substring match at start of name
+            score += if pos == 0 { 100 } else { 75 };
+        }
+
+        // Fuzzy character matching in name (characters in order)
+        if is_fuzzy_match(&name_lower, &query_lower) {
+            score += 50;
+        }
+
+        // Score by bundle_id match - lower priority
+        if let Some(ref bundle_id) = app.bundle_id {
+            if bundle_id.to_lowercase().contains(&query_lower) {
+                score += 15;
+            }
+        }
+
+        // Score by path match - lowest priority
+        let path_str = app.path.to_string_lossy().to_lowercase();
+        if path_str.contains(&query_lower) {
+            score += 5;
+        }
+
+        if score > 0 {
+            matches.push(AppMatch {
+                app: app.clone(),
+                score,
+            });
+        }
+    }
+
+    // Sort by score (highest first), then by name for ties
+    matches.sort_by(|a, b| {
+        match b.score.cmp(&a.score) {
+            Ordering::Equal => a.app.name.cmp(&b.app.name),
+            other => other,
+        }
+    });
+
+    matches
+}
+
 /// Perform unified fuzzy search across scripts, scriptlets, and built-ins
 /// Returns combined and ranked results sorted by relevance
 /// Built-ins appear at the TOP of results (before scripts) when scores are equal
@@ -601,12 +675,33 @@ pub fn fuzzy_search_unified_with_builtins(
     builtins: &[BuiltInEntry],
     query: &str,
 ) -> Vec<SearchResult> {
+    // Use the new function with empty apps list for backwards compatibility
+    fuzzy_search_unified_all(scripts, scriptlets, builtins, &[], query)
+}
+
+/// Perform unified fuzzy search across scripts, scriptlets, built-ins, and apps
+/// Returns combined and ranked results sorted by relevance
+/// Built-ins appear at the TOP of results (before scripts) when scores are equal
+/// Apps appear after built-ins but before scripts when scores are equal
+pub fn fuzzy_search_unified_all(
+    scripts: &[Script],
+    scriptlets: &[Scriptlet],
+    builtins: &[BuiltInEntry],
+    apps: &[crate::app_launcher::AppInfo],
+    query: &str,
+) -> Vec<SearchResult> {
     let mut results = Vec::new();
 
     // Search built-ins first (they should appear at top when scores are equal)
     let builtin_matches = fuzzy_search_builtins(builtins, query);
     for bm in builtin_matches {
         results.push(SearchResult::BuiltIn(bm));
+    }
+
+    // Search apps (appear after built-ins but before scripts)
+    let app_matches = fuzzy_search_apps(apps, query);
+    for am in app_matches {
+        results.push(SearchResult::App(am));
     }
 
     // Search scripts
@@ -621,16 +716,17 @@ pub fn fuzzy_search_unified_with_builtins(
         results.push(SearchResult::Scriptlet(sm));
     }
 
-    // Sort by score (highest first), then by type (builtins first, then scripts, then scriptlets), then by name
+    // Sort by score (highest first), then by type (builtins first, apps, scripts, scriptlets), then by name
     results.sort_by(|a, b| {
         match b.score().cmp(&a.score()) {
             Ordering::Equal => {
-                // Prefer builtins over scripts over scriptlets when scores are equal
+                // Prefer builtins over apps over scripts over scriptlets when scores are equal
                 let type_order = |r: &SearchResult| -> i32 {
                     match r {
                         SearchResult::BuiltIn(_) => 0,  // Built-ins first
-                        SearchResult::Script(_) => 1,
-                        SearchResult::Scriptlet(_) => 2,
+                        SearchResult::App(_) => 1,      // Apps second
+                        SearchResult::Script(_) => 2,
+                        SearchResult::Scriptlet(_) => 3,
                     }
                 };
                 let type_order_a = type_order(a);
@@ -1270,6 +1366,7 @@ mod tests {
             SearchResult::Script(_) => {}, // Correct
             SearchResult::Scriptlet(_) => panic!("Script should be first"),
             SearchResult::BuiltIn(_) => panic!("Script should be first"),
+            SearchResult::App(_) => panic!("Script should be first"),
         }
     }
 
@@ -2160,6 +2257,7 @@ code here
             SearchResult::Script(_) => {},
             SearchResult::Scriptlet(_) => panic!("Expected Script first"),
             SearchResult::BuiltIn(_) => panic!("Expected Script first"),
+            SearchResult::App(_) => panic!("Expected Script first"),
         }
     }
 
@@ -2326,6 +2424,7 @@ code here
                 description: "View and manage your clipboard history".to_string(),
                 keywords: vec!["clipboard".to_string(), "history".to_string(), "paste".to_string(), "copy".to_string()],
                 feature: BuiltInFeature::ClipboardHistory,
+                icon: Some("📋".to_string()),
             },
             BuiltInEntry {
                 id: "builtin-app-launcher".to_string(),
@@ -2333,6 +2432,7 @@ code here
                 description: "Search and launch installed applications".to_string(),
                 keywords: vec!["app".to_string(), "launch".to_string(), "open".to_string(), "application".to_string()],
                 feature: BuiltInFeature::AppLauncher,
+                icon: Some("🚀".to_string()),
             },
         ]
     }
@@ -2421,6 +2521,7 @@ code here
             description: "Test description".to_string(),
             keywords: vec!["test".to_string()],
             feature: BuiltInFeature::ClipboardHistory,
+            icon: None,
         };
         
         let builtin_match = BuiltInMatch {
@@ -2442,6 +2543,7 @@ code here
             description: "Test built-in description".to_string(),
             keywords: vec!["test".to_string()],
             feature: BuiltInFeature::AppLauncher,
+            icon: Some("🚀".to_string()),
         };
         
         let result = SearchResult::BuiltIn(BuiltInMatch {

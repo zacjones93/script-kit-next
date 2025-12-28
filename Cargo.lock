@@ -5368,6 +5368,7 @@ dependencies = [
  "get-selected-text",
  "global-hotkey",
  "gpui",
+ "image",
  "macos-accessibility-client",
  "notify",
  "objc",

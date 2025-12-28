@@ -22,8 +22,8 @@ use gpui::*;
 
 use super::{DesignRenderer, DesignVariant};
 
-/// Fixed height for list items
-pub const LIST_ITEM_HEIGHT: f32 = 52.0;
+/// Fixed height for list items (tighter layout to match original Script Kit)
+pub const LIST_ITEM_HEIGHT: f32 = 40.0;
 
 /// Neon Cyberpunk color palette
 pub mod colors {

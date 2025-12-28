@@ -692,6 +692,8 @@ struct ScriptListApp {
     scripts: Vec<scripts::Script>,
     scriptlets: Vec<scripts::Scriptlet>,
     builtin_entries: Vec<builtins::BuiltInEntry>,
+    /// Cached list of installed applications for main search
+    apps: Vec<app_launcher::AppInfo>,
     selected_index: usize,
     filter_text: String,
     last_output: Option<SharedString>,
@@ -714,6 +716,8 @@ struct ScriptListApp {
     list_scroll_handle: UniformListScrollHandle,
     // P0: Scroll handle for virtualized arg prompt choices
     arg_list_scroll_handle: UniformListScrollHandle,
+    // Scroll handle for clipboard history list
+    clipboard_list_scroll_handle: UniformListScrollHandle,
     // Actions popup overlay
     show_actions_popup: bool,
     // ActionsDialog entity for focus management
@@ -757,18 +761,30 @@ impl ScriptListApp {
         // Load built-in entries based on config
         let builtin_entries = builtins::get_builtin_entries(&config.get_builtins());
         
+        // Load installed applications for main search (if enabled in config)
+        let apps_start = std::time::Instant::now();
+        let apps = if config.get_builtins().app_launcher {
+            app_launcher::scan_applications().clone()
+        } else {
+            Vec::new()
+        };
+        let apps_elapsed = apps_start.elapsed();
+        
         let total_elapsed = load_start.elapsed();
         logging::log("PERF", &format!(
-            "Startup loading: {:.2}ms total ({} scripts in {:.2}ms, {} scriptlets in {:.2}ms)",
+            "Startup loading: {:.2}ms total ({} scripts in {:.2}ms, {} scriptlets in {:.2}ms, {} apps in {:.2}ms)",
             total_elapsed.as_secs_f64() * 1000.0,
             scripts.len(),
             scripts_elapsed.as_secs_f64() * 1000.0,
             scriptlets.len(),
-            scriptlets_elapsed.as_secs_f64() * 1000.0
+            scriptlets_elapsed.as_secs_f64() * 1000.0,
+            apps.len(),
+            apps_elapsed.as_secs_f64() * 1000.0
         ));
         logging::log("APP", &format!("Loaded {} scripts from ~/.kenv/scripts", scripts.len()));
         logging::log("APP", &format!("Loaded {} scriptlets from ~/.kenv/scriptlets/scriptlets.md", scriptlets.len()));
         logging::log("APP", &format!("Loaded {} built-in features", builtin_entries.len()));
+        logging::log("APP", &format!("Loaded {} applications from system", apps.len()));
         logging::log("APP", "Loaded theme with system appearance detection");
         logging::log("APP", &format!("Loaded config: hotkey={:?}+{}, bun_path={:?}", 
             config.hotkey.modifiers, config.hotkey.key, config.bun_path));
@@ -802,6 +818,7 @@ impl ScriptListApp {
             scripts,
             scriptlets,
             builtin_entries,
+            apps,
             selected_index: 0,
             filter_text: String::new(),
             last_output: None,
@@ -817,6 +834,7 @@ impl ScriptListApp {
             response_sender: None,
             list_scroll_handle: UniformListScrollHandle::new(),
             arg_list_scroll_handle: UniformListScrollHandle::new(),
+            clipboard_list_scroll_handle: UniformListScrollHandle::new(),
             show_actions_popup: false,
             actions_dialog: None,
             cursor_visible: true,
@@ -969,10 +987,11 @@ impl ScriptListApp {
         if self.filter_text != self.filter_cache_key {
             logging::log_debug("CACHE", &format!("Filter cache MISS - recomputing for '{}'", self.filter_text));
             let search_start = std::time::Instant::now();
-            self.cached_filtered_results = scripts::fuzzy_search_unified_with_builtins(
+            self.cached_filtered_results = scripts::fuzzy_search_unified_all(
                 &self.scripts, 
                 &self.scriptlets, 
                 &self.builtin_entries,
+                &self.apps,
                 &self.filter_text
             );
             self.filter_cache_key = self.filter_text.clone();
@@ -984,7 +1003,7 @@ impl ScriptListApp {
                     self.filter_text,
                     search_elapsed.as_secs_f64() * 1000.0,
                     self.cached_filtered_results.len(),
-                    self.scripts.len() + self.scriptlets.len() + self.builtin_entries.len()
+                    self.scripts.len() + self.scriptlets.len() + self.builtin_entries.len() + self.apps.len()
                 ));
             }
         } else {
@@ -1108,6 +1127,10 @@ impl ScriptListApp {
                 scripts::SearchResult::BuiltIn(builtin_match) => {
                     logging::log("EXEC", &format!("Executing built-in: {}", builtin_match.entry.name));
                     self.execute_builtin(&builtin_match.entry, cx);
+                }
+                scripts::SearchResult::App(app_match) => {
+                    logging::log("EXEC", &format!("Launching app: {}", app_match.app.name));
+                    self.execute_app(&app_match.app, cx);
                 }
             }
         }
@@ -1273,6 +1296,9 @@ impl ScriptListApp {
                         }
                         scripts::SearchResult::BuiltIn(_) => {
                             self.last_output = Some(SharedString::from("Cannot edit built-in features"));
+                        }
+                        scripts::SearchResult::App(_) => {
+                            self.last_output = Some(SharedString::from("Cannot edit applications"));
                         }
                     }
                 } else {
@@ -2071,6 +2097,22 @@ impl ScriptListApp {
                 }
                 cx.notify();
             }
+        }
+    }
+    
+    /// Execute an application directly from the main search results
+    fn execute_app(&mut self, app: &app_launcher::AppInfo, cx: &mut Context<Self>) {
+        logging::log("EXEC", &format!("Launching app from search: {}", app.name));
+        
+        if let Err(e) = app_launcher::launch_application(app) {
+            logging::log("ERROR", &format!("Failed to launch {}: {}", app.name, e));
+            self.last_output = Some(SharedString::from(format!("Failed to launch: {}", app.name)));
+            cx.notify();
+        } else {
+            logging::log("EXEC", &format!("Launched app: {}", app.name));
+            // Hide window after launching app
+            WINDOW_VISIBLE.store(false, Ordering::SeqCst);
+            cx.hide();
         }
     }
     
@@ -3117,6 +3159,92 @@ impl ScriptListApp {
                                 )
                         );
                     }
+                    scripts::SearchResult::App(app_match) => {
+                        let app = &app_match.app;
+                        
+                        // App name header
+                        panel = panel.child(
+                            div()
+                                .text_lg()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(rgb(text_primary))
+                                .pb(px(spacing.padding_sm))
+                                .child(app.name.clone())
+                        );
+                        
+                        // Path
+                        panel = panel.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .pb(px(spacing.padding_md))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(text_muted))
+                                        .pb(px(spacing.padding_xs / 2.0))
+                                        .child("Path")
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(rgb(text_secondary))
+                                        .child(app.path.to_string_lossy().to_string())
+                                )
+                        );
+                        
+                        // Bundle ID (if available)
+                        if let Some(bundle_id) = &app.bundle_id {
+                            panel = panel.child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .pb(px(spacing.padding_md))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(text_muted))
+                                            .pb(px(spacing.padding_xs / 2.0))
+                                            .child("Bundle ID")
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(rgb(text_secondary))
+                                            .child(bundle_id.clone())
+                                    )
+                            );
+                        }
+                        
+                        // Divider
+                        panel = panel.child(
+                            div()
+                                .w_full()
+                                .h(px(visual.border_thin))
+                                .bg(rgba((ui_border << 8) | 0x60))
+                                .my(px(spacing.padding_sm))
+                        );
+                        
+                        // Type indicator
+                        panel = panel.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(text_muted))
+                                        .pb(px(spacing.padding_xs / 2.0))
+                                        .child("Type")
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(rgb(text_secondary))
+                                        .child("Application")
+                                )
+                        );
+                    }
                 }
             }
             None => {
@@ -3161,6 +3289,10 @@ impl ScriptListApp {
                 scripts::SearchResult::BuiltIn(m) => {
                     // Built-ins use their id as identifier
                     Some(ScriptInfo::new(&m.entry.name, format!("builtin:{}", &m.entry.id)))
+                }
+                scripts::SearchResult::App(m) => {
+                    // Apps use their path as identifier
+                    Some(ScriptInfo::new(&m.app.name, m.app.path.to_string_lossy().to_string()))
                 }
             }
         } else {
@@ -4202,12 +4334,16 @@ impl ScriptListApp {
                     "up" | "arrowup" => {
                         if *selected_index > 0 {
                             *selected_index -= 1;
+                            // Scroll to keep selection visible
+                            this.clipboard_list_scroll_handle.scroll_to_item(*selected_index, ScrollStrategy::Nearest);
                             cx.notify();
                         }
                     }
                     "down" | "arrowdown" => {
                         if *selected_index < filtered_len.saturating_sub(1) {
                             *selected_index += 1;
+                            // Scroll to keep selection visible
+                            this.clipboard_list_scroll_handle.scroll_to_item(*selected_index, ScrollStrategy::Nearest);
                             cx.notify();
                         }
                     }
@@ -4234,6 +4370,8 @@ impl ScriptListApp {
                         if !filter.is_empty() {
                             filter.pop();
                             *selected_index = 0;
+                            // Reset scroll to top when filter changes
+                            this.clipboard_list_scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
                             cx.notify();
                         }
                     }
@@ -4243,6 +4381,8 @@ impl ScriptListApp {
                                 if !ch.is_control() {
                                     filter.push(ch);
                                     *selected_index = 0;
+                                    // Reset scroll to top when filter changes
+                                    this.clipboard_list_scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
                                     cx.notify();
                                 }
                             }
@@ -4340,9 +4480,13 @@ impl ScriptListApp {
                 },
             )
             .h_full()
-            .track_scroll(&self.list_scroll_handle)
+            .track_scroll(&self.clipboard_list_scroll_handle)
             .into_any_element()
         };
+        
+        // Build preview panel for selected entry
+        let selected_entry = filtered_entries.get(selected_index).map(|(_, e)| (*e).clone());
+        let preview_panel = self.render_clipboard_preview_panel(&selected_entry, &design_colors, &design_spacing, &design_typography, &design_visual);
         
         div()
             .flex()
@@ -4413,16 +4557,33 @@ impl ScriptListApp {
                     .h(px(design_visual.border_thin))
                     .bg(rgba((ui_border << 8) | 0x60))
             )
-            // Entry list
+            // Main content area - 50/50 split: List on left, Preview on right
             .child(
                 div()
                     .flex()
-                    .flex_col()
+                    .flex_row()
                     .flex_1()
                     .min_h(px(0.))
                     .w_full()
-                    .py(px(design_spacing.padding_xs))
-                    .child(list_element)
+                    .overflow_hidden()
+                    // Left side: Clipboard list (50% width)
+                    .child(
+                        div()
+                            .w_1_2()
+                            .h_full()
+                            .min_h(px(0.))
+                            .py(px(design_spacing.padding_xs))
+                            .child(list_element)
+                    )
+                    // Right side: Preview panel (50% width)
+                    .child(
+                        div()
+                            .w_1_2()
+                            .h_full()
+                            .min_h(px(0.))
+                            .overflow_hidden()
+                            .child(preview_panel)
+                    )
             )
             // Footer
             .child(
@@ -4437,6 +4598,214 @@ impl ScriptListApp {
                     .child("↑↓ navigate • ⏎ paste • Esc back")
             )
             .into_any_element()
+    }
+    
+    /// Render the preview panel for clipboard history
+    fn render_clipboard_preview_panel(
+        &self,
+        selected_entry: &Option<clipboard_history::ClipboardEntry>,
+        colors: &designs::DesignColors,
+        spacing: &designs::DesignSpacing,
+        typography: &designs::DesignTypography,
+        visual: &designs::DesignVisual,
+    ) -> impl IntoElement {
+        let bg_main = colors.background;
+        let ui_border = colors.border;
+        let text_primary = colors.text_primary;
+        let text_muted = colors.text_muted;
+        let text_secondary = colors.text_secondary;
+        let bg_search_box = colors.background_tertiary;
+        
+        let mut panel = div()
+            .w_full()
+            .h_full()
+            .bg(rgb(bg_main))
+            .border_l_1()
+            .border_color(rgba((ui_border << 8) | 0x80))
+            .p(px(spacing.padding_lg))
+            .flex()
+            .flex_col()
+            .overflow_y_hidden()
+            .font_family(typography.font_family);
+        
+        match selected_entry {
+            Some(entry) => {
+                // Header with content type
+                let content_type_label = match entry.content_type {
+                    clipboard_history::ContentType::Text => "Text",
+                    clipboard_history::ContentType::Image => "Image",
+                };
+                
+                panel = panel.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .pb(px(spacing.padding_sm))
+                        // Content type badge
+                        .child(
+                            div()
+                                .px(px(spacing.padding_sm))
+                                .py(px(spacing.padding_xs / 2.0))
+                                .rounded(px(visual.radius_sm))
+                                .bg(rgba((colors.accent << 8) | 0x30))
+                                .text_xs()
+                                .text_color(rgb(colors.accent))
+                                .child(content_type_label)
+                        )
+                        // Pin indicator
+                        .when(entry.pinned, |d| d.child(
+                            div()
+                                .px(px(spacing.padding_sm))
+                                .py(px(spacing.padding_xs / 2.0))
+                                .rounded(px(visual.radius_sm))
+                                .bg(rgba((colors.accent << 8) | 0x20))
+                                .text_xs()
+                                .text_color(rgb(colors.accent))
+                                .child("📌 Pinned")
+                        ))
+                );
+                
+                // Timestamp
+                let now = chrono::Utc::now().timestamp();
+                let age_secs = now - entry.timestamp;
+                let relative_time = if age_secs < 60 {
+                    "just now".to_string()
+                } else if age_secs < 3600 {
+                    format!("{} minutes ago", age_secs / 60)
+                } else if age_secs < 86400 {
+                    format!("{} hours ago", age_secs / 3600)
+                } else {
+                    format!("{} days ago", age_secs / 86400)
+                };
+                
+                panel = panel.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(text_muted))
+                        .pb(px(spacing.padding_md))
+                        .child(relative_time)
+                );
+                
+                // Divider
+                panel = panel.child(
+                    div()
+                        .w_full()
+                        .h(px(visual.border_thin))
+                        .bg(rgba((ui_border << 8) | 0x60))
+                        .my(px(spacing.padding_sm))
+                );
+                
+                // Content preview
+                panel = panel.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(text_muted))
+                        .pb(px(spacing.padding_sm))
+                        .child("Content Preview")
+                );
+                
+                match entry.content_type {
+                    clipboard_history::ContentType::Text => {
+                        // Show full text content in a code-like container
+                        let content = entry.content.clone();
+                        let char_count = content.chars().count();
+                        let line_count = content.lines().count();
+                        
+                        panel = panel
+                            .child(
+                                div()
+                                    .w_full()
+                                    .flex_1()
+                                    .p(px(spacing.padding_md))
+                                    .rounded(px(visual.radius_md))
+                                    .bg(rgba((bg_search_box << 8) | 0x80))
+                                    .overflow_hidden()
+                                    .font_family(typography.font_family_mono)
+                                    .text_sm()
+                                    .text_color(rgb(text_primary))
+                                    .child(content)
+                            )
+                            // Stats footer
+                            .child(
+                                div()
+                                    .pt(px(spacing.padding_sm))
+                                    .text_xs()
+                                    .text_color(rgb(text_secondary))
+                                    .child(format!("{} characters • {} lines", char_count, line_count))
+                            );
+                    }
+                    clipboard_history::ContentType::Image => {
+                        // Parse image metadata from content string
+                        // Format: "rgba:W:H:base64data"
+                        let parts: Vec<&str> = entry.content.splitn(4, ':').collect();
+                        let (width, height) = if parts.len() >= 3 {
+                            let w = parts[1].parse::<u32>().unwrap_or(0);
+                            let h = parts[2].parse::<u32>().unwrap_or(0);
+                            (w, h)
+                        } else {
+                            (0, 0)
+                        };
+                        
+                        panel = panel.child(
+                            div()
+                                .w_full()
+                                .flex_1()
+                                .p(px(spacing.padding_lg))
+                                .rounded(px(visual.radius_md))
+                                .bg(rgba((bg_search_box << 8) | 0x80))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .items_center()
+                                        .gap_2()
+                                        // Image icon
+                                        .child(
+                                            div()
+                                                .text_2xl()
+                                                .child("🖼️")
+                                        )
+                                        // Dimensions
+                                        .child(
+                                            div()
+                                                .text_lg()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .text_color(rgb(text_primary))
+                                                .child(format!("{}×{}", width, height))
+                                        )
+                                        // Label
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(rgb(text_muted))
+                                                .child("Image data")
+                                        )
+                                )
+                        );
+                    }
+                }
+            }
+            None => {
+                // Empty state
+                panel = panel.child(
+                    div()
+                        .w_full()
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(rgb(text_muted))
+                        .child("No entry selected")
+                );
+            }
+        }
+        
+        panel
     }
     
     /// Render app launcher view
@@ -4595,10 +4964,17 @@ impl ScriptListApp {
                                 Some(path_str.to_string())
                             };
                             
+                            // Use real icon if available, fallback to emoji
+                            let icon = match &app.icon_data {
+                                Some(data) => list_item::IconKind::Image(data.clone()),
+                                None => list_item::IconKind::Emoji("📱".to_string()),
+                            };
+                            
                             div()
                                 .id(ix)
                                 .child(
                                     ListItem::new(app.name.clone(), list_colors)
+                                        .icon_kind(icon)
                                         .description_opt(description)
                                         .selected(is_selected)
                                 )

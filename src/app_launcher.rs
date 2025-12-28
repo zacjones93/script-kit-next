@@ -6,6 +6,7 @@
 //! - Scans standard macOS application directories
 //! - Caches results for performance (apps don't change often)
 //! - Extracts bundle identifiers from Info.plist when available
+//! - Extracts app icons using NSWorkspace for display
 //! - Launches applications via `open -a`
 //!
 //! ## Usage
@@ -25,9 +26,19 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 use tracing::{debug, info, warn};
+
+#[cfg(target_os = "macos")]
+use cocoa::base::{id, nil};
+#[cfg(target_os = "macos")]
+use cocoa::foundation::NSString as CocoaNSString;
+#[cfg(target_os = "macos")]
+use objc::{class, msg_send, sel, sel_impl};
+
+/// Icon data as PNG bytes wrapped in Arc for efficient sharing
+pub type IconData = Arc<Vec<u8>>;
 
 /// Information about an installed application
 #[derive(Debug, Clone)]
@@ -38,6 +49,8 @@ pub struct AppInfo {
     pub path: PathBuf,
     /// Bundle identifier from Info.plist (e.g., "com.apple.Safari")
     pub bundle_id: Option<String>,
+    /// Icon as PNG bytes (32x32), extracted via NSWorkspace
+    pub icon_data: Option<IconData>,
 }
 
 /// Cached list of applications (scanned once, reused)
@@ -172,10 +185,17 @@ fn parse_app_bundle(path: &Path) -> Option<AppInfo> {
     // Try to extract bundle identifier from Info.plist
     let bundle_id = extract_bundle_id(path);
 
+    // Extract icon using NSWorkspace (macOS only)
+    #[cfg(target_os = "macos")]
+    let icon_data = extract_app_icon(path);
+    #[cfg(not(target_os = "macos"))]
+    let icon_data = None;
+
     Some(AppInfo {
         name,
         path: path.to_path_buf(),
         bundle_id,
+        icon_data,
     })
 }
 
@@ -203,6 +223,77 @@ fn extract_bundle_id(app_path: &Path) -> Option<String> {
     }
 
     None
+}
+
+/// Extract application icon using NSWorkspace
+///
+/// Uses macOS Cocoa APIs to get the icon for an application bundle.
+/// The icon is converted to PNG format at 32x32 pixels for list display.
+#[cfg(target_os = "macos")]
+fn extract_app_icon(app_path: &Path) -> Option<IconData> {
+    use std::slice;
+
+    let path_str = app_path.to_str()?;
+
+    unsafe {
+        // Get NSWorkspace shared instance
+        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+        if workspace == nil {
+            return None;
+        }
+
+        // Create NSString for path
+        let ns_path = CocoaNSString::alloc(nil).init_str(path_str);
+        if ns_path == nil {
+            return None;
+        }
+
+        // Get icon for file
+        let icon: id = msg_send![workspace, iconForFile: ns_path];
+        if icon == nil {
+            return None;
+        }
+
+        // Set the icon size to 32x32 for list display
+        let size = cocoa::foundation::NSSize::new(32.0, 32.0);
+        let _: () = msg_send![icon, setSize: size];
+
+        // Get TIFF representation
+        let tiff_data: id = msg_send![icon, TIFFRepresentation];
+        if tiff_data == nil {
+            return None;
+        }
+
+        // Create bitmap image rep from TIFF data
+        let bitmap_rep: id = msg_send![class!(NSBitmapImageRep), imageRepWithData: tiff_data];
+        if bitmap_rep == nil {
+            return None;
+        }
+
+        // Convert to PNG (NSPNGFileType = 4)
+        let empty_dict: id = msg_send![class!(NSDictionary), dictionary];
+        let png_data: id = msg_send![
+            bitmap_rep,
+            representationUsingType: 4u64  // NSPNGFileType
+            properties: empty_dict
+        ];
+        if png_data == nil {
+            return None;
+        }
+
+        // Get bytes from NSData
+        let length: usize = msg_send![png_data, length];
+        let bytes: *const u8 = msg_send![png_data, bytes];
+
+        if bytes.is_null() || length == 0 {
+            return None;
+        }
+
+        // Copy bytes to Vec<u8>
+        let png_bytes = slice::from_raw_parts(bytes, length).to_vec();
+
+        Some(Arc::new(png_bytes))
+    }
 }
 
 /// Launch an application
@@ -391,6 +482,43 @@ mod tests {
             original_len,
             names.len(),
             "Should not have duplicate app names"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_extract_app_icon() {
+        // Test icon extraction for Calculator (always present on macOS)
+        let calculator_path = Path::new("/System/Applications/Calculator.app");
+        if calculator_path.exists() {
+            let icon = extract_app_icon(calculator_path);
+            assert!(icon.is_some(), "Should extract Calculator icon");
+
+            if let Some(icon_data) = icon {
+                // PNG magic bytes: 0x89 0x50 0x4E 0x47
+                assert!(icon_data.len() > 8, "Icon data should have content");
+                assert_eq!(
+                    &icon_data[0..4],
+                    &[0x89, 0x50, 0x4E, 0x47],
+                    "Icon should be valid PNG"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_app_has_icon_data() {
+        let apps = scan_applications();
+
+        // Check that at least some apps have icons (most should)
+        let apps_with_icons = apps.iter().filter(|a| a.icon_data.is_some()).count();
+
+        // Most apps should have icons - at least 50%
+        assert!(
+            apps_with_icons > apps.len() / 2,
+            "At least half of apps should have icons, got {}/{}",
+            apps_with_icons,
+            apps.len()
         );
     }
 

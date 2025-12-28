@@ -385,22 +385,36 @@ pub fn render_design_item(
         }
         // All other variants use the default ListItem renderer
         _ => {
-            use crate::list_item::ListItem;
+            use crate::list_item::{ListItem, IconKind};
             
-            let (name, description, shortcut) = match result {
+            // Extract name, description, shortcut, and icon based on result type
+            let (name, description, shortcut, icon_kind) = match result {
                 SearchResult::Script(sm) => {
-                    (sm.script.name.clone(), sm.script.description.clone(), None)
+                    // Scripts get a scroll/document emoji
+                    (sm.script.name.clone(), sm.script.description.clone(), None, Some(IconKind::Emoji("📜".to_string())))
                 }
                 SearchResult::Scriptlet(sm) => {
-                    (sm.scriptlet.name.clone(), sm.scriptlet.description.clone(), sm.scriptlet.shortcut.clone())
+                    // Scriptlets get a lightning bolt for quick actions
+                    (sm.scriptlet.name.clone(), sm.scriptlet.description.clone(), sm.scriptlet.shortcut.clone(), Some(IconKind::Emoji("⚡".to_string())))
                 }
                 SearchResult::BuiltIn(bm) => {
-                    (bm.entry.name.clone(), Some(bm.entry.description.clone()), None)
+                    // Built-ins use their configured icon or default to gear
+                    let emoji = bm.entry.icon.clone().unwrap_or_else(|| "⚙️".to_string());
+                    (bm.entry.name.clone(), Some(bm.entry.description.clone()), None, Some(IconKind::Emoji(emoji)))
+                }
+                SearchResult::App(am) => {
+                    // Apps use real extracted icons, fallback to generic emoji
+                    let icon = match &am.app.icon_data {
+                        Some(data) => IconKind::Image(data.clone()),
+                        None => IconKind::Emoji("📱".to_string()),
+                    };
+                    (am.app.name.clone(), None, None, Some(icon))
                 }
             };
             
             ListItem::new(name, list_colors)
                 .index(index)
+                .icon_kind_opt(icon_kind)
                 .description_opt(description)
                 .shortcut_opt(shortcut)
                 .selected(is_selected)
@@ -481,7 +495,7 @@ mod tests {
         assert_eq!(get_item_height(DesignVariant::Compact), COMPACT_ITEM_HEIGHT);
         assert_eq!(get_item_height(DesignVariant::Compact), 24.0);
         
-        // Default and others use standard height (52px)
+        // Default and others use standard height (40px - tighter layout)
         assert_eq!(get_item_height(DesignVariant::Default), crate::list_item::LIST_ITEM_HEIGHT);
         assert_eq!(get_item_height(DesignVariant::Brutalist), crate::list_item::LIST_ITEM_HEIGHT);
     }

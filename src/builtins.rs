@@ -21,10 +21,11 @@ use tracing::debug;
 
 /// Types of built-in features
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)] // Some variants reserved for future use
 pub enum BuiltInFeature {
     /// Clipboard history viewer/manager
     ClipboardHistory,
-    /// Application launcher for opening installed apps
+    /// Application launcher for opening installed apps (legacy, apps now in main search)
     AppLauncher,
     /// Individual application entry (for future use when apps appear in search)
     App(String),
@@ -43,10 +44,13 @@ pub struct BuiltInEntry {
     pub keywords: Vec<String>,
     /// The actual feature this entry represents
     pub feature: BuiltInFeature,
+    /// Optional icon (emoji) to display
+    pub icon: Option<String>,
 }
 
 impl BuiltInEntry {
     /// Create a new built-in entry
+    #[allow(dead_code)]
     fn new(
         id: impl Into<String>,
         name: impl Into<String>,
@@ -60,6 +64,26 @@ impl BuiltInEntry {
             description: description.into(),
             keywords: keywords.into_iter().map(String::from).collect(),
             feature,
+            icon: None,
+        }
+    }
+
+    /// Create a new built-in entry with an icon
+    fn new_with_icon(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        keywords: Vec<&str>,
+        feature: BuiltInFeature,
+        icon: impl Into<String>,
+    ) -> Self {
+        BuiltInEntry {
+            id: id.into(),
+            name: name.into(),
+            description: description.into(),
+            keywords: keywords.into_iter().map(String::from).collect(),
+            feature,
+            icon: Some(icon.into()),
         }
     }
 }
@@ -71,29 +95,29 @@ impl BuiltInEntry {
 ///
 /// # Returns
 /// A vector of enabled built-in entries that should appear in the main search
+///
+/// Note: AppLauncher built-in is no longer used since apps now appear directly
+/// in the main search results. The config option is retained for future use
+/// (e.g., to control whether apps are included in search at all).
 pub fn get_builtin_entries(config: &BuiltInConfig) -> Vec<BuiltInEntry> {
     let mut entries = Vec::new();
 
     if config.clipboard_history {
-        entries.push(BuiltInEntry::new(
+        entries.push(BuiltInEntry::new_with_icon(
             "builtin-clipboard-history",
             "Clipboard History",
             "View and manage your clipboard history",
             vec!["clipboard", "history", "paste", "copy"],
             BuiltInFeature::ClipboardHistory,
+            "📋",
         ));
         debug!("Added Clipboard History built-in entry");
     }
 
+    // Note: AppLauncher built-in removed - apps now appear directly in main search
+    // The app_launcher config flag is kept for future use (e.g., to disable app search entirely)
     if config.app_launcher {
-        entries.push(BuiltInEntry::new(
-            "builtin-app-launcher",
-            "App Launcher",
-            "Search and launch installed applications",
-            vec!["app", "launch", "open", "application"],
-            BuiltInFeature::AppLauncher,
-        ));
-        debug!("Added App Launcher built-in entry");
+        debug!("app_launcher enabled - apps will appear in main search");
     }
 
     debug!(count = entries.len(), "Built-in entries loaded");
@@ -127,7 +151,8 @@ mod tests {
         let config = BuiltInConfig::default();
         let entries = get_builtin_entries(&config);
 
-        assert_eq!(entries.len(), 2);
+        // Only clipboard history is a built-in now (apps appear directly in search)
+        assert_eq!(entries.len(), 1);
 
         // Check clipboard history entry
         let clipboard = entries.iter().find(|e| e.id == "builtin-clipboard-history");
@@ -140,16 +165,7 @@ mod tests {
         assert!(clipboard.keywords.contains(&"paste".to_string()));
         assert!(clipboard.keywords.contains(&"copy".to_string()));
 
-        // Check app launcher entry
-        let launcher = entries.iter().find(|e| e.id == "builtin-app-launcher");
-        assert!(launcher.is_some());
-        let launcher = launcher.unwrap();
-        assert_eq!(launcher.name, "App Launcher");
-        assert_eq!(launcher.feature, BuiltInFeature::AppLauncher);
-        assert!(launcher.keywords.contains(&"app".to_string()));
-        assert!(launcher.keywords.contains(&"launch".to_string()));
-        assert!(launcher.keywords.contains(&"open".to_string()));
-        assert!(launcher.keywords.contains(&"application".to_string()));
+        // Note: App Launcher built-in removed - apps now appear directly in main search
     }
 
     #[test]
@@ -173,9 +189,8 @@ mod tests {
         };
         let entries = get_builtin_entries(&config);
 
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].id, "builtin-app-launcher");
-        assert_eq!(entries[0].feature, BuiltInFeature::AppLauncher);
+        // App launcher no longer creates a built-in entry (apps appear in main search)
+        assert_eq!(entries.len(), 0);
     }
 
     #[test]
@@ -234,16 +249,34 @@ mod tests {
             vec!["test".to_string(), "keyword".to_string()]
         );
         assert_eq!(entry.feature, BuiltInFeature::ClipboardHistory);
+        assert_eq!(entry.icon, None);
+    }
+
+    #[test]
+    fn test_builtin_entry_new_with_icon() {
+        let entry = BuiltInEntry::new_with_icon(
+            "test-id",
+            "Test Entry",
+            "Test description",
+            vec!["test"],
+            BuiltInFeature::ClipboardHistory,
+            "📋",
+        );
+
+        assert_eq!(entry.id, "test-id");
+        assert_eq!(entry.name, "Test Entry");
+        assert_eq!(entry.icon, Some("📋".to_string()));
     }
 
     #[test]
     fn test_builtin_entry_clone() {
-        let entry = BuiltInEntry::new(
+        let entry = BuiltInEntry::new_with_icon(
             "test-id",
             "Test Entry",
             "Test description",
             vec!["test"],
             BuiltInFeature::AppLauncher,
+            "🚀",
         );
 
         let cloned = entry.clone();
@@ -252,6 +285,7 @@ mod tests {
         assert_eq!(entry.description, cloned.description);
         assert_eq!(entry.keywords, cloned.keywords);
         assert_eq!(entry.feature, cloned.feature);
+        assert_eq!(entry.icon, cloned.icon);
     }
 
     #[test]

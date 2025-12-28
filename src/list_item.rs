@@ -6,10 +6,21 @@
 #![allow(dead_code)]
 
 use gpui::*;
+use std::sync::Arc;
 use crate::logging;
 
+/// Icon type for list items - supports both emoji strings and PNG image data
+#[derive(Clone)]
+pub enum IconKind {
+    /// Text/emoji icon (e.g., "📜", "⚡")
+    Emoji(String),
+    /// PNG image data as bytes (for app icons)
+    Image(Arc<Vec<u8>>),
+}
+
 /// Fixed height for list items (same as main script list)
-pub const LIST_ITEM_HEIGHT: f32 = 52.0;
+/// Reduced from 52px to 40px for tighter, more compact layout matching original Script Kit design
+pub const LIST_ITEM_HEIGHT: f32 = 40.0;
 
 /// Pre-computed colors for ListItem rendering
 /// 
@@ -66,6 +77,7 @@ pub type OnHoverCallback = Box<dyn Fn(usize, bool) + 'static>;
 /// Supports:
 /// - Name (required)
 /// - Description (optional, shown below name)
+/// - Icon (optional, emoji or PNG image displayed left of name)
 /// - Shortcut badge (optional, right-aligned)
 /// - Selection state with themed colors
 /// - Hover callback for mouse interaction (optional)
@@ -74,6 +86,7 @@ pub type OnHoverCallback = Box<dyn Fn(usize, bool) + 'static>;
 /// ```ignore
 /// let colors = ListItemColors::from_theme(&theme);
 /// ListItem::new("My Script", colors)
+///     .icon("📜")
 ///     .description("A helpful script")
 ///     .shortcut("⌘K")
 ///     .selected(true)
@@ -87,6 +100,7 @@ pub struct ListItem {
     name: SharedString,
     description: Option<String>,
     shortcut: Option<String>,
+    icon: Option<IconKind>,
     selected: bool,
     colors: ListItemColors,
     /// Index of this item in the list (needed for hover callback)
@@ -102,6 +116,7 @@ impl ListItem {
             name: name.into(),
             description: None,
             shortcut: None,
+            icon: None,
             selected: false,
             colors,
             index: None,
@@ -146,6 +161,42 @@ impl ListItem {
         self
     }
 
+    /// Set the icon (emoji) to display on the left side
+    pub fn icon(mut self, i: impl Into<String>) -> Self {
+        self.icon = Some(IconKind::Emoji(i.into()));
+        self
+    }
+
+    /// Set an optional emoji icon (convenience for Option<String>)
+    pub fn icon_opt(mut self, i: Option<String>) -> Self {
+        self.icon = i.map(IconKind::Emoji);
+        self
+    }
+    
+    /// Set a PNG image icon from bytes
+    pub fn icon_image(mut self, data: Arc<Vec<u8>>) -> Self {
+        self.icon = Some(IconKind::Image(data));
+        self
+    }
+    
+    /// Set an optional image icon
+    pub fn icon_image_opt(mut self, data: Option<Arc<Vec<u8>>>) -> Self {
+        self.icon = data.map(IconKind::Image);
+        self
+    }
+    
+    /// Set icon from IconKind enum (for mixed icon types)
+    pub fn icon_kind(mut self, kind: IconKind) -> Self {
+        self.icon = Some(kind);
+        self
+    }
+    
+    /// Set an optional icon from IconKind
+    pub fn icon_kind_opt(mut self, kind: Option<IconKind>) -> Self {
+        self.icon = kind;
+        self
+    }
+
     /// Set whether this item is selected
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
@@ -163,25 +214,68 @@ impl RenderOnce for ListItem {
         let selected_bg = rgba((colors.accent_selected_subtle << 8) | 0x80);
         let hover_bg = rgba((colors.accent_selected_subtle << 8) | 0x40);
         
-        // Build content with name + description
+        // Icon element (if present) - displayed on the left
+        // Supports both emoji strings and PNG image data
+        let icon_element = match &self.icon {
+            Some(IconKind::Emoji(emoji)) => {
+                div()
+                    .w(px(20.))
+                    .h(px(20.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_sm()
+                    .flex_shrink_0()
+                    .child(emoji.clone())
+            }
+            Some(IconKind::Image(png_data)) => {
+                // Render PNG image using GPUI's img() with a custom loader
+                let data = png_data.clone();
+                div()
+                    .w(px(20.))
+                    .h(px(20.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .flex_shrink_0()
+                    .child(
+                        img(move |_window: &mut Window, _cx: &mut App| {
+                            // Decode PNG to RenderImage
+                            match decode_png_to_render_image(&data) {
+                                Ok(image) => Some(Ok(image)),
+                                Err(_) => None,
+                            }
+                        })
+                        .w(px(20.))
+                        .h(px(20.))
+                        .object_fit(ObjectFit::Contain)
+                    )
+            }
+            None => {
+                div().w(px(0.)).h(px(0.)) // No space if no icon
+            }
+        };
+        
+        // Build content with name + description (tighter spacing)
         let mut item_content = div()
             .flex_1()
             .min_w(px(0.))
             .overflow_hidden()
             .flex()
             .flex_col()
-            .gap(px(2.));
+            .justify_center();
         
-        // Name - brighter when selected
+        // Name - 14px font, medium weight (tighter than before)
         item_content = item_content.child(
             div()
-                .text_sm()
+                .text_size(px(14.))
                 .font_weight(FontWeight::MEDIUM)
                 .overflow_hidden()
+                .line_height(px(18.))
                 .child(self.name)
         );
         
-        // Description - accent color when selected, muted when not
+        // Description - 12px font, muted color (tighter than before)
         if let Some(desc) = self.description {
             let desc_color = if self.selected { 
                 rgb(colors.accent_selected) 
@@ -190,31 +284,34 @@ impl RenderOnce for ListItem {
             };
             item_content = item_content.child(
                 div()
-                    .text_xs()
+                    .text_size(px(12.))
+                    .line_height(px(14.))
                     .text_color(desc_color)
                     .overflow_hidden()
-                    .max_h(px(16.))
+                    .text_ellipsis()
                     .child(desc)
             );
         }
         
-        // Shortcut badge (if present)
+        // Shortcut badge (if present) - right-aligned
         let shortcut_element = if let Some(sc) = self.shortcut {
             div()
-                .text_xs()
+                .text_size(px(11.))
                 .text_color(rgb(colors.text_dimmed))
-                .px(px(8.))
-                .rounded(px(4.))
+                .px(px(6.))
+                .py(px(2.))
+                .rounded(px(3.))
+                .bg(rgba((colors.background << 8) | 0x40))
                 .child(sc)
         } else {
             div()
         };
         
-        // Build the inner content div with all styling
+        // Build the inner content div with all styling (reduced horizontal padding)
         let inner_content = div()
             .w_full()
             .h_full()
-            .px(px(12.))
+            .px(px(8.))
             .bg(if self.selected { selected_bg } else { rgba(0x00000000) })
             .hover(|s| s.bg(hover_bg))
             .text_color(if self.selected { rgb(colors.text_primary) } else { rgb(colors.text_secondary) })
@@ -223,15 +320,14 @@ impl RenderOnce for ListItem {
             .flex()
             .flex_row()
             .items_center()
-            .justify_between()
-            .gap_2()
+            .gap(px(8.))
+            .child(icon_element)
             .child(item_content)
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap_2()
                     .flex_shrink_0()
                     .child(shortcut_element)
             );
@@ -239,11 +335,11 @@ impl RenderOnce for ListItem {
         // Use index for element ID (default to 0 if not set)
         let element_idx = index.unwrap_or(0);
         
-        // Base container with ID for stateful interactivity
+        // Base container with ID for stateful interactivity (reduced horizontal padding)
         let mut container = div()
             .w_full()
             .h(px(LIST_ITEM_HEIGHT))
-            .px(px(12.))
+            .px(px(8.))
             .flex()
             .items_center()
             .id(ElementId::NamedInteger("list-item".into(), element_idx as u64));
@@ -267,6 +363,32 @@ impl RenderOnce for ListItem {
         
         container.child(inner_content)
     }
+}
+
+/// Decode PNG bytes to GPUI RenderImage
+/// 
+/// Uses the `image` crate to decode PNG data and creates a GPUI-compatible
+/// RenderImage for display. Returns an Arc<RenderImage> for caching.
+fn decode_png_to_render_image(png_data: &[u8]) -> Result<Arc<RenderImage>, image::ImageError> {
+    use image::GenericImageView;
+    use smallvec::SmallVec;
+    
+    // Decode PNG
+    let img = image::load_from_memory(png_data)?;
+    
+    // Convert to RGBA8
+    let rgba = img.to_rgba8();
+    let (width, height) = img.dimensions();
+    
+    // Create Frame from RGBA buffer
+    let buffer = image::RgbaImage::from_raw(width, height, rgba.into_raw())
+        .expect("Failed to create RGBA image buffer");
+    let frame = image::Frame::new(buffer);
+    
+    // Create RenderImage
+    let render_image = RenderImage::new(SmallVec::from_elem(frame, 1));
+    
+    Ok(Arc::new(render_image))
 }
 
 // Note: Tests omitted for this module due to GPUI macro recursion limit issues.
