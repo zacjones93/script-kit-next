@@ -418,6 +418,11 @@ enum AppView {
         html: String,
         tailwind: Option<String>,
     },
+    /// Showing a form prompt from a script (HTML form with submit button)
+    FormPrompt {
+        id: String,
+        html: String,
+    },
     /// Showing a terminal prompt from a script
     TermPrompt {
         #[allow(dead_code)]
@@ -467,6 +472,7 @@ enum FocusedInput {
 enum PromptMessage {
     ShowArg { id: String, placeholder: String, choices: Vec<Choice> },
     ShowDiv { id: String, html: String, tailwind: Option<String> },
+    ShowForm { id: String, html: String },
     ShowTerm { id: String, command: Option<String> },
     ShowEditor { id: String, content: Option<String>, language: Option<String> },
     HideWindow,
@@ -1188,6 +1194,7 @@ impl ScriptListApp {
                 }
             }
             AppView::DivPrompt { .. } => (ViewType::DivPrompt, 0),
+            AppView::FormPrompt { .. } => (ViewType::DivPrompt, 0), // Use DivPrompt size for forms
             AppView::EditorPrompt { .. } => (ViewType::EditorPrompt, 0),
             AppView::TermPrompt { .. } => (ViewType::TermPrompt, 0),
             AppView::ActionsDialog => {
@@ -1894,6 +1901,9 @@ impl ScriptListApp {
                                     Message::Div { id, html, tailwind } => {
                                         Some(PromptMessage::ShowDiv { id, html, tailwind })
                                     }
+                                    Message::Form { id, html } => {
+                                        Some(PromptMessage::ShowForm { id, html })
+                                    }
                                                 Message::Term { id, command } => {
                                                     Some(PromptMessage::ShowTerm { id, command })
                                                 }
@@ -2140,6 +2150,13 @@ impl ScriptListApp {
                 self.current_view = AppView::DivPrompt { id, html, tailwind };
                 self.focused_input = FocusedInput::None; // DivPrompt has no text input
                 defer_resize_to_view(ViewType::DivPrompt, 0, cx);
+                cx.notify();
+            }
+            PromptMessage::ShowForm { id, html } => {
+                logging::log("UI", &format!("Showing form prompt: {}", id));
+                self.current_view = AppView::FormPrompt { id, html };
+                self.focused_input = FocusedInput::None; // FormPrompt has no text input (submit button instead)
+                defer_resize_to_view(ViewType::DivPrompt, 0, cx); // Use DivPrompt size for now
                 cx.notify();
             }
             PromptMessage::ShowTerm { id, command } => {
@@ -2413,6 +2430,7 @@ impl ScriptListApp {
             AppView::ActionsDialog => "ActionsDialog",
             AppView::ArgPrompt { .. } => "ArgPrompt",
             AppView::DivPrompt { .. } => "DivPrompt",
+            AppView::FormPrompt { .. } => "FormPrompt",
             AppView::TermPrompt { .. } => "TermPrompt",
             AppView::EditorPrompt { .. } => "EditorPrompt",
             AppView::ClipboardHistoryView { .. } => "ClipboardHistoryView",
@@ -2481,6 +2499,7 @@ impl ScriptListApp {
         matches!(self.current_view, 
             AppView::ArgPrompt { .. } | 
             AppView::DivPrompt { .. } | 
+            AppView::FormPrompt { .. } |
             AppView::TermPrompt { .. } | 
             AppView::EditorPrompt { .. } |
             AppView::ClipboardHistoryView { .. } |
@@ -2637,6 +2656,7 @@ impl Render for ScriptListApp {
             AppView::ActionsDialog => self.render_actions_dialog(cx),
             AppView::ArgPrompt { id, placeholder, choices } => self.render_arg_prompt(id, placeholder, choices, cx),
             AppView::DivPrompt { id, html, tailwind } => self.render_div_prompt(id, html, tailwind, cx),
+            AppView::FormPrompt { id, html } => self.render_form_prompt(id, html, cx),
             AppView::TermPrompt { entity, .. } => self.render_term_prompt(entity, cx),
             AppView::EditorPrompt { entity, .. } => self.render_editor_prompt(entity, cx),
             AppView::ClipboardHistoryView { entries, filter, selected_index } => {
@@ -4136,6 +4156,104 @@ impl ScriptListApp {
                     .text_xs()
                     .text_color(rgb(design_colors.text_muted))
                     .child("Press Enter or Escape to continue")
+            )
+            .into_any_element()
+    }
+    
+    fn render_form_prompt(&mut self, id: String, html: String, cx: &mut Context<Self>) -> AnyElement {
+        // Use design tokens for GLOBAL theming
+        let tokens = get_tokens(self.current_design);
+        let design_colors = tokens.colors();
+        let design_spacing = tokens.spacing();
+        let design_typography = tokens.typography();
+        let design_visual = tokens.visual();
+        
+        // Strip HTML tags for plain text display (same as DivPrompt for now)
+        let display_text = strip_html_tags(&html);
+        
+        let prompt_id = id.clone();
+        let handle_key = cx.listener(move |this: &mut Self, event: &gpui::KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
+            let key_str = event.keystroke.key.to_lowercase();
+            logging::log("KEY", &format!("FormPrompt key: '{}'", key_str));
+            
+            match key_str.as_str() {
+                "enter" => {
+                    // Enter submits the form
+                    logging::log("KEY", "Enter in FormPrompt - submitting form");
+                    this.submit_prompt_response(prompt_id.clone(), Some("submitted".to_string()), cx);
+                }
+                "escape" => {
+                    // ESC cancels the script completely
+                    logging::log("KEY", "ESC in FormPrompt - canceling script");
+                    this.submit_prompt_response(prompt_id.clone(), None, cx);
+                    this.cancel_script_execution(cx);
+                }
+                _ => {}
+            }
+        });
+        
+        // Use design tokens for global theming
+        let opacity = self.theme.get_opacity();
+        let bg_hex = design_colors.background;
+        let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
+        let box_shadows = self.create_box_shadows();
+        
+        // Use explicit height from layout constants instead of h_full()
+        // FormPrompt uses STANDARD_HEIGHT (500px) to match main window
+        let content_height = window_resize::layout::STANDARD_HEIGHT;
+        
+        // Button colors from theme
+        let button_colors = ButtonColors::from_theme(&self.theme);
+        
+        div()
+            .flex()
+            .flex_col()
+            .bg(rgba(bg_with_alpha))
+            .shadow(box_shadows)
+            .w_full()
+            .h(content_height)
+            .overflow_hidden()
+            .rounded(px(design_visual.radius_lg))
+            .text_color(rgb(design_colors.text_primary))
+            .font_family(design_typography.font_family)
+            .key_context("form_prompt")
+            .track_focus(&self.focus_handle)
+            .on_key_down(handle_key)
+            // Content area
+            .child(
+                div()
+                    .flex_1()
+                    .w_full()
+                    .min_h(px(0.))  // Critical: allows flex children to size properly
+                    .overflow_hidden()
+                    .p(px(design_spacing.padding_xl))
+                    .text_lg()
+                    .child(display_text)
+            )
+            // Footer with Submit button
+            .child(
+                div()
+                    .w_full()
+                    .px(px(design_spacing.padding_lg))
+                    .py(px(design_spacing.padding_md))
+                    .border_t_1()
+                    .border_color(rgba((design_colors.border << 8) | 0x60))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    // Help text
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(design_colors.text_muted))
+                            .child("⏎ submit • Esc cancel")
+                    )
+                    // Submit button
+                    .child(
+                        Button::new("Submit", button_colors)
+                            .variant(ButtonVariant::Primary)
+                    )
             )
             .into_any_element()
     }
