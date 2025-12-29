@@ -1,5 +1,5 @@
 // Name: SDK Test - Utility Functions
-// Description: Tests wait, uuid, compile, and HTTP methods
+// Description: Tests wait, uuid, compile, and HTTP methods (using native fetch)
 
 /**
  * SDK TEST: test-utils.ts
@@ -10,14 +10,14 @@
  * 1. utils-wait: wait() delay function
  * 2. utils-uuid: uuid() generation
  * 3. utils-compile: compile() template function
- * 4. http-get: get() request (if network available)
- * 5. http-post: post() request (if network available)
+ * 4. http-get: native fetch() GET request (if network available)
+ * 5. http-post: native fetch() POST request (if network available)
  * 
  * Expected behavior:
  * - wait() delays execution by specified ms
  * - uuid() generates valid v4 UUIDs
  * - compile() creates template functions
- * - HTTP methods return response data
+ * - Native fetch() returns response data
  */
 
 import '../../scripts/kit-sdk';
@@ -162,20 +162,21 @@ try {
 }
 
 // -----------------------------------------------------------------------------
-// Test 4: HTTP GET request
+// Test 4: HTTP GET request (using native fetch)
 // -----------------------------------------------------------------------------
 const test4 = 'http-get';
 logTest(test4, 'running');
 const start4 = Date.now();
 
 try {
-  debug('Test 4: HTTP GET request');
+  debug('Test 4: HTTP GET request (using native fetch)');
   
-  const response = await get('https://httpbin.org/get');
+  const response = await fetch('https://httpbin.org/get');
+  const data = await response.json();
   
-  debug(`GET response has data: ${!!response.data}`);
+  debug(`GET response has data: ${!!data}`);
   
-  if (response.data && typeof response.data === 'object') {
+  if (data && typeof data === 'object') {
     logTest(test4, 'pass', { result: 'GET request successful', duration_ms: Date.now() - start4 });
   } else {
     logTest(test4, 'fail', { 
@@ -189,20 +190,25 @@ try {
 }
 
 // -----------------------------------------------------------------------------
-// Test 5: HTTP POST request
+// Test 5: HTTP POST request (using native fetch)
 // -----------------------------------------------------------------------------
 const test5 = 'http-post';
 logTest(test5, 'running');
 const start5 = Date.now();
 
 try {
-  debug('Test 5: HTTP POST request');
+  debug('Test 5: HTTP POST request (using native fetch)');
   
-  const response = await post('https://httpbin.org/post', { message: 'hello' });
+  const response = await fetch('https://httpbin.org/post', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: 'hello' })
+  });
+  const data = await response.json();
   
-  debug(`POST response has data: ${!!response.data}`);
+  debug(`POST response has data: ${!!data}`);
   
-  if (response.data && typeof response.data === 'object') {
+  if (data && typeof data === 'object') {
     logTest(test5, 'pass', { result: 'POST request successful', duration_ms: Date.now() - start5 });
   } else {
     logTest(test5, 'fail', { 
@@ -286,8 +292,8 @@ All utility function tests have been executed.
 1. **utils-wait**: wait() delay function
 2. **utils-uuid**: uuid() generation
 3. **utils-compile**: compile() template function
-4. **http-get**: GET request (network dependent)
-5. **http-post**: POST request (network dependent)
+4. **http-get**: Native fetch() GET request (network dependent)
+5. **http-post**: Native fetch() POST request (network dependent)
 6. **utils-window-control**: Window control functions
 7. **utils-content-setters**: Content setter functions
 

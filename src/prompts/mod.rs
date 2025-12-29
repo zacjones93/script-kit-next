@@ -23,17 +23,24 @@ mod select;
 mod template;
 
 // Re-export prompt types for use when they're integrated into main.rs
-// Currently these are scaffolding - the actual prompt rendering is still in main.rs
 // When integrating:
 // 1. Create Entity<PromptType> in main.rs
 // 2. Switch from inline rendering to entity-based rendering
 // pub use arg::ArgPrompt;
 // pub use div::DivPrompt;
-// pub use drop::DropPrompt;
-// pub use env::EnvPrompt;
-// pub use path::PathPrompt;
-// pub use select::SelectPrompt;
-// pub use template::TemplatePrompt;
+
+// These exports are ready for use in main.rs when AppView variants are added
+// The #[allow(unused_imports)] is temporary until main.rs integrations are complete
+#[allow(unused_imports)]
+pub use drop::DropPrompt;
+#[allow(unused_imports)]
+pub use env::EnvPrompt;
+#[allow(unused_imports)]
+pub use path::PathPrompt;
+#[allow(unused_imports)]
+pub use select::SelectPrompt;
+#[allow(unused_imports)]
+pub use template::TemplatePrompt;
 
 // Re-export common types used by prompts
 use std::sync::Arc;

@@ -5,23 +5,31 @@
 //! ## Features
 //! - Stores text and base64-encoded images
 //! - Background polling every 500ms
-//! - LRU eviction at 1000 entries
-//! - Pin/unpin entries to prevent eviction
+//! - Time-based retention (default 30 days)
+//! - Pin/unpin entries to prevent deletion
+//! - Pagination support for lazy loading
+//! - Time-based grouping (Today, Yesterday, This Week, etc.)
+//! - OCR text storage for image entries
 //!
 //! ## Usage
 //! ```ignore
-//! use crate::clipboard_history::{init_clipboard_history, get_clipboard_history};
+//! use crate::clipboard_history::{init_clipboard_history, get_clipboard_history_page, group_entries_by_time};
 //!
 //! // Initialize on app startup
 //! init_clipboard_history()?;
 //!
-//! // Get recent entries
-//! let entries = get_clipboard_history(50);
+//! // Get paginated entries
+//! let entries = get_clipboard_history_page(50, 0);
+//! let total = get_total_entry_count();
+//!
+//! // Group by time for UI display
+//! let grouped = group_entries_by_time(entries);
 //! ```
 
 use anyhow::{Context, Result};
 use arboard::Clipboard;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use chrono::{Datelike, Local, NaiveDate, TimeZone};
 use gpui::RenderImage;
 use lru::LruCache;
 use rusqlite::{params, Connection};
@@ -34,12 +42,18 @@ use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-/// Maximum number of entries to keep in history (LRU eviction)
-const MAX_HISTORY_ENTRIES: usize = 1000;
+/// Default retention period in days (entries older than this are pruned)
+const DEFAULT_RETENTION_DAYS: u32 = 30;
+
+/// Interval between background pruning checks (1 hour)
+const PRUNE_INTERVAL_SECS: u64 = 3600;
 
 /// Maximum number of decoded images to keep in memory (LRU eviction)
 /// Each image can be 1-4MB, so 100 images = ~100-400MB max memory
 const MAX_IMAGE_CACHE_ENTRIES: usize = 100;
+
+/// Maximum entries to cache in memory for fast access
+const MAX_CACHED_ENTRIES: usize = 500;
 
 /// Polling interval for clipboard changes
 const POLL_INTERVAL_MS: u64 = 500;
@@ -67,6 +81,117 @@ impl ContentType {
     }
 }
 
+/// Time grouping for clipboard entries (like Raycast)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(dead_code)] // Used by downstream subtasks (UI)
+pub enum TimeGroup {
+    Today,
+    Yesterday,
+    ThisWeek,
+    LastWeek,
+    ThisMonth,
+    Older,
+}
+
+impl TimeGroup {
+    /// Get display name for UI labels
+    #[allow(dead_code)] // Used by downstream subtasks (UI)
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            TimeGroup::Today => "Today",
+            TimeGroup::Yesterday => "Yesterday",
+            TimeGroup::ThisWeek => "This Week",
+            TimeGroup::LastWeek => "Last Week",
+            TimeGroup::ThisMonth => "This Month",
+            TimeGroup::Older => "Older",
+        }
+    }
+
+    /// Order for sorting groups (lower = earlier in list)
+    #[allow(dead_code)] // Used by downstream subtasks (UI)
+    pub fn sort_order(&self) -> u8 {
+        match self {
+            TimeGroup::Today => 0,
+            TimeGroup::Yesterday => 1,
+            TimeGroup::ThisWeek => 2,
+            TimeGroup::LastWeek => 3,
+            TimeGroup::ThisMonth => 4,
+            TimeGroup::Older => 5,
+        }
+    }
+}
+
+/// Classify a Unix timestamp into a TimeGroup using local timezone
+#[allow(dead_code)] // Used by downstream subtasks (UI)
+pub fn classify_timestamp(timestamp: i64) -> TimeGroup {
+    let now = Local::now();
+    let today = now.date_naive();
+    let entry_date = match Local.timestamp_opt(timestamp, 0) {
+        chrono::LocalResult::Single(dt) => dt.date_naive(),
+        _ => return TimeGroup::Older,
+    };
+
+    // Check Today
+    if entry_date == today {
+        return TimeGroup::Today;
+    }
+
+    // Check Yesterday
+    if let Some(yesterday) = today.pred_opt() {
+        if entry_date == yesterday {
+            return TimeGroup::Yesterday;
+        }
+    }
+
+    // Calculate week boundaries
+    // Week starts on Monday (ISO 8601)
+    let days_since_monday = today.weekday().num_days_from_monday();
+    let this_week_start = today - chrono::Duration::days(days_since_monday as i64);
+    let last_week_start = this_week_start - chrono::Duration::days(7);
+
+    // Check This Week (not including today/yesterday which are handled above)
+    if entry_date >= this_week_start && entry_date < today {
+        return TimeGroup::ThisWeek;
+    }
+
+    // Check Last Week
+    if entry_date >= last_week_start && entry_date < this_week_start {
+        return TimeGroup::LastWeek;
+    }
+
+    // Check This Month
+    let this_month_start = NaiveDate::from_ymd_opt(today.year(), today.month(), 1)
+        .unwrap_or(today);
+    if entry_date >= this_month_start {
+        return TimeGroup::ThisMonth;
+    }
+
+    TimeGroup::Older
+}
+
+/// Group entries by time period
+///
+/// Returns a vector of (TimeGroup, Vec<ClipboardEntry>) tuples,
+/// sorted by time group order (Today first, Older last).
+/// Entries within each group maintain their original order.
+#[allow(dead_code)] // Used by downstream subtasks (UI)
+pub fn group_entries_by_time(entries: Vec<ClipboardEntry>) -> Vec<(TimeGroup, Vec<ClipboardEntry>)> {
+    use std::collections::HashMap;
+
+    let mut groups: HashMap<TimeGroup, Vec<ClipboardEntry>> = HashMap::new();
+
+    for entry in entries {
+        let group = classify_timestamp(entry.timestamp);
+        groups.entry(group).or_default().push(entry);
+    }
+
+    // Sort groups by their display order
+    let mut result: Vec<(TimeGroup, Vec<ClipboardEntry>)> = groups.into_iter().collect();
+    result.sort_by_key(|(group, _)| group.sort_order());
+
+    result
+}
+
 /// A single clipboard history entry
 #[derive(Debug, Clone)]
 pub struct ClipboardEntry {
@@ -75,6 +200,9 @@ pub struct ClipboardEntry {
     pub content_type: ContentType,
     pub timestamp: i64,
     pub pinned: bool,
+    /// OCR text extracted from images (None for text entries or pending OCR)
+    #[allow(dead_code)] // Used by downstream subtasks (OCR, UI)
+    pub ocr_text: Option<String>,
 }
 
 /// Global database connection (thread-safe)
@@ -82,6 +210,9 @@ static DB_CONNECTION: OnceLock<Arc<Mutex<Connection>>> = OnceLock::new();
 
 /// Flag to stop the monitoring thread
 static STOP_MONITORING: OnceLock<Arc<Mutex<bool>>> = OnceLock::new();
+
+/// Configured retention days (loaded from config, defaults to DEFAULT_RETENTION_DAYS)
+static RETENTION_DAYS: OnceLock<u32> = OnceLock::new();
 
 /// Global image cache for decoded RenderImages (thread-safe)
 /// Key: entry ID, Value: decoded RenderImage
@@ -156,7 +287,7 @@ fn invalidate_entry_cache() {
 
 /// Refresh the entry cache from database
 fn refresh_entry_cache() {
-    let entries = get_clipboard_history(MAX_HISTORY_ENTRIES);
+    let entries = get_clipboard_history_page(MAX_CACHED_ENTRIES, 0);
     if let Ok(mut cache) = get_entry_cache().lock() {
         *cache = entries;
         debug!(count = cache.len(), "Refreshed entry cache");
@@ -166,6 +297,17 @@ fn refresh_entry_cache() {
             *ts = chrono::Utc::now().timestamp();
         }
     }
+}
+
+/// Get the configured retention period in days
+pub fn get_retention_days() -> u32 {
+    *RETENTION_DAYS.get().unwrap_or(&DEFAULT_RETENTION_DAYS)
+}
+
+/// Set the retention period (call before init_clipboard_history)
+#[allow(dead_code)] // Used by downstream subtasks (config)
+pub fn set_retention_days(days: u32) {
+    let _ = RETENTION_DAYS.set(days);
 }
 
 /// Get the database path (~/.kenv/clipboard-history.db)
@@ -190,6 +332,11 @@ fn get_connection() -> Result<Arc<Mutex<Connection>>> {
     let conn = Connection::open(&db_path)
         .with_context(|| format!("Failed to open database at {:?}", db_path))?;
 
+    // Enable WAL mode for better concurrency
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        .context("Failed to enable WAL mode")?;
+    debug!("Enabled WAL mode for clipboard history database");
+
     // Create the table if it doesn't exist
     conn.execute(
         "CREATE TABLE IF NOT EXISTS history (
@@ -197,11 +344,28 @@ fn get_connection() -> Result<Arc<Mutex<Connection>>> {
             content TEXT NOT NULL,
             content_type TEXT NOT NULL DEFAULT 'text',
             timestamp INTEGER NOT NULL,
-            pinned INTEGER DEFAULT 0
+            pinned INTEGER DEFAULT 0,
+            ocr_text TEXT
         )",
         [],
     )
     .context("Failed to create history table")?;
+
+    // Migration: Add ocr_text column if it doesn't exist (for existing databases)
+    let has_ocr_column: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('history') WHERE name='ocr_text'",
+            [],
+            |row| row.get::<_, i32>(0),
+        )
+        .map(|count| count > 0)
+        .unwrap_or(false);
+
+    if !has_ocr_column {
+        conn.execute("ALTER TABLE history ADD COLUMN ocr_text TEXT", [])
+            .context("Failed to add ocr_text column")?;
+        info!("Migrated clipboard history: added ocr_text column");
+    }
 
     // Create index for faster queries
     conn.execute(
@@ -209,6 +373,13 @@ fn get_connection() -> Result<Arc<Mutex<Connection>>> {
         [],
     )
     .context("Failed to create timestamp index")?;
+
+    // Create composite index for pinned + timestamp (for efficient ordering)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pinned_timestamp ON history(pinned DESC, timestamp DESC)",
+        [],
+    )
+    .context("Failed to create pinned+timestamp index")?;
 
     let conn = Arc::new(Mutex::new(conn));
 
@@ -221,21 +392,28 @@ fn get_connection() -> Result<Arc<Mutex<Connection>>> {
 /// Initialize clipboard history: create DB and start monitoring
 ///
 /// This should be called once at application startup. It will:
-/// 1. Create the SQLite database if it doesn't exist
-/// 2. Pre-warm the entry cache
-/// 3. Pre-decode images in background
-/// 4. Start a background thread that polls the clipboard every 500ms
+/// 1. Create the SQLite database if it doesn't exist (with WAL mode)
+/// 2. Run initial pruning of old entries
+/// 3. Pre-warm the entry cache
+/// 4. Pre-decode images in background
+/// 5. Start a background thread that polls the clipboard every 500ms
+/// 6. Start a background pruning job (runs hourly)
 ///
 /// # Errors
 /// Returns error if database creation fails.
 pub fn init_clipboard_history() -> Result<()> {
-    info!("Initializing clipboard history");
+    info!(retention_days = get_retention_days(), "Initializing clipboard history");
 
-    // Initialize the database connection
+    // Initialize the database connection (enables WAL, runs migrations)
     let _conn = get_connection().context("Failed to initialize database")?;
 
     // Initialize the cache timestamp
     let _ = CACHE_UPDATED.set(Mutex::new(0));
+
+    // Run initial pruning of old entries
+    if let Err(e) = prune_old_entries() {
+        warn!(error = %e, "Initial pruning failed");
+    }
 
     // Pre-warm the entry cache from database
     refresh_entry_cache();
@@ -257,8 +435,75 @@ pub fn init_clipboard_history() -> Result<()> {
         }
     });
 
+    // Start background pruning thread (runs hourly)
+    let stop_flag_prune = stop_flag.clone();
+    thread::spawn(move || {
+        background_prune_loop(stop_flag_prune);
+    });
+
     info!("Clipboard history initialized");
     Ok(())
+}
+
+/// Background loop that periodically prunes old entries
+fn background_prune_loop(stop_flag: Arc<Mutex<bool>>) {
+    let prune_interval = Duration::from_secs(PRUNE_INTERVAL_SECS);
+
+    loop {
+        // Sleep first (initial prune already happened during init)
+        thread::sleep(prune_interval);
+
+        // Check if we should stop
+        if let Ok(stop) = stop_flag.lock() {
+            if *stop {
+                info!("Background prune thread stopping");
+                break;
+            }
+        }
+
+        // Prune old entries
+        match prune_old_entries() {
+            Ok(count) => {
+                if count > 0 {
+                    info!(pruned = count, "Background pruning completed");
+                    // Refresh cache after pruning
+                    refresh_entry_cache();
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "Background pruning failed");
+            }
+        }
+    }
+}
+
+/// Prune entries older than retention period (except pinned entries)
+///
+/// Returns the number of entries deleted.
+pub fn prune_old_entries() -> Result<usize> {
+    let conn = get_connection()?;
+    let conn = conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+
+    let retention_days = get_retention_days();
+    let cutoff_timestamp = chrono::Utc::now().timestamp() - (retention_days as i64 * 24 * 60 * 60);
+
+    let deleted = conn
+        .execute(
+            "DELETE FROM history WHERE pinned = 0 AND timestamp < ?",
+            params![cutoff_timestamp],
+        )
+        .context("Failed to prune old entries")?;
+
+    if deleted > 0 {
+        debug!(
+            deleted,
+            retention_days,
+            cutoff_timestamp,
+            "Pruned old clipboard entries"
+        );
+    }
+
+    Ok(deleted)
 }
 
 /// Pre-warm the image cache by decoding all cached image entries
@@ -442,15 +687,14 @@ fn add_entry(content: &str, content_type: ContentType) -> Result<()> {
 
     // Insert new entry
     conn.execute(
-        "INSERT INTO history (id, content, content_type, timestamp, pinned) VALUES (?1, ?2, ?3, ?4, 0)",
+        "INSERT INTO history (id, content, content_type, timestamp, pinned, ocr_text) VALUES (?1, ?2, ?3, ?4, 0, NULL)",
         params![id, content, content_type.as_str(), timestamp],
     )
     .context("Failed to insert clipboard entry")?;
 
     debug!(id = %id, content_type = content_type.as_str(), "Added clipboard entry");
 
-    // Enforce LRU eviction
-    enforce_max_entries(&conn)?;
+    // No longer enforce max entries - retention-based pruning handles cleanup
 
     // Drop lock before refreshing cache
     drop(conn);
@@ -461,45 +705,18 @@ fn add_entry(content: &str, content_type: ContentType) -> Result<()> {
     Ok(())
 }
 
-/// Enforce maximum entry count by removing oldest unpinned entries
-fn enforce_max_entries(conn: &Connection) -> Result<()> {
-    // Count total entries
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM history", [], |row| row.get(0))?;
-
-    if count as usize <= MAX_HISTORY_ENTRIES {
-        return Ok(());
-    }
-
-    let to_remove = count as usize - MAX_HISTORY_ENTRIES;
-
-    // Delete oldest unpinned entries
-    conn.execute(
-        "DELETE FROM history WHERE id IN (
-            SELECT id FROM history 
-            WHERE pinned = 0 
-            ORDER BY timestamp ASC 
-            LIMIT ?
-        )",
-        params![to_remove],
-    )
-    .context("Failed to evict old entries")?;
-
-    debug!(removed = to_remove, "Evicted old clipboard entries (LRU)");
-
-    Ok(())
-}
-
-/// Get clipboard history entries
+/// Get paginated clipboard history entries
 ///
-/// Returns the most recent entries, ordered by timestamp descending.
-/// Pinned entries are included in the results.
+/// Returns entries ordered by pinned status (pinned first) then by timestamp descending.
+/// Supports pagination for lazy loading in the UI.
 ///
 /// # Arguments
 /// * `limit` - Maximum number of entries to return
+/// * `offset` - Number of entries to skip (for pagination)
 ///
 /// # Returns
-/// Vector of clipboard entries, newest first.
-pub fn get_clipboard_history(limit: usize) -> Vec<ClipboardEntry> {
+/// Vector of clipboard entries for the requested page.
+pub fn get_clipboard_history_page(limit: usize, offset: usize) -> Vec<ClipboardEntry> {
     let conn = match get_connection() {
         Ok(c) => c,
         Err(e) => {
@@ -517,10 +734,10 @@ pub fn get_clipboard_history(limit: usize) -> Vec<ClipboardEntry> {
     };
 
     let mut stmt = match conn.prepare(
-        "SELECT id, content, content_type, timestamp, pinned 
+        "SELECT id, content, content_type, timestamp, pinned, ocr_text 
          FROM history 
          ORDER BY pinned DESC, timestamp DESC 
-         LIMIT ?",
+         LIMIT ? OFFSET ?",
     ) {
         Ok(s) => s,
         Err(e) => {
@@ -530,13 +747,14 @@ pub fn get_clipboard_history(limit: usize) -> Vec<ClipboardEntry> {
     };
 
     let entries = stmt
-        .query_map(params![limit], |row| {
+        .query_map(params![limit, offset], |row| {
             Ok(ClipboardEntry {
                 id: row.get(0)?,
                 content: row.get(1)?,
                 content_type: ContentType::from_str(&row.get::<_, String>(2)?),
                 timestamp: row.get(3)?,
                 pinned: row.get::<_, i64>(4)? != 0,
+                ocr_text: row.get(5)?,
             })
         })
         .map(|rows| rows.filter_map(|r| r.ok()).collect())
@@ -545,8 +763,51 @@ pub fn get_clipboard_history(limit: usize) -> Vec<ClipboardEntry> {
             Vec::new()
         });
 
-    debug!(count = entries.len(), limit = limit, "Retrieved clipboard history");
+    debug!(count = entries.len(), limit, offset, "Retrieved clipboard history page");
     entries
+}
+
+/// Get total number of entries in clipboard history
+///
+/// Useful for pagination UI (showing "X of Y entries")
+#[allow(dead_code)] // Used by downstream subtasks (UI)
+pub fn get_total_entry_count() -> usize {
+    let conn = match get_connection() {
+        Ok(c) => c,
+        Err(e) => {
+            error!(error = %e, "Failed to get database connection");
+            return 0;
+        }
+    };
+
+    let conn = match conn.lock() {
+        Ok(c) => c,
+        Err(e) => {
+            error!(error = %e, "Failed to lock database connection");
+            return 0;
+        }
+    };
+
+    conn.query_row("SELECT COUNT(*) FROM history", [], |row| row.get::<_, i64>(0))
+        .map(|c| c as usize)
+        .unwrap_or_else(|e| {
+            error!(error = %e, "Failed to count clipboard entries");
+            0
+        })
+}
+
+/// Get clipboard history entries (convenience wrapper)
+///
+/// Returns the most recent entries, ordered by timestamp descending.
+/// Pinned entries are included in the results.
+///
+/// # Arguments
+/// * `limit` - Maximum number of entries to return
+///
+/// # Returns
+/// Vector of clipboard entries, newest first.
+pub fn get_clipboard_history(limit: usize) -> Vec<ClipboardEntry> {
+    get_clipboard_history_page(limit, 0)
 }
 
 /// Pin a clipboard entry to prevent LRU eviction
@@ -635,6 +896,72 @@ pub fn clear_history() -> Result<()> {
     Ok(())
 }
 
+/// Update OCR text for an entry (async OCR results)
+///
+/// This is called by the OCR module after extracting text from an image.
+///
+/// # Arguments
+/// * `id` - The entry ID to update
+/// * `text` - The extracted OCR text
+///
+/// # Errors
+/// Returns error if the entry doesn't exist or database operation fails.
+#[allow(dead_code)] // Used by downstream subtasks (OCR)
+pub fn update_ocr_text(id: &str, text: &str) -> Result<()> {
+    let conn = get_connection()?;
+    let conn = conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+
+    let affected = conn
+        .execute(
+            "UPDATE history SET ocr_text = ? WHERE id = ?",
+            params![text, id],
+        )
+        .context("Failed to update OCR text")?;
+
+    if affected == 0 {
+        anyhow::bail!("Entry not found: {}", id);
+    }
+
+    debug!(id = %id, text_len = text.len(), "Updated OCR text for clipboard entry");
+
+    // Drop conn before refreshing cache
+    drop(conn);
+
+    // Refresh cache to include updated OCR text
+    refresh_entry_cache();
+
+    Ok(())
+}
+
+/// Get entry by ID
+///
+/// # Arguments
+/// * `id` - The entry ID to retrieve
+///
+/// # Returns
+/// The clipboard entry if found, None otherwise.
+#[allow(dead_code)] // Used by downstream subtasks (UI, OCR)
+pub fn get_entry_by_id(id: &str) -> Option<ClipboardEntry> {
+    let conn = get_connection().ok()?;
+    let conn = conn.lock().ok()?;
+
+    conn.query_row(
+        "SELECT id, content, content_type, timestamp, pinned, ocr_text FROM history WHERE id = ?",
+        params![id],
+        |row| {
+            Ok(ClipboardEntry {
+                id: row.get(0)?,
+                content: row.get(1)?,
+                content_type: ContentType::from_str(&row.get::<_, String>(2)?),
+                timestamp: row.get(3)?,
+                pinned: row.get::<_, i64>(4)? != 0,
+                ocr_text: row.get(5)?,
+            })
+        },
+    )
+    .ok()
+}
+
 /// Copy an entry back to the clipboard
 ///
 /// # Arguments
@@ -654,6 +981,7 @@ pub fn copy_entry_to_clipboard(id: &str) -> Result<()> {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .context("Entry not found")?;
+    // Note: ocr_text not needed for copying to clipboard
 
     drop(conn); // Release lock before clipboard operation
 
@@ -814,5 +1142,103 @@ mod tests {
         assert_eq!(original.width, decoded.width);
         assert_eq!(original.height, decoded.height);
         assert_eq!(original.bytes.as_ref(), decoded.bytes.as_ref());
+    }
+
+    #[test]
+    fn test_time_group_display_names() {
+        assert_eq!(TimeGroup::Today.display_name(), "Today");
+        assert_eq!(TimeGroup::Yesterday.display_name(), "Yesterday");
+        assert_eq!(TimeGroup::ThisWeek.display_name(), "This Week");
+        assert_eq!(TimeGroup::LastWeek.display_name(), "Last Week");
+        assert_eq!(TimeGroup::ThisMonth.display_name(), "This Month");
+        assert_eq!(TimeGroup::Older.display_name(), "Older");
+    }
+
+    #[test]
+    fn test_time_group_sort_order() {
+        assert!(TimeGroup::Today.sort_order() < TimeGroup::Yesterday.sort_order());
+        assert!(TimeGroup::Yesterday.sort_order() < TimeGroup::ThisWeek.sort_order());
+        assert!(TimeGroup::ThisWeek.sort_order() < TimeGroup::LastWeek.sort_order());
+        assert!(TimeGroup::LastWeek.sort_order() < TimeGroup::ThisMonth.sort_order());
+        assert!(TimeGroup::ThisMonth.sort_order() < TimeGroup::Older.sort_order());
+    }
+
+    #[test]
+    fn test_classify_timestamp_today() {
+        let now = chrono::Utc::now().timestamp();
+        assert_eq!(classify_timestamp(now), TimeGroup::Today);
+    }
+
+    #[test]
+    fn test_classify_timestamp_yesterday() {
+        let yesterday = chrono::Utc::now().timestamp() - 24 * 60 * 60;
+        assert_eq!(classify_timestamp(yesterday), TimeGroup::Yesterday);
+    }
+
+    #[test]
+    fn test_classify_timestamp_very_old() {
+        // 100 days ago
+        let old = chrono::Utc::now().timestamp() - 100 * 24 * 60 * 60;
+        assert_eq!(classify_timestamp(old), TimeGroup::Older);
+    }
+
+    #[test]
+    fn test_group_entries_by_time() {
+        let now = chrono::Utc::now().timestamp();
+        let yesterday = now - 24 * 60 * 60;
+        let old = now - 100 * 24 * 60 * 60;
+
+        let entries = vec![
+            ClipboardEntry {
+                id: "1".to_string(),
+                content: "today".to_string(),
+                content_type: ContentType::Text,
+                timestamp: now,
+                pinned: false,
+                ocr_text: None,
+            },
+            ClipboardEntry {
+                id: "2".to_string(),
+                content: "yesterday".to_string(),
+                content_type: ContentType::Text,
+                timestamp: yesterday,
+                pinned: false,
+                ocr_text: None,
+            },
+            ClipboardEntry {
+                id: "3".to_string(),
+                content: "old".to_string(),
+                content_type: ContentType::Text,
+                timestamp: old,
+                pinned: false,
+                ocr_text: None,
+            },
+        ];
+
+        let grouped = group_entries_by_time(entries);
+
+        // Should have 3 groups
+        assert_eq!(grouped.len(), 3);
+
+        // First group should be Today
+        assert_eq!(grouped[0].0, TimeGroup::Today);
+        assert_eq!(grouped[0].1.len(), 1);
+        assert_eq!(grouped[0].1[0].content, "today");
+
+        // Second group should be Yesterday
+        assert_eq!(grouped[1].0, TimeGroup::Yesterday);
+        assert_eq!(grouped[1].1.len(), 1);
+        assert_eq!(grouped[1].1[0].content, "yesterday");
+
+        // Third group should be Older
+        assert_eq!(grouped[2].0, TimeGroup::Older);
+        assert_eq!(grouped[2].1.len(), 1);
+        assert_eq!(grouped[2].1[0].content, "old");
+    }
+
+    #[test]
+    fn test_retention_days_default() {
+        // Default should be 30 days
+        assert_eq!(DEFAULT_RETENTION_DAYS, 30);
     }
 }

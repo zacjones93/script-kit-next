@@ -42,11 +42,24 @@ pub struct Scriptlet {
     pub command: Option<String>,
 }
 
+/// Represents match indices for highlighting matched characters
+#[derive(Clone, Debug, Default)]
+pub struct MatchIndices {
+    /// Indices of matched characters in the name
+    pub name_indices: Vec<usize>,
+    /// Indices of matched characters in the filename/path
+    pub filename_indices: Vec<usize>,
+}
+
 /// Represents a scored match result for fuzzy search
 #[derive(Clone, Debug)]
 pub struct ScriptMatch {
     pub script: Script,
     pub score: i32,
+    /// The filename used for matching (e.g., "my-script.ts")
+    pub filename: String,
+    /// Indices of matched characters for UI highlighting
+    pub match_indices: MatchIndices,
 }
 
 /// Represents a scored match result for fuzzy search on scriptlets
@@ -54,6 +67,10 @@ pub struct ScriptMatch {
 pub struct ScriptletMatch {
     pub scriptlet: Scriptlet,
     pub score: i32,
+    /// The display file path with anchor for matching (e.g., "url.md#open-github")
+    pub display_file_path: Option<String>,
+    /// Indices of matched characters for UI highlighting
+    pub match_indices: MatchIndices,
 }
 
 /// Represents a scored match result for fuzzy search on built-in entries
@@ -640,15 +657,71 @@ fn is_fuzzy_match(haystack: &str, pattern: &str) -> bool {
     pattern_chars.peek().is_none()
 }
 
+/// Perform fuzzy matching and return the indices of matched characters
+/// Returns (matched, indices) where matched is true if all pattern chars found in order
+fn fuzzy_match_with_indices(haystack: &str, pattern: &str) -> (bool, Vec<usize>) {
+    let mut indices = Vec::new();
+    let mut pattern_chars = pattern.chars().peekable();
+    
+    for (idx, ch) in haystack.chars().enumerate() {
+        if let Some(&p) = pattern_chars.peek() {
+            if ch.eq_ignore_ascii_case(&p) {
+                indices.push(idx);
+                pattern_chars.next();
+            }
+        }
+    }
+    
+    let matched = pattern_chars.peek().is_none();
+    (matched, if matched { indices } else { Vec::new() })
+}
+
+/// Extract filename from a path for display
+fn extract_filename(path: &std::path::Path) -> String {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Extract display-friendly file path from scriptlet file_path
+/// Converts "/path/to/file.md#slug" to "file.md#slug"
+fn extract_scriptlet_display_path(file_path: &Option<String>) -> Option<String> {
+    file_path.as_ref().map(|fp| {
+        // Split on # to get path and anchor
+        let parts: Vec<&str> = fp.splitn(2, '#').collect();
+        let path_part = parts[0];
+        let anchor = parts.get(1);
+        
+        // Extract just the filename from the path
+        let filename = std::path::Path::new(path_part)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(path_part);
+        
+        // Reconstruct with anchor if present
+        match anchor {
+            Some(a) => format!("{}#{}", filename, a),
+            None => filename.to_string(),
+        }
+    })
+}
+
 /// Fuzzy search scripts by query string
-/// Searches across name, description, and path
+/// Searches across name, filename (e.g., "my-script.ts"), description, and path
 /// Returns results sorted by relevance score (highest first)
+/// Match indices are provided to enable UI highlighting of matched characters
 pub fn fuzzy_search_scripts(scripts: &[Script], query: &str) -> Vec<ScriptMatch> {
     if query.is_empty() {
         // If no query, return all scripts with equal score, sorted by name
-        return scripts.iter().map(|s| ScriptMatch {
-            script: s.clone(),
-            score: 0,
+        return scripts.iter().map(|s| {
+            let filename = extract_filename(&s.path);
+            ScriptMatch {
+                script: s.clone(),
+                score: 0,
+                filename,
+                match_indices: MatchIndices::default(),
+            }
         }).collect();
     }
 
@@ -657,7 +730,11 @@ pub fn fuzzy_search_scripts(scripts: &[Script], query: &str) -> Vec<ScriptMatch>
 
     for script in scripts {
         let mut score = 0i32;
+        let mut match_indices = MatchIndices::default();
+        
         let name_lower = script.name.to_lowercase();
+        let filename = extract_filename(&script.path);
+        let filename_lower = filename.to_lowercase();
 
         // Score by name match - highest priority
         if let Some(pos) = name_lower.find(&query_lower) {
@@ -666,8 +743,26 @@ pub fn fuzzy_search_scripts(scripts: &[Script], query: &str) -> Vec<ScriptMatch>
         }
 
         // Fuzzy character matching in name (characters in order)
-        if is_fuzzy_match(&name_lower, &query_lower) {
+        let (name_fuzzy_matched, name_indices) = fuzzy_match_with_indices(&name_lower, &query_lower);
+        if name_fuzzy_matched {
             score += 50;
+            match_indices.name_indices = name_indices;
+        }
+
+        // Score by filename match - high priority (allows searching by ".ts", ".js", etc.)
+        if let Some(pos) = filename_lower.find(&query_lower) {
+            // Bonus for exact substring match at start of filename
+            score += if pos == 0 { 60 } else { 45 };
+        }
+
+        // Fuzzy character matching in filename
+        let (filename_fuzzy_matched, filename_indices) = fuzzy_match_with_indices(&filename_lower, &query_lower);
+        if filename_fuzzy_matched {
+            score += 35;
+            // Only set filename indices if name didn't match (prefer name match for highlighting)
+            if match_indices.name_indices.is_empty() {
+                match_indices.filename_indices = filename_indices;
+            }
         }
 
         // Score by description match - medium priority
@@ -687,6 +782,8 @@ pub fn fuzzy_search_scripts(scripts: &[Script], query: &str) -> Vec<ScriptMatch>
             matches.push(ScriptMatch {
                 script: script.clone(),
                 score,
+                filename,
+                match_indices,
             });
         }
     }
@@ -703,14 +800,20 @@ pub fn fuzzy_search_scripts(scripts: &[Script], query: &str) -> Vec<ScriptMatch>
 }
 
 /// Fuzzy search scriptlets by query string
-/// Searches across name, description, and code
+/// Searches across name, file_path with anchor (e.g., "url.md#open-github"), description, and code
 /// Returns results sorted by relevance score (highest first)
+/// Match indices are provided to enable UI highlighting of matched characters
 pub fn fuzzy_search_scriptlets(scriptlets: &[Scriptlet], query: &str) -> Vec<ScriptletMatch> {
     if query.is_empty() {
         // If no query, return all scriptlets with equal score, sorted by name
-        return scriptlets.iter().map(|s| ScriptletMatch {
-            scriptlet: s.clone(),
-            score: 0,
+        return scriptlets.iter().map(|s| {
+            let display_file_path = extract_scriptlet_display_path(&s.file_path);
+            ScriptletMatch {
+                scriptlet: s.clone(),
+                score: 0,
+                display_file_path,
+                match_indices: MatchIndices::default(),
+            }
         }).collect();
     }
 
@@ -719,7 +822,13 @@ pub fn fuzzy_search_scriptlets(scriptlets: &[Scriptlet], query: &str) -> Vec<Scr
 
     for scriptlet in scriptlets {
         let mut score = 0i32;
+        let mut match_indices = MatchIndices::default();
+        
         let name_lower = scriptlet.name.to_lowercase();
+        let display_file_path = extract_scriptlet_display_path(&scriptlet.file_path);
+        let file_path_lower = display_file_path.as_ref()
+            .map(|fp| fp.to_lowercase())
+            .unwrap_or_default();
 
         // Score by name match - highest priority
         if let Some(pos) = name_lower.find(&query_lower) {
@@ -728,8 +837,28 @@ pub fn fuzzy_search_scriptlets(scriptlets: &[Scriptlet], query: &str) -> Vec<Scr
         }
 
         // Fuzzy character matching in name (characters in order)
-        if is_fuzzy_match(&name_lower, &query_lower) {
+        let (name_fuzzy_matched, name_indices) = fuzzy_match_with_indices(&name_lower, &query_lower);
+        if name_fuzzy_matched {
             score += 50;
+            match_indices.name_indices = name_indices;
+        }
+
+        // Score by file_path match - high priority (allows searching by ".md", anchor names)
+        if !file_path_lower.is_empty() {
+            if let Some(pos) = file_path_lower.find(&query_lower) {
+                // Bonus for exact substring match at start of file_path
+                score += if pos == 0 { 60 } else { 45 };
+            }
+
+            // Fuzzy character matching in file_path
+            let (file_path_fuzzy_matched, file_path_indices) = fuzzy_match_with_indices(&file_path_lower, &query_lower);
+            if file_path_fuzzy_matched {
+                score += 35;
+                // Only set file_path indices if name didn't match (prefer name match for highlighting)
+                if match_indices.name_indices.is_empty() {
+                    match_indices.filename_indices = file_path_indices;
+                }
+            }
         }
 
         // Score by description match - medium priority
@@ -753,6 +882,8 @@ pub fn fuzzy_search_scriptlets(scriptlets: &[Scriptlet], query: &str) -> Vec<Scr
             matches.push(ScriptletMatch {
                 scriptlet: scriptlet.clone(),
                 score,
+                display_file_path,
+                match_indices,
             });
         }
     }
@@ -1626,11 +1757,15 @@ mod tests {
                 description: None,
             },
             score: 100,
+            filename: "test.ts".to_string(),
+            match_indices: MatchIndices::default(),
         });
 
         let scriptlet = SearchResult::Scriptlet(ScriptletMatch {
             scriptlet: test_scriptlet("snippet", "ts", "code"),
             score: 50,
+            display_file_path: None,
+            match_indices: MatchIndices::default(),
         });
 
         assert_eq!(script.type_label(), "Script");
@@ -1971,6 +2106,8 @@ mod tests {
                 description: Some("A test script".to_string()),
             },
             score: 100,
+            filename: "test.ts".to_string(),
+            match_indices: MatchIndices::default(),
         };
 
         let result = SearchResult::Script(script_match);
@@ -2417,6 +2554,8 @@ const x = 1;
                 description: None,
             },
             score: 50,
+            filename: "test.ts".to_string(),
+            match_indices: MatchIndices::default(),
         });
 
         assert_eq!(script.name(), "TestName");
@@ -2427,6 +2566,8 @@ const x = 1;
         let scriptlet = SearchResult::Scriptlet(ScriptletMatch {
             scriptlet: test_scriptlet_with_desc("Test", "ts", "code", "Test Description"),
             score: 75,
+            display_file_path: None,
+            match_indices: MatchIndices::default(),
         });
 
         assert_eq!(scriptlet.description(), Some("Test Description"));
@@ -2693,6 +2834,8 @@ open("https://example.com");
             let script_match = ScriptMatch {
                 script: result.script.clone(),
                 score: result.score,
+                filename: result.filename.clone(),
+                match_indices: result.match_indices.clone(),
             };
             let search_result = SearchResult::Script(script_match);
             assert!(!search_result.name().is_empty());
@@ -2810,6 +2953,8 @@ code here
                 description: None,
             },
             score: 0,
+            filename: "test.ts".to_string(),
+            match_indices: MatchIndices::default(),
         });
 
         // Should always return "Script"
@@ -2818,6 +2963,8 @@ code here
         let scriptlet = SearchResult::Scriptlet(ScriptletMatch {
             scriptlet: test_scriptlet("test", "ts", "code"),
             score: 0,
+            display_file_path: None,
+            match_indices: MatchIndices::default(),
         });
 
         // Should always return "Snippet"
@@ -4077,5 +4224,320 @@ code here
                 assert!(*idx < results.len(), "Index {} out of bounds for results len {}", idx, results.len());
             }
         }
+    }
+
+    // ============================================
+    // FILENAME SEARCH TESTS
+    // ============================================
+
+    #[test]
+    fn test_fuzzy_search_scripts_by_file_extension() {
+        // Users should be able to search by typing ".ts" to find TypeScript scripts
+        let scripts = vec![
+            Script {
+                name: "My Script".to_string(),
+                path: PathBuf::from("/home/user/.kenv/scripts/my-script.ts"),
+                extension: "ts".to_string(),
+                icon: None,
+                description: None,
+            },
+            Script {
+                name: "Other Script".to_string(),
+                path: PathBuf::from("/home/user/.kenv/scripts/other.js"),
+                extension: "js".to_string(),
+                icon: None,
+                description: None,
+            },
+        ];
+
+        let results = fuzzy_search_scripts(&scripts, ".ts");
+        assert_eq!(results.len(), 1, "Should find scripts by file extension");
+        assert_eq!(results[0].script.name, "My Script");
+        assert_eq!(results[0].filename, "my-script.ts");
+        assert!(results[0].score > 0);
+    }
+
+    #[test]
+    fn test_fuzzy_search_scripts_by_filename() {
+        // Users should be able to search by filename
+        let scripts = vec![
+            Script {
+                name: "Open File".to_string(),  // Name differs from filename
+                path: PathBuf::from("/scripts/open-file-dialog.ts"),
+                extension: "ts".to_string(),
+                icon: None,
+                description: None,
+            },
+            Script {
+                name: "Save Data".to_string(),
+                path: PathBuf::from("/scripts/save-data.ts"),
+                extension: "ts".to_string(),
+                icon: None,
+                description: None,
+            },
+        ];
+
+        // Search by filename (not matching the name "Open File")
+        let results = fuzzy_search_scripts(&scripts, "dialog");
+        assert_eq!(results.len(), 1, "Should find scripts by filename content");
+        assert_eq!(results[0].script.name, "Open File");
+        assert_eq!(results[0].filename, "open-file-dialog.ts");
+    }
+
+    #[test]
+    fn test_fuzzy_search_scripts_filename_returns_correct_filename() {
+        let scripts = vec![
+            Script {
+                name: "Test".to_string(),
+                path: PathBuf::from("/path/to/my-test-script.ts"),
+                extension: "ts".to_string(),
+                icon: None,
+                description: None,
+            },
+        ];
+
+        let results = fuzzy_search_scripts(&scripts, "test");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].filename, "my-test-script.ts", "Should extract correct filename from path");
+    }
+
+    #[test]
+    fn test_fuzzy_search_scripts_name_match_higher_priority_than_filename() {
+        // Name match should score higher than filename-only match
+        let scripts = vec![
+            Script {
+                name: "open".to_string(),  // Name matches query
+                path: PathBuf::from("/scripts/foo.ts"),  // Filename doesn't match
+                extension: "ts".to_string(),
+                icon: None,
+                description: None,
+            },
+            Script {
+                name: "bar".to_string(),  // Name doesn't match
+                path: PathBuf::from("/scripts/open-something.ts"),  // Filename matches
+                extension: "ts".to_string(),
+                icon: None,
+                description: None,
+            },
+        ];
+
+        let results = fuzzy_search_scripts(&scripts, "open");
+        assert_eq!(results.len(), 2);
+        // Name match should be first
+        assert_eq!(results[0].script.name, "open", "Name match should rank higher than filename match");
+        assert_eq!(results[1].script.name, "bar");
+    }
+
+    #[test]
+    fn test_fuzzy_search_scripts_match_indices_for_name() {
+        let scripts = vec![
+            Script {
+                name: "openfile".to_string(),
+                path: PathBuf::from("/scripts/test.ts"),
+                extension: "ts".to_string(),
+                icon: None,
+                description: None,
+            },
+        ];
+
+        let results = fuzzy_search_scripts(&scripts, "opf");
+        assert_eq!(results.len(), 1);
+        // "opf" matches indices 0, 1, 4 in "openfile"
+        assert_eq!(results[0].match_indices.name_indices, vec![0, 1, 4], 
+            "Should return correct match indices for name");
+    }
+
+    #[test]
+    fn test_fuzzy_search_scripts_match_indices_for_filename() {
+        let scripts = vec![
+            Script {
+                name: "Other Name".to_string(),  // Name doesn't match
+                path: PathBuf::from("/scripts/my-test.ts"),
+                extension: "ts".to_string(),
+                icon: None,
+                description: None,
+            },
+        ];
+
+        let results = fuzzy_search_scripts(&scripts, "mts");
+        assert_eq!(results.len(), 1);
+        // "mts" matches indices in "my-test.ts": m=0, t=3, s=5
+        assert_eq!(results[0].match_indices.filename_indices, vec![0, 3, 5],
+            "Should return correct match indices for filename when name doesn't match");
+    }
+
+    #[test]
+    fn test_fuzzy_search_scriptlets_by_file_path() {
+        // Users should be able to search by ".md" to find scriptlets
+        let scriptlets = vec![
+            Scriptlet {
+                name: "Open GitHub".to_string(),
+                description: Some("Opens GitHub in browser".to_string()),
+                code: "open('https://github.com')".to_string(),
+                tool: "ts".to_string(),
+                shortcut: None,
+                expand: None,
+                group: Some("URLs".to_string()),
+                file_path: Some("/path/to/urls.md#open-github".to_string()),
+                command: Some("open-github".to_string()),
+            },
+            Scriptlet {
+                name: "Copy Text".to_string(),
+                description: Some("Copies text".to_string()),
+                code: "copy()".to_string(),
+                tool: "ts".to_string(),
+                shortcut: None,
+                expand: None,
+                group: None,
+                file_path: Some("/path/to/clipboard.md#copy-text".to_string()),
+                command: Some("copy-text".to_string()),
+            },
+        ];
+
+        let results = fuzzy_search_scriptlets(&scriptlets, ".md");
+        assert_eq!(results.len(), 2, "Should find scriptlets by .md extension");
+    }
+
+    #[test]
+    fn test_fuzzy_search_scriptlets_by_anchor() {
+        // Users should be able to search by anchor slug
+        let scriptlets = vec![
+            Scriptlet {
+                name: "Open GitHub".to_string(),
+                description: None,
+                code: "code".to_string(),
+                tool: "ts".to_string(),
+                shortcut: None,
+                expand: None,
+                group: None,
+                file_path: Some("/path/to/file.md#open-github".to_string()),
+                command: Some("open-github".to_string()),
+            },
+            Scriptlet {
+                name: "Close Tab".to_string(),
+                description: None,
+                code: "code".to_string(),
+                tool: "ts".to_string(),
+                shortcut: None,
+                expand: None,
+                group: None,
+                file_path: Some("/path/to/file.md#close-tab".to_string()),
+                command: Some("close-tab".to_string()),
+            },
+        ];
+
+        let results = fuzzy_search_scriptlets(&scriptlets, "github");
+        assert_eq!(results.len(), 1, "Should find scriptlet by anchor slug");
+        assert_eq!(results[0].scriptlet.name, "Open GitHub");
+    }
+
+    #[test]
+    fn test_fuzzy_search_scriptlets_display_file_path() {
+        // display_file_path should be the filename#anchor format
+        let scriptlets = vec![
+            Scriptlet {
+                name: "Test".to_string(),
+                description: None,
+                code: "code".to_string(),
+                tool: "ts".to_string(),
+                shortcut: None,
+                expand: None,
+                group: None,
+                file_path: Some("/home/user/.kenv/scriptlets/urls.md#test-slug".to_string()),
+                command: Some("test-slug".to_string()),
+            },
+        ];
+
+        let results = fuzzy_search_scriptlets(&scriptlets, "");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].display_file_path, Some("urls.md#test-slug".to_string()),
+            "display_file_path should be filename#anchor format");
+    }
+
+    #[test]
+    fn test_fuzzy_search_scriptlets_match_indices() {
+        let scriptlets = vec![
+            Scriptlet {
+                name: "Other".to_string(),  // Name doesn't match
+                description: None,
+                code: "code".to_string(),
+                tool: "ts".to_string(),
+                shortcut: None,
+                expand: None,
+                group: None,
+                file_path: Some("/path/urls.md#test".to_string()),
+                command: None,
+            },
+        ];
+
+        let results = fuzzy_search_scriptlets(&scriptlets, "url");
+        assert_eq!(results.len(), 1);
+        // "url" matches in "urls.md#test" at indices 0, 1, 2
+        assert_eq!(results[0].match_indices.filename_indices, vec![0, 1, 2],
+            "Should return correct match indices for file_path");
+    }
+
+    #[test]
+    fn test_fuzzy_match_with_indices_basic() {
+        let (matched, indices) = fuzzy_match_with_indices("openfile", "opf");
+        assert!(matched);
+        assert_eq!(indices, vec![0, 1, 4]);
+    }
+
+    #[test]
+    fn test_fuzzy_match_with_indices_no_match() {
+        let (matched, indices) = fuzzy_match_with_indices("test", "xyz");
+        assert!(!matched);
+        assert!(indices.is_empty());
+    }
+
+    #[test]
+    fn test_fuzzy_match_with_indices_case_insensitive() {
+        let (matched, indices) = fuzzy_match_with_indices("OpenFile", "of");
+        assert!(matched);
+        assert_eq!(indices, vec![0, 4]);
+    }
+
+    #[test]
+    fn test_extract_filename() {
+        assert_eq!(extract_filename(&PathBuf::from("/path/to/script.ts")), "script.ts");
+        assert_eq!(extract_filename(&PathBuf::from("relative/path.js")), "path.js");
+        assert_eq!(extract_filename(&PathBuf::from("single.ts")), "single.ts");
+    }
+
+    #[test]
+    fn test_extract_scriptlet_display_path() {
+        // With anchor
+        assert_eq!(
+            extract_scriptlet_display_path(&Some("/path/to/file.md#slug".to_string())),
+            Some("file.md#slug".to_string())
+        );
+        
+        // Without anchor
+        assert_eq!(
+            extract_scriptlet_display_path(&Some("/path/to/file.md".to_string())),
+            Some("file.md".to_string())
+        );
+        
+        // None input
+        assert_eq!(extract_scriptlet_display_path(&None), None);
+    }
+
+    #[test]
+    fn test_fuzzy_search_scripts_empty_query_has_filename() {
+        // Even with empty query, filename should be populated
+        let scripts = vec![
+            Script {
+                name: "Test".to_string(),
+                path: PathBuf::from("/path/my-script.ts"),
+                extension: "ts".to_string(),
+                icon: None,
+                description: None,
+            },
+        ];
+
+        let results = fuzzy_search_scripts(&scripts, "");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].filename, "my-script.ts");
     }
 }

@@ -718,6 +718,197 @@ fn process_if_block(content: &str, flag_name: &str, flags: &HashMap<String, bool
 }
 
 // ============================================================================
+// Interpreter Tool Constants and Error Helpers
+// ============================================================================
+
+/// Interpreter tools that require an external interpreter to execute
+#[allow(dead_code)] // Infrastructure ready for use in executor.rs
+pub const INTERPRETER_TOOLS: &[&str] = &[
+    "python", "ruby", "perl", "php", "node",
+];
+
+/// Get the interpreter command for a given tool
+/// 
+/// # Arguments
+/// * `tool` - The tool name (e.g., "python", "ruby")
+/// 
+/// # Returns
+/// The interpreter command to use (e.g., "python3" for "python")
+#[allow(dead_code)] // Infrastructure ready for use in executor.rs
+pub fn get_interpreter_command(tool: &str) -> String {
+    match tool {
+        "python" => "python3".to_string(),
+        "ruby" => "ruby".to_string(),
+        "perl" => "perl".to_string(),
+        "php" => "php".to_string(),
+        "node" => "node".to_string(),
+        _ => tool.to_string(),
+    }
+}
+
+/// Get platform-specific installation instructions for an interpreter
+/// 
+/// # Arguments
+/// * `interpreter` - The interpreter name (e.g., "python3", "ruby")
+/// 
+/// # Returns
+/// A user-friendly error message with installation instructions
+#[allow(dead_code)] // Infrastructure ready for use in executor.rs
+pub fn interpreter_not_found_message(interpreter: &str) -> String {
+    let tool_name = match interpreter {
+        "python3" | "python" => "Python",
+        "ruby" => "Ruby",
+        "perl" => "Perl",
+        "php" => "PHP",
+        "node" | "nodejs" => "Node.js",
+        _ => interpreter,
+    };
+    
+    let install_instructions = get_platform_install_instructions(interpreter);
+    
+    format!(
+        "{} interpreter not found.\n\n{}\n\nAfter installation, restart Script Kit.",
+        tool_name,
+        install_instructions
+    )
+}
+
+/// Get platform-specific installation instructions
+/// 
+/// # Arguments
+/// * `interpreter` - The interpreter name
+/// 
+/// # Returns
+/// Platform-specific installation command suggestions
+#[allow(dead_code)] // Used by interpreter_not_found_message
+fn get_platform_install_instructions(interpreter: &str) -> String {
+    #[cfg(target_os = "macos")]
+    {
+        get_macos_install_instructions(interpreter)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        get_linux_install_instructions(interpreter)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        get_windows_install_instructions(interpreter)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        format!("Please install {} using your system's package manager.", interpreter)
+    }
+}
+
+/// Get macOS installation instructions (Homebrew)
+#[cfg(target_os = "macos")]
+#[allow(dead_code)] // Used by get_platform_install_instructions
+fn get_macos_install_instructions(interpreter: &str) -> String {
+    let brew_package = match interpreter {
+        "python3" | "python" => "python",
+        "ruby" => "ruby",
+        "perl" => "perl",
+        "php" => "php",
+        "node" | "nodejs" => "node",
+        _ => interpreter,
+    };
+    
+    format!(
+        "Install using Homebrew:\n  brew install {}\n\nOr download from the official website.",
+        brew_package
+    )
+}
+
+/// Get Linux installation instructions (apt/dnf)
+#[cfg(target_os = "linux")]
+fn get_linux_install_instructions(interpreter: &str) -> String {
+    let (apt_package, dnf_package) = match interpreter {
+        "python3" | "python" => ("python3", "python3"),
+        "ruby" => ("ruby", "ruby"),
+        "perl" => ("perl", "perl"),
+        "php" => ("php", "php-cli"),
+        "node" | "nodejs" => ("nodejs", "nodejs"),
+        _ => (interpreter, interpreter),
+    };
+    
+    format!(
+        "Install using your package manager:\n\n  Debian/Ubuntu:\n    sudo apt install {}\n\n  Fedora/RHEL:\n    sudo dnf install {}",
+        apt_package, dnf_package
+    )
+}
+
+/// Get Windows installation instructions
+#[cfg(target_os = "windows")]
+fn get_windows_install_instructions(interpreter: &str) -> String {
+    let (choco_package, download_url) = match interpreter {
+        "python3" | "python" => ("python", "https://www.python.org/downloads/"),
+        "ruby" => ("ruby", "https://rubyinstaller.org/"),
+        "perl" => ("strawberryperl", "https://strawberryperl.com/"),
+        "php" => ("php", "https://windows.php.net/download/"),
+        "node" | "nodejs" => ("nodejs", "https://nodejs.org/"),
+        _ => (interpreter, ""),
+    };
+    
+    if download_url.is_empty() {
+        format!("Install using Chocolatey:\n  choco install {}", choco_package)
+    } else {
+        format!(
+            "Install using Chocolatey:\n  choco install {}\n\nOr download from:\n  {}",
+            choco_package, download_url
+        )
+    }
+}
+
+/// Check if a tool is an interpreter tool
+/// 
+/// # Arguments
+/// * `tool` - The tool name to check
+/// 
+/// # Returns
+/// `true` if the tool requires an external interpreter
+#[allow(dead_code)] // Infrastructure ready for use in executor.rs
+pub fn is_interpreter_tool(tool: &str) -> bool {
+    INTERPRETER_TOOLS.contains(&tool)
+}
+
+/// Get the file extension for a given interpreter tool
+/// 
+/// # Arguments
+/// * `tool` - The tool name
+/// 
+/// # Returns
+/// The appropriate file extension for scripts of that type
+#[allow(dead_code)] // Infrastructure ready for use in executor.rs
+pub fn get_interpreter_extension(tool: &str) -> &'static str {
+    match tool {
+        "python" => "py",
+        "ruby" => "rb",
+        "perl" => "pl",
+        "php" => "php",
+        "node" => "js",
+        _ => "txt",
+    }
+}
+
+/// Validate that a tool name is a known interpreter
+/// 
+/// # Arguments
+/// * `tool` - The tool name to validate
+/// 
+/// # Returns
+/// `Ok(())` if valid, `Err` with descriptive message if not
+#[allow(dead_code)] // Infrastructure ready for use in executor.rs
+pub fn validate_interpreter_tool(tool: &str) -> Result<(), String> {
+    if is_interpreter_tool(tool) {
+        Ok(())
+    } else if VALID_TOOLS.contains(&tool) {
+        Err(format!("'{}' is a valid tool but not an interpreter tool", tool))
+    } else {
+        Err(format!("'{}' is not a recognized tool type", tool))
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -1420,5 +1611,249 @@ npm run build $1
         assert_eq!(scriptlet.name, deserialized.name);
         assert_eq!(scriptlet.tool, deserialized.tool);
         assert_eq!(scriptlet.scriptlet_content, deserialized.scriptlet_content);
+    }
+
+    // ========================================
+    // Interpreter Tool Tests
+    // ========================================
+
+    #[test]
+    fn test_interpreter_tools_constant() {
+        // Verify all expected interpreters are in the list
+        assert!(INTERPRETER_TOOLS.contains(&"python"));
+        assert!(INTERPRETER_TOOLS.contains(&"ruby"));
+        assert!(INTERPRETER_TOOLS.contains(&"perl"));
+        assert!(INTERPRETER_TOOLS.contains(&"php"));
+        assert!(INTERPRETER_TOOLS.contains(&"node"));
+        
+        // Verify count
+        assert_eq!(INTERPRETER_TOOLS.len(), 5);
+    }
+
+    #[test]
+    fn test_is_interpreter_tool() {
+        // Positive cases
+        assert!(is_interpreter_tool("python"));
+        assert!(is_interpreter_tool("ruby"));
+        assert!(is_interpreter_tool("perl"));
+        assert!(is_interpreter_tool("php"));
+        assert!(is_interpreter_tool("node"));
+        
+        // Negative cases - shell tools
+        assert!(!is_interpreter_tool("bash"));
+        assert!(!is_interpreter_tool("sh"));
+        assert!(!is_interpreter_tool("zsh"));
+        
+        // Negative cases - other tools
+        assert!(!is_interpreter_tool("ts"));
+        assert!(!is_interpreter_tool("kit"));
+        assert!(!is_interpreter_tool("open"));
+        assert!(!is_interpreter_tool("paste"));
+        assert!(!is_interpreter_tool("unknown"));
+    }
+
+    #[test]
+    fn test_get_interpreter_command() {
+        // Python uses python3
+        assert_eq!(get_interpreter_command("python"), "python3");
+        
+        // Others use their direct name
+        assert_eq!(get_interpreter_command("ruby"), "ruby");
+        assert_eq!(get_interpreter_command("perl"), "perl");
+        assert_eq!(get_interpreter_command("php"), "php");
+        assert_eq!(get_interpreter_command("node"), "node");
+        
+        // Unknown returns as-is
+        assert_eq!(get_interpreter_command("unknown"), "unknown");
+    }
+
+    #[test]
+    fn test_get_interpreter_extension() {
+        assert_eq!(get_interpreter_extension("python"), "py");
+        assert_eq!(get_interpreter_extension("ruby"), "rb");
+        assert_eq!(get_interpreter_extension("perl"), "pl");
+        assert_eq!(get_interpreter_extension("php"), "php");
+        assert_eq!(get_interpreter_extension("node"), "js");
+        
+        // Unknown returns txt
+        assert_eq!(get_interpreter_extension("unknown"), "txt");
+    }
+
+    #[test]
+    fn test_validate_interpreter_tool_valid() {
+        assert!(validate_interpreter_tool("python").is_ok());
+        assert!(validate_interpreter_tool("ruby").is_ok());
+        assert!(validate_interpreter_tool("perl").is_ok());
+        assert!(validate_interpreter_tool("php").is_ok());
+        assert!(validate_interpreter_tool("node").is_ok());
+    }
+
+    #[test]
+    fn test_validate_interpreter_tool_non_interpreter() {
+        // bash is valid but not an interpreter tool
+        let result = validate_interpreter_tool("bash");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not an interpreter tool"));
+    }
+
+    #[test]
+    fn test_validate_interpreter_tool_unknown() {
+        let result = validate_interpreter_tool("unknown_tool");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not a recognized tool type"));
+    }
+
+    #[test]
+    fn test_interpreter_not_found_message_python() {
+        let msg = interpreter_not_found_message("python3");
+        
+        // Should contain the tool name
+        assert!(msg.contains("Python"));
+        assert!(msg.contains("interpreter not found"));
+        
+        // Should have installation instructions
+        #[cfg(target_os = "macos")]
+        {
+            assert!(msg.contains("brew install python"));
+        }
+        #[cfg(target_os = "linux")]
+        {
+            assert!(msg.contains("apt install python3") || msg.contains("dnf install python3"));
+        }
+        #[cfg(target_os = "windows")]
+        {
+            assert!(msg.contains("choco install python"));
+        }
+        
+        // Should mention restart
+        assert!(msg.contains("restart Script Kit"));
+    }
+
+    #[test]
+    fn test_interpreter_not_found_message_ruby() {
+        let msg = interpreter_not_found_message("ruby");
+        
+        assert!(msg.contains("Ruby"));
+        assert!(msg.contains("interpreter not found"));
+        
+        #[cfg(target_os = "macos")]
+        {
+            assert!(msg.contains("brew install ruby"));
+        }
+    }
+
+    #[test]
+    fn test_interpreter_not_found_message_node() {
+        let msg = interpreter_not_found_message("node");
+        
+        assert!(msg.contains("Node.js"));
+        assert!(msg.contains("interpreter not found"));
+        
+        #[cfg(target_os = "macos")]
+        {
+            assert!(msg.contains("brew install node"));
+        }
+    }
+
+    #[test]
+    fn test_interpreter_not_found_message_perl() {
+        let msg = interpreter_not_found_message("perl");
+        
+        assert!(msg.contains("Perl"));
+        assert!(msg.contains("interpreter not found"));
+    }
+
+    #[test]
+    fn test_interpreter_not_found_message_php() {
+        let msg = interpreter_not_found_message("php");
+        
+        assert!(msg.contains("PHP"));
+        assert!(msg.contains("interpreter not found"));
+    }
+
+    #[test]
+    fn test_interpreter_tools_are_valid_tools() {
+        // All interpreter tools should also be in VALID_TOOLS
+        for tool in INTERPRETER_TOOLS {
+            assert!(VALID_TOOLS.contains(tool), 
+                "Interpreter tool '{}' should be in VALID_TOOLS", tool);
+        }
+    }
+
+    #[test]
+    fn test_interpreter_tools_disjoint_from_shell_tools() {
+        // Interpreter tools should not overlap with shell tools
+        for tool in INTERPRETER_TOOLS {
+            assert!(!SHELL_TOOLS.contains(tool), 
+                "Interpreter tool '{}' should not be in SHELL_TOOLS", tool);
+        }
+    }
+
+    #[test]
+    fn test_scriptlet_with_interpreter_tool() {
+        // Test creating a scriptlet with an interpreter tool
+        let scriptlet = Scriptlet::new(
+            "Python Script".to_string(),
+            "python".to_string(),
+            "print('Hello, World!')".to_string(),
+        );
+        
+        assert_eq!(scriptlet.tool, "python");
+        assert!(is_interpreter_tool(&scriptlet.tool));
+        assert!(scriptlet.is_valid_tool());
+        assert!(!scriptlet.is_shell());
+    }
+
+    #[test]
+    fn test_parse_markdown_with_interpreter_tools() {
+        let markdown = r#"# Scripts
+
+## Python Hello
+
+```python
+print("Hello from Python")
+```
+
+## Ruby Greeting
+
+```ruby
+puts "Hello from Ruby"
+```
+
+## Node Script
+
+```node
+console.log("Hello from Node");
+```
+"#;
+        let scriptlets = parse_markdown_as_scriptlets(markdown, None);
+        
+        assert_eq!(scriptlets.len(), 3);
+        
+        // Python
+        assert_eq!(scriptlets[0].tool, "python");
+        assert!(is_interpreter_tool(&scriptlets[0].tool));
+        assert!(scriptlets[0].scriptlet_content.contains("print"));
+        
+        // Ruby
+        assert_eq!(scriptlets[1].tool, "ruby");
+        assert!(is_interpreter_tool(&scriptlets[1].tool));
+        assert!(scriptlets[1].scriptlet_content.contains("puts"));
+        
+        // Node
+        assert_eq!(scriptlets[2].tool, "node");
+        assert!(is_interpreter_tool(&scriptlets[2].tool));
+        assert!(scriptlets[2].scriptlet_content.contains("console.log"));
+    }
+
+    #[test]
+    fn test_interpreter_extension_matches_tool_extension() {
+        // get_interpreter_extension should match the tool_extension for interpreter tools
+        // This ensures consistency between the two functions
+        assert_eq!(get_interpreter_extension("python"), "py");
+        assert_eq!(get_interpreter_extension("ruby"), "rb");
+        assert_eq!(get_interpreter_extension("perl"), "pl");
+        assert_eq!(get_interpreter_extension("php"), "php");
+        assert_eq!(get_interpreter_extension("node"), "js");
     }
 }

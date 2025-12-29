@@ -23,8 +23,9 @@ pub enum IconKind {
 }
 
 /// Fixed height for list items (same as main script list)
-/// Height of 40px balances compact layout with comfortable spacing for name+description items
-pub const LIST_ITEM_HEIGHT: f32 = 40.0;
+/// Height must accommodate: name (18px line-height) + description (14px line-height) + padding (12px)
+/// Total content height: 18 + 14 + 12 = 44px minimum, using 48px for comfortable spacing
+pub const LIST_ITEM_HEIGHT: f32 = 48.0;
 
 /// Fixed height for section headers (RECENT, MAIN, etc.)
 /// Total height includes: pt(16px) + text (~8px) + pb(4px) = ~28px
@@ -41,6 +42,134 @@ pub enum GroupedListItem {
     SectionHeader(String),
     /// A regular list item - usize is the index in the flat results array
     Item(usize),
+}
+
+/// Pre-computed grouped list state for efficient navigation
+/// 
+/// This struct caches header positions and total counts to avoid expensive
+/// recalculation on every keypress. Build it once when the list data changes,
+/// then reuse for navigation.
+/// 
+/// ## Performance
+/// - `is_header()`: O(1) lookup via HashSet
+/// - `next_selectable()` / `prev_selectable()`: O(k) where k is consecutive headers
+/// - Memory: O(h) where h is number of headers (typically < 10)
+/// 
+/// ## Usage Pattern
+/// ```ignore
+/// // Build once when data changes
+/// let grouped = GroupedListState::from_groups(&[
+///     ("Today", 5),      // 5 items in Today group
+///     ("Yesterday", 3),  // 3 items in Yesterday group
+/// ]);
+/// 
+/// // Use for navigation (fast, no allocation)
+/// let next = grouped.next_selectable(current_index);
+/// let prev = grouped.prev_selectable(current_index);
+/// let is_hdr = grouped.is_header(index);
+/// ```
+#[derive(Clone, Debug)]
+pub struct GroupedListState {
+    /// Set of indices that are headers (for O(1) lookup)
+    header_indices: std::collections::HashSet<usize>,
+    /// Total number of visual items (headers + entries)
+    pub total_items: usize,
+    /// Index of first selectable item (skips leading header)
+    pub first_selectable: usize,
+}
+
+impl GroupedListState {
+    /// Create from a list of (group_name, item_count) pairs
+    /// 
+    /// Each group gets a header at the start, followed by its items.
+    /// Empty groups are skipped (no header for empty groups).
+    pub fn from_groups(groups: &[(&str, usize)]) -> Self {
+        let mut header_indices = std::collections::HashSet::new();
+        let mut idx = 0;
+        
+        for (_, count) in groups {
+            if *count > 0 {
+                header_indices.insert(idx); // Header position
+                idx += 1 + count; // Header + items
+            }
+        }
+        
+        let first_selectable = if header_indices.contains(&0) { 1 } else { 0 };
+        
+        Self {
+            header_indices,
+            total_items: idx,
+            first_selectable,
+        }
+    }
+    
+    /// Create from pre-built GroupedListItem vec (when you already have the items)
+    pub fn from_items(items: &[GroupedListItem]) -> Self {
+        let mut header_indices = std::collections::HashSet::new();
+        
+        for (idx, item) in items.iter().enumerate() {
+            if matches!(item, GroupedListItem::SectionHeader(_)) {
+                header_indices.insert(idx);
+            }
+        }
+        
+        let first_selectable = if header_indices.contains(&0) { 1 } else { 0 };
+        
+        Self {
+            header_indices,
+            total_items: items.len(),
+            first_selectable,
+        }
+    }
+    
+    /// Create an empty state (no headers, for flat lists)
+    pub fn flat(item_count: usize) -> Self {
+        Self {
+            header_indices: std::collections::HashSet::new(),
+            total_items: item_count,
+            first_selectable: 0,
+        }
+    }
+    
+    /// Check if an index is a header (O(1))
+    #[inline]
+    pub fn is_header(&self, index: usize) -> bool {
+        self.header_indices.contains(&index)
+    }
+    
+    /// Get next selectable index (skips headers), or None if at end
+    pub fn next_selectable(&self, current: usize) -> Option<usize> {
+        let mut next = current + 1;
+        while next < self.total_items && self.is_header(next) {
+            next += 1;
+        }
+        if next < self.total_items {
+            Some(next)
+        } else {
+            None
+        }
+    }
+    
+    /// Get previous selectable index (skips headers), or None if at start
+    pub fn prev_selectable(&self, current: usize) -> Option<usize> {
+        if current == 0 {
+            return None;
+        }
+        let mut prev = current - 1;
+        while prev > 0 && self.is_header(prev) {
+            prev -= 1;
+        }
+        if !self.is_header(prev) {
+            Some(prev)
+        } else {
+            None
+        }
+    }
+    
+    /// Get number of headers
+    pub fn header_count(&self) -> usize {
+        self.header_indices.len()
+    }
 }
 
 /// Pre-computed colors for ListItem rendering

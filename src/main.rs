@@ -61,6 +61,7 @@ mod scriptlets;
 
 use tray::{TrayManager, TrayMenuAction};
 use editor::EditorPrompt;
+use prompts::{SelectPrompt, PathPrompt, EnvPrompt, DropPrompt, TemplatePrompt};
 use window_resize::{ViewType, height_for_view, resize_first_window_to_height, initial_window_height, reset_resize_debounce, defer_resize_to_view};
 use crate::toast_manager::ToastManager;
 use crate::components::toast::{Toast, ToastColors, ToastAction};
@@ -444,6 +445,36 @@ enum AppView {
         entity: Entity<EditorPrompt>,
         /// Separate focus handle for the editor (not shared with parent)
         focus_handle: FocusHandle,
+    },
+    /// Showing a select prompt from a script (multi-select)
+    SelectPrompt {
+        #[allow(dead_code)]
+        id: String,
+        entity: Entity<SelectPrompt>,
+    },
+    /// Showing a path prompt from a script (file/folder picker)
+    PathPrompt {
+        #[allow(dead_code)]
+        id: String,
+        entity: Entity<PathPrompt>,
+    },
+    /// Showing env prompt for environment variable input with keyring storage
+    EnvPrompt {
+        #[allow(dead_code)]
+        id: String,
+        entity: Entity<EnvPrompt>,
+    },
+    /// Showing drop prompt for drag and drop file handling
+    DropPrompt {
+        #[allow(dead_code)]
+        id: String,
+        entity: Entity<DropPrompt>,
+    },
+    /// Showing template prompt for string template editing
+    TemplatePrompt {
+        #[allow(dead_code)]
+        id: String,
+        entity: Entity<TemplatePrompt>,
     },
     /// Showing clipboard history
     ClipboardHistoryView {
@@ -1429,6 +1460,11 @@ impl ScriptListApp {
             AppView::DivPrompt { .. } => (ViewType::DivPrompt, 0),
             AppView::FormPrompt { .. } => (ViewType::DivPrompt, 0), // Use DivPrompt size for forms
             AppView::EditorPrompt { .. } => (ViewType::EditorPrompt, 0),
+            AppView::SelectPrompt { .. } => (ViewType::ArgPromptWithChoices, 0),
+            AppView::PathPrompt { .. } => (ViewType::DivPrompt, 0),
+            AppView::EnvPrompt { .. } => (ViewType::ArgPromptNoChoices, 0), // Env prompt is a simple input
+            AppView::DropPrompt { .. } => (ViewType::DivPrompt, 0), // Drop prompt uses div size for drop zone
+            AppView::TemplatePrompt { .. } => (ViewType::DivPrompt, 0), // Template prompt uses div size
             AppView::TermPrompt { .. } => (ViewType::TermPrompt, 0),
             AppView::ActionsDialog => {
                 // Actions dialog is an overlay, don't resize
@@ -3174,6 +3210,66 @@ impl ScriptListApp {
                                 None,
                             )
                         }
+                        AppView::SelectPrompt { id, .. } => {
+                            (
+                                "select".to_string(),
+                                Some(id.clone()),
+                                None,
+                                String::new(),
+                                0,
+                                0,
+                                -1,
+                                None,
+                            )
+                        }
+                        AppView::PathPrompt { id, .. } => {
+                            (
+                                "path".to_string(),
+                                Some(id.clone()),
+                                None,
+                                String::new(),
+                                0,
+                                0,
+                                -1,
+                                None,
+                            )
+                        }
+                        AppView::EnvPrompt { id, .. } => {
+                            (
+                                "env".to_string(),
+                                Some(id.clone()),
+                                None,
+                                String::new(),
+                                0,
+                                0,
+                                -1,
+                                None,
+                            )
+                        }
+                        AppView::DropPrompt { id, .. } => {
+                            (
+                                "drop".to_string(),
+                                Some(id.clone()),
+                                None,
+                                String::new(),
+                                0,
+                                0,
+                                -1,
+                                None,
+                            )
+                        }
+                        AppView::TemplatePrompt { id, .. } => {
+                            (
+                                "template".to_string(),
+                                Some(id.clone()),
+                                None,
+                                String::new(),
+                                0,
+                                0,
+                                -1,
+                                None,
+                            )
+                        }
                         AppView::ActionsDialog => {
                             (
                                 "actions".to_string(),
@@ -3322,49 +3418,184 @@ impl ScriptListApp {
             // NEW PROMPT TYPES (scaffolding - TODO: implement full UI)
             // ============================================================
             PromptMessage::ShowPath { id, start_path, hint } => {
-                tracing::info!(id, ?start_path, ?hint, "ShowPath received - TODO: implement UI");
-                logging::log("UI", &format!("ShowPath prompt received: {} (start: {:?}, hint: {:?})", id, start_path, hint));
-                // TODO: Create PathPrompt entity and switch to it
-                // For now, just log that we received it
-                let toast = Toast::warning("Path prompt not yet implemented".to_string(), &self.theme)
-                    .duration_ms(Some(3000));
-                self.toast_manager.push(toast);
+                logging::log("UI", &format!("Showing path prompt: {} (start: {:?}, hint: {:?})", id, start_path, hint));
+                
+                let response_sender = self.response_sender.clone();
+                let submit_callback: std::sync::Arc<dyn Fn(String, Option<String>) + Send + Sync> = 
+                    std::sync::Arc::new(move |id, value| {
+                        if let Some(ref sender) = response_sender {
+                            let response = Message::Submit { id, value };
+                            if let Err(e) = sender.send(response) {
+                                logging::log("UI", &format!("Failed to send path response: {}", e));
+                            }
+                        }
+                    });
+                
+                let focus_handle = cx.focus_handle();
+                let path_prompt = PathPrompt::new(
+                    id.clone(),
+                    start_path,
+                    hint,
+                    focus_handle,
+                    submit_callback,
+                    std::sync::Arc::new(self.theme.clone()),
+                );
+                
+                let entity = cx.new(|_| path_prompt);
+                self.current_view = AppView::PathPrompt { id, entity };
+                self.focused_input = FocusedInput::None;
+                
+                defer_resize_to_view(ViewType::ScriptList, 20, cx);
                 cx.notify();
             }
             PromptMessage::ShowEnv { id, key, prompt, secret } => {
-                tracing::info!(id, key, ?prompt, secret, "ShowEnv received - TODO: implement UI");
+                tracing::info!(id, key, ?prompt, secret, "ShowEnv received");
                 logging::log("UI", &format!("ShowEnv prompt received: {} (key: {}, secret: {})", id, key, secret));
-                // TODO: Create EnvPrompt entity and switch to it
-                let toast = Toast::warning("Env prompt not yet implemented".to_string(), &self.theme)
-                    .duration_ms(Some(3000));
-                self.toast_manager.push(toast);
+                
+                // Create submit callback for env prompt
+                let response_sender = self.response_sender.clone();
+                let submit_callback: std::sync::Arc<dyn Fn(String, Option<String>) + Send + Sync> = 
+                    std::sync::Arc::new(move |id, value| {
+                        if let Some(ref sender) = response_sender {
+                            let response = Message::Submit { id, value };
+                            if let Err(e) = sender.send(response) {
+                                logging::log("UI", &format!("Failed to send env response: {}", e));
+                            }
+                        }
+                    });
+                
+                // Create EnvPrompt entity
+                let focus_handle = self.focus_handle.clone();
+                let mut env_prompt = prompts::EnvPrompt::new(
+                    id.clone(),
+                    key,
+                    prompt,
+                    secret,
+                    focus_handle,
+                    submit_callback,
+                    std::sync::Arc::new(self.theme.clone()),
+                );
+                
+                // Check keyring first - if value exists, auto-submit without showing UI
+                if env_prompt.check_keyring_and_auto_submit() {
+                    logging::log("UI", "EnvPrompt: value found in keyring, auto-submitted");
+                    // Don't switch view, the callback already submitted
+                    cx.notify();
+                    return;
+                }
+                
+                let entity = cx.new(|_| env_prompt);
+                self.current_view = AppView::EnvPrompt { id, entity };
+                self.focused_input = FocusedInput::None; // EnvPrompt has its own focus handling
+                
+                defer_resize_to_view(ViewType::ArgPromptNoChoices, 0, cx);
                 cx.notify();
             }
             PromptMessage::ShowDrop { id, placeholder, hint } => {
-                tracing::info!(id, ?placeholder, ?hint, "ShowDrop received - TODO: implement UI");
+                tracing::info!(id, ?placeholder, ?hint, "ShowDrop received");
                 logging::log("UI", &format!("ShowDrop prompt received: {} (placeholder: {:?})", id, placeholder));
-                // TODO: Create DropPrompt entity and switch to it
-                let toast = Toast::warning("Drop prompt not yet implemented".to_string(), &self.theme)
-                    .duration_ms(Some(3000));
-                self.toast_manager.push(toast);
+                
+                // Create submit callback for drop prompt
+                let response_sender = self.response_sender.clone();
+                let submit_callback: std::sync::Arc<dyn Fn(String, Option<String>) + Send + Sync> = 
+                    std::sync::Arc::new(move |id, value| {
+                        if let Some(ref sender) = response_sender {
+                            let response = Message::Submit { id, value };
+                            if let Err(e) = sender.send(response) {
+                                logging::log("UI", &format!("Failed to send drop response: {}", e));
+                            }
+                        }
+                    });
+                
+                // Create DropPrompt entity
+                let focus_handle = self.focus_handle.clone();
+                let drop_prompt = prompts::DropPrompt::new(
+                    id.clone(),
+                    placeholder,
+                    hint,
+                    focus_handle,
+                    submit_callback,
+                    std::sync::Arc::new(self.theme.clone()),
+                );
+                
+                let entity = cx.new(|_| drop_prompt);
+                self.current_view = AppView::DropPrompt { id, entity };
+                self.focused_input = FocusedInput::None;
+                
+                defer_resize_to_view(ViewType::DivPrompt, 0, cx);
                 cx.notify();
             }
             PromptMessage::ShowTemplate { id, template } => {
-                tracing::info!(id, template, "ShowTemplate received - TODO: implement UI");
+                tracing::info!(id, template, "ShowTemplate received");
                 logging::log("UI", &format!("ShowTemplate prompt received: {} (template: {})", id, template));
-                // TODO: Create TemplatePrompt entity and switch to it
-                let toast = Toast::warning("Template prompt not yet implemented".to_string(), &self.theme)
-                    .duration_ms(Some(3000));
-                self.toast_manager.push(toast);
+                
+                // Create submit callback for template prompt
+                let response_sender = self.response_sender.clone();
+                let submit_callback: std::sync::Arc<dyn Fn(String, Option<String>) + Send + Sync> = 
+                    std::sync::Arc::new(move |id, value| {
+                        if let Some(ref sender) = response_sender {
+                            let response = Message::Submit { id, value };
+                            if let Err(e) = sender.send(response) {
+                                logging::log("UI", &format!("Failed to send template response: {}", e));
+                            }
+                        }
+                    });
+                
+                // Create TemplatePrompt entity
+                let focus_handle = self.focus_handle.clone();
+                let template_prompt = prompts::TemplatePrompt::new(
+                    id.clone(),
+                    template,
+                    focus_handle,
+                    submit_callback,
+                    std::sync::Arc::new(self.theme.clone()),
+                );
+                
+                let entity = cx.new(|_| template_prompt);
+                self.current_view = AppView::TemplatePrompt { id, entity };
+                self.focused_input = FocusedInput::None;
+                
+                defer_resize_to_view(ViewType::DivPrompt, 0, cx);
                 cx.notify();
             }
             PromptMessage::ShowSelect { id, placeholder, choices, multiple } => {
-                tracing::info!(id, ?placeholder, choice_count = choices.len(), multiple, "ShowSelect received - TODO: implement UI");
+                tracing::info!(id, ?placeholder, choice_count = choices.len(), multiple, "ShowSelect received");
                 logging::log("UI", &format!("ShowSelect prompt received: {} ({} choices, multiple: {})", id, choices.len(), multiple));
-                // TODO: Create SelectPrompt entity and switch to it
-                let toast = Toast::warning("Select prompt not yet implemented".to_string(), &self.theme)
-                    .duration_ms(Some(3000));
-                self.toast_manager.push(toast);
+                
+                // Create submit callback for select prompt
+                let response_sender = self.response_sender.clone();
+                let submit_callback: std::sync::Arc<dyn Fn(String, Option<String>) + Send + Sync> = 
+                    std::sync::Arc::new(move |id, value| {
+                        if let Some(ref sender) = response_sender {
+                            let response = Message::Submit { id, value };
+                            if let Err(e) = sender.send(response) {
+                                logging::log("UI", &format!("Failed to send select response: {}", e));
+                            }
+                        }
+                    });
+                
+                // Create SelectPrompt entity
+                let choice_count = choices.len();
+                let select_prompt = prompts::SelectPrompt::new(
+                    id.clone(),
+                    placeholder,
+                    choices,
+                    multiple,
+                    self.focus_handle.clone(),
+                    submit_callback,
+                    std::sync::Arc::new(self.theme.clone()),
+                );
+                let entity = cx.new(|_| select_prompt);
+                self.current_view = AppView::SelectPrompt { id, entity };
+                self.focused_input = FocusedInput::None; // SelectPrompt has its own focus handling
+                
+                // Resize window based on number of choices
+                let view_type = if choice_count == 0 {
+                    ViewType::ArgPromptNoChoices
+                } else {
+                    ViewType::ArgPromptWithChoices
+                };
+                defer_resize_to_view(view_type, choice_count, cx);
                 cx.notify();
             }
          }
@@ -3424,6 +3655,11 @@ impl ScriptListApp {
             AppView::FormPrompt { .. } => "FormPrompt",
             AppView::TermPrompt { .. } => "TermPrompt",
             AppView::EditorPrompt { .. } => "EditorPrompt",
+            AppView::SelectPrompt { .. } => "SelectPrompt",
+            AppView::PathPrompt { .. } => "PathPrompt",
+            AppView::EnvPrompt { .. } => "EnvPrompt",
+            AppView::DropPrompt { .. } => "DropPrompt",
+            AppView::TemplatePrompt { .. } => "TemplatePrompt",
             AppView::ClipboardHistoryView { .. } => "ClipboardHistoryView",
             AppView::AppLauncherView { .. } => "AppLauncherView",
             AppView::WindowSwitcherView { .. } => "WindowSwitcherView",
@@ -3659,6 +3895,11 @@ impl Render for ScriptListApp {
             AppView::FormPrompt { id, html } => self.render_form_prompt(id, html, cx),
             AppView::TermPrompt { entity, .. } => self.render_term_prompt(entity, cx),
             AppView::EditorPrompt { entity, .. } => self.render_editor_prompt(entity, cx),
+            AppView::SelectPrompt { entity, .. } => self.render_select_prompt(entity, cx),
+            AppView::PathPrompt { entity, .. } => self.render_path_prompt(entity, cx),
+            AppView::EnvPrompt { entity, .. } => self.render_env_prompt(entity, cx),
+            AppView::DropPrompt { entity, .. } => self.render_drop_prompt(entity, cx),
+            AppView::TemplatePrompt { entity, .. } => self.render_template_prompt(entity, cx),
             AppView::ClipboardHistoryView { entries, filter, selected_index } => {
                 self.render_clipboard_history(entries, filter, selected_index, cx)
             }
@@ -5698,6 +5939,137 @@ impl ScriptListApp {
             )
             .into_any_element()
     }
+    
+    fn render_select_prompt(&mut self, entity: Entity<SelectPrompt>, _cx: &mut Context<Self>) -> AnyElement {
+        // Use design tokens for GLOBAL theming
+        let tokens = get_tokens(self.current_design);
+        let design_colors = tokens.colors();
+        let design_visual = tokens.visual();
+        
+        // Use design tokens for global theming
+        let opacity = self.theme.get_opacity();
+        let bg_hex = design_colors.background;
+        let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
+        let box_shadows = self.create_box_shadows();
+        
+        // SelectPrompt entity has its own track_focus and on_key_down in its render method.
+        div()
+            .flex()
+            .flex_col()
+            .bg(rgba(bg_with_alpha))
+            .shadow(box_shadows)
+            .w_full()
+            .h_full()
+            .overflow_hidden()
+            .rounded(px(design_visual.radius_lg))
+            .child(div().size_full().child(entity))
+            .into_any_element()
+    }
+
+    fn render_path_prompt(&mut self, entity: Entity<PathPrompt>, _cx: &mut Context<Self>) -> AnyElement {
+        // Use design tokens for GLOBAL theming
+        let tokens = get_tokens(self.current_design);
+        let design_colors = tokens.colors();
+        let design_visual = tokens.visual();
+        
+        // Use design tokens for global theming
+        let opacity = self.theme.get_opacity();
+        let bg_hex = design_colors.background;
+        let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
+        let box_shadows = self.create_box_shadows();
+        
+        // PathPrompt entity has its own track_focus and on_key_down in its render method.
+        div()
+            .flex()
+            .flex_col()
+            .bg(rgba(bg_with_alpha))
+            .shadow(box_shadows)
+            .w_full()
+            .h_full()
+            .overflow_hidden()
+            .rounded(px(design_visual.radius_lg))
+            .child(div().size_full().child(entity))
+            .into_any_element()
+    }
+
+    fn render_env_prompt(&mut self, entity: Entity<EnvPrompt>, _cx: &mut Context<Self>) -> AnyElement {
+        // Use design tokens for GLOBAL theming
+        let tokens = get_tokens(self.current_design);
+        let design_colors = tokens.colors();
+        let design_visual = tokens.visual();
+        
+        // Use design tokens for global theming
+        let opacity = self.theme.get_opacity();
+        let bg_hex = design_colors.background;
+        let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
+        let box_shadows = self.create_box_shadows();
+        
+        // EnvPrompt entity has its own track_focus and on_key_down in its render method.
+        div()
+            .flex()
+            .flex_col()
+            .bg(rgba(bg_with_alpha))
+            .shadow(box_shadows)
+            .w_full()
+            .h_full()
+            .overflow_hidden()
+            .rounded(px(design_visual.radius_lg))
+            .child(div().size_full().child(entity))
+            .into_any_element()
+    }
+
+    fn render_drop_prompt(&mut self, entity: Entity<DropPrompt>, _cx: &mut Context<Self>) -> AnyElement {
+        // Use design tokens for GLOBAL theming
+        let tokens = get_tokens(self.current_design);
+        let design_colors = tokens.colors();
+        let design_visual = tokens.visual();
+        
+        // Use design tokens for global theming
+        let opacity = self.theme.get_opacity();
+        let bg_hex = design_colors.background;
+        let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
+        let box_shadows = self.create_box_shadows();
+        
+        // DropPrompt entity has its own track_focus and on_key_down in its render method.
+        div()
+            .flex()
+            .flex_col()
+            .bg(rgba(bg_with_alpha))
+            .shadow(box_shadows)
+            .w_full()
+            .h_full()
+            .overflow_hidden()
+            .rounded(px(design_visual.radius_lg))
+            .child(div().size_full().child(entity))
+            .into_any_element()
+    }
+
+    fn render_template_prompt(&mut self, entity: Entity<TemplatePrompt>, _cx: &mut Context<Self>) -> AnyElement {
+        // Use design tokens for GLOBAL theming
+        let tokens = get_tokens(self.current_design);
+        let design_colors = tokens.colors();
+        let design_visual = tokens.visual();
+        
+        // Use design tokens for global theming
+        let opacity = self.theme.get_opacity();
+        let bg_hex = design_colors.background;
+        let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
+        let box_shadows = self.create_box_shadows();
+        
+        // TemplatePrompt entity has its own track_focus and on_key_down in its render method.
+        div()
+            .flex()
+            .flex_col()
+            .bg(rgba(bg_with_alpha))
+            .shadow(box_shadows)
+            .w_full()
+            .h_full()
+            .overflow_hidden()
+            .rounded(px(design_visual.radius_lg))
+            .child(div().size_full().child(entity))
+            .into_any_element()
+    }
+
     
     fn render_actions_dialog(&mut self, cx: &mut Context<Self>) -> AnyElement {
         // Use design tokens for GLOBAL theming

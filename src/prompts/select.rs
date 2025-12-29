@@ -154,6 +154,21 @@ impl SelectPrompt {
             cx.notify();
         }
     }
+
+    /// Select all choices (Ctrl+A)
+    fn select_all(&mut self, cx: &mut Context<Self>) {
+        if self.multiple {
+            // Select all filtered choices
+            self.selected = self.filtered_choices.clone();
+            cx.notify();
+        }
+    }
+
+    /// Deselect all choices
+    fn deselect_all(&mut self, cx: &mut Context<Self>) {
+        self.selected.clear();
+        cx.notify();
+    }
 }
 
 impl Focusable for SelectPrompt {
@@ -171,6 +186,18 @@ impl Render for SelectPrompt {
 
         let handle_key = cx.listener(|this: &mut Self, event: &gpui::KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
             let key_str = event.keystroke.key.to_lowercase();
+            let has_ctrl = event.keystroke.modifiers.platform; // Cmd on macOS, Ctrl on others
+            
+            // Handle Ctrl/Cmd+A for select all
+            if has_ctrl && key_str == "a" {
+                if this.selected.len() == this.filtered_choices.len() {
+                    // All selected, so deselect all
+                    this.deselect_all(cx);
+                } else {
+                    this.select_all(cx);
+                }
+                return;
+            }
             
             match key_str.as_str() {
                 "up" | "arrowup" => this.move_up(cx),

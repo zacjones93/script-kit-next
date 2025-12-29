@@ -451,27 +451,27 @@ try {
 }
 
 // -----------------------------------------------------------------------------
-// Test 14: TIER 5 utility APIs available (exec, wait, uuid)
+// Test 14: TIER 5 utility APIs available (wait, uuid)
+// Note: exec was removed from SDK - use Bun.$ or Bun.spawn() instead
 // -----------------------------------------------------------------------------
 const test14 = 'global-tier5-utils-available';
 logTest(test14, 'running');
 const start14 = Date.now();
 
 try {
-  const execAvailable = typeof exec === 'function';
   const waitAvailable = typeof wait === 'function';
   const uuidAvailable = typeof uuid === 'function';
   
-  debug(`exec: ${execAvailable}, wait: ${waitAvailable}, uuid: ${uuidAvailable}`);
+  debug(`wait: ${waitAvailable}, uuid: ${uuidAvailable}`);
   
-  if (execAvailable && waitAvailable && uuidAvailable) {
+  if (waitAvailable && uuidAvailable) {
     logTest(test14, 'pass', { 
-      result: 'exec, wait, uuid all available', 
+      result: 'wait, uuid all available', 
       duration_ms: Date.now() - start14 
     });
   } else {
     logTest(test14, 'fail', { 
-      error: `Missing TIER 5 APIs: exec=${execAvailable}, wait=${waitAvailable}, uuid=${uuidAvailable}`,
+      error: `Missing TIER 5 APIs: wait=${waitAvailable}, uuid=${uuidAvailable}`,
       duration_ms: Date.now() - start14 
     });
   }
@@ -479,7 +479,7 @@ try {
   logTest(test14, 'fail', { 
     error: String(err), 
     duration_ms: Date.now() - start14,
-    expected: 'exec, wait, uuid should all be functions'
+    expected: 'wait, uuid should all be functions'
   });
 }
 
@@ -536,7 +536,7 @@ The import redirect from \`@johnlindquist/kit\` has been tested.
 | **System APIs** | clipboard, beep, say, notify |
 | **Path Utils** | home, kenvPath, kitPath |
 | **TIER 4 APIs** | chat, widget, term |
-| **TIER 5 Utils** | exec, wait, uuid |
+| **TIER 5 Utils** | wait, uuid |
 
 ## Import Syntax Tested
 

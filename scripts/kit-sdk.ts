@@ -318,40 +318,8 @@ export type ChoicesFunction =
 export type ChoicesInput = (string | Choice)[] | ChoicesFunction;
 
 // =============================================================================
-// TIER 5A: Utility Types
+// TIER 5B: In-Memory Types
 // =============================================================================
-
-export interface ExecOptions {
-  cwd?: string;
-  shell?: string;
-  all?: boolean;
-}
-
-export interface ExecResult {
-  stdout: string;
-  stderr: string;
-  all?: string;
-  exitCode: number;
-}
-
-export interface HttpResponse {
-  data: unknown;
-}
-
-// =============================================================================
-// TIER 5B: Storage/Path Types
-// =============================================================================
-
-export interface DbInstance {
-  data: unknown;
-  items?: unknown[];
-  write(): Promise<void>;
-}
-
-export interface StoreAPI {
-  get(key: string): Promise<unknown>;
-  set(key: string, value: unknown): Promise<void>;
-}
 
 export interface MemoryMapAPI {
   get(key: string): unknown;
@@ -772,28 +740,8 @@ interface FileSearchMessage {
 }
 
 // =============================================================================
-// TIER 5A: Utility Message Types
+// TIER 5A: Window Control Message Types
 // =============================================================================
-
-interface ExecMessage {
-  type: 'exec';
-  id: string;
-  command: string;
-  options?: ExecOptions;
-}
-
-interface DownloadMessage {
-  type: 'download';
-  id: string;
-  url: string;
-  destination: string;
-}
-
-interface TrashMessage {
-  type: 'trash';
-  id: string;
-  paths: string[];
-}
 
 interface ShowMessage {
   type: 'show';
@@ -833,23 +781,8 @@ interface SetPromptMessage {
 }
 
 // =============================================================================
-// TIER 5B: Storage/Path Message Types
+// TIER 5B: Browser/App Message Types
 // =============================================================================
-
-interface DbMessage {
-  type: 'db';
-  id: string;
-  scriptName: string;
-  initialData?: unknown;
-}
-
-interface StoreMessage {
-  type: 'store';
-  id: string;
-  action: 'get' | 'set';
-  key: string;
-  value?: unknown;
-}
 
 interface BrowseMessage {
   type: 'browse';
@@ -1236,67 +1169,8 @@ declare global {
   function find(placeholder: string, options?: FindOptions): Promise<string>;
   
   // =============================================================================
-  // TIER 5A: Utility Functions
+  // TIER 5A: Window Control Functions
   // =============================================================================
-  
-  /**
-   * Execute a shell command
-   * @param command - Command to execute
-   * @param options - Execution options (cwd, shell, all)
-   * @returns ExecResult with stdout, stderr, and exitCode
-   */
-  function exec(command: string, options?: ExecOptions): Promise<ExecResult>;
-  
-  /**
-   * HTTP GET request
-   * @param url - URL to fetch
-   * @returns Response with data property
-   */
-  function get(url: string): Promise<HttpResponse>;
-  
-  /**
-   * HTTP POST request
-   * @param url - URL to post to
-   * @param data - Data to send
-   * @returns Response with data property
-   */
-  function post(url: string, data?: unknown): Promise<HttpResponse>;
-  
-  /**
-   * HTTP PUT request
-   * @param url - URL to put to
-   * @param data - Data to send
-   * @returns Response with data property
-   */
-  function put(url: string, data?: unknown): Promise<HttpResponse>;
-  
-  /**
-   * HTTP PATCH request
-   * @param url - URL to patch
-   * @param data - Data to send
-   * @returns Response with data property
-   */
-  function patch(url: string, data?: unknown): Promise<HttpResponse>;
-  
-  /**
-   * HTTP DELETE request
-   * @param url - URL to delete
-   * @returns Response with data property
-   */
-  function del(url: string): Promise<HttpResponse>;
-  
-  /**
-   * Download a file from URL to destination
-   * @param url - URL to download from
-   * @param destination - Local file path
-   */
-  function download(url: string, destination: string): Promise<void>;
-  
-  /**
-   * Move files to trash
-   * @param paths - File path(s) to trash
-   */
-  function trash(paths: string | string[]): Promise<void>;
   
   /**
    * Show the main window
@@ -1437,20 +1311,8 @@ declare global {
   function isBin(filePath: string): Promise<boolean>;
   
   // =============================================================================
-  // TIER 5B: Database/Store
+  // TIER 5B: In-Memory Storage
   // =============================================================================
-  
-  /**
-   * Simple JSON file database
-   * @param initialData - Initial data if database doesn't exist
-   * @returns Database instance with data and write method
-   */
-  function db(initialData?: unknown): Promise<DbInstance>;
-  
-  /**
-   * Key-value store for persistent data
-   */
-  const store: StoreAPI;
   
   /**
    * In-memory map (not persisted)
@@ -2711,133 +2573,8 @@ globalThis.find = async function find(
 };
 
 // =============================================================================
-// TIER 5A: Utility Functions
+// TIER 5A: Window Control Functions
 // =============================================================================
-
-// Shell Execution - sends command to GPUI for execution
-globalThis.exec = async function exec(
-  command: string,
-  options?: ExecOptions
-): Promise<ExecResult> {
-  const id = nextId();
-
-  return new Promise((resolve) => {
-    pending.set(id, (msg: SubmitMessage) => {
-      const value = msg.value ?? '{}';
-      try {
-        const parsed = JSON.parse(value);
-        resolve({
-          stdout: parsed.stdout ?? '',
-          stderr: parsed.stderr ?? '',
-          all: options?.all ? parsed.all : undefined,
-          exitCode: parsed.exitCode ?? 0,
-        });
-      } catch {
-        resolve({
-          stdout: '',
-          stderr: 'Failed to parse exec result',
-          exitCode: 1,
-        });
-      }
-    });
-
-    const message: ExecMessage = {
-      type: 'exec',
-      id,
-      command,
-      options,
-    };
-
-    send(message);
-  });
-};
-
-// HTTP Methods - use fetch directly (Bun supports it natively)
-globalThis.get = async function get(url: string): Promise<HttpResponse> {
-  const response = await fetch(url);
-  const data = await response.json();
-  return { data };
-};
-
-globalThis.post = async function post(url: string, data?: unknown): Promise<HttpResponse> {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: data ? JSON.stringify(data) : undefined,
-  });
-  const responseData = await response.json();
-  return { data: responseData };
-};
-
-globalThis.put = async function put(url: string, data?: unknown): Promise<HttpResponse> {
-  const response = await fetch(url, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: data ? JSON.stringify(data) : undefined,
-  });
-  const responseData = await response.json();
-  return { data: responseData };
-};
-
-globalThis.patch = async function patch(url: string, data?: unknown): Promise<HttpResponse> {
-  const response = await fetch(url, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: data ? JSON.stringify(data) : undefined,
-  });
-  const responseData = await response.json();
-  return { data: responseData };
-};
-
-globalThis.del = async function del(url: string): Promise<HttpResponse> {
-  const response = await fetch(url, {
-    method: 'DELETE',
-  });
-  const data = await response.json();
-  return { data };
-};
-
-// File Operations
-globalThis.download = async function download(
-  url: string,
-  destination: string
-): Promise<void> {
-  const id = nextId();
-
-  return new Promise((resolve) => {
-    pending.set(id, () => {
-      resolve();
-    });
-
-    const message: DownloadMessage = {
-      type: 'download',
-      id,
-      url,
-      destination,
-    };
-
-    send(message);
-  });
-};
-
-globalThis.trash = async function trash(paths: string | string[]): Promise<void> {
-  const id = nextId();
-  const pathArray = Array.isArray(paths) ? paths : [paths];
-
-  return new Promise((resolve) => {
-    pending.set(id, () => {
-      resolve();
-    });
-
-    const message: TrashMessage = {
-      type: 'trash',
-      id,
-      paths: pathArray,
-    };
-
-    send(message);
-  });
-};
 
 // Window Control (fire-and-forget)
 globalThis.show = async function show(): Promise<void> {
@@ -3033,120 +2770,6 @@ globalThis.isBin = async function isBin(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
-};
-
-// =============================================================================
-// TIER 5B: Database (JSON file storage)
-// =============================================================================
-
-// Get the script name from the call stack or default to 'default'
-function getScriptName(): string {
-  // Try to get the script name from process.argv
-  const scriptPath = process.argv[1] || '';
-  const basename = nodePath.basename(scriptPath, nodePath.extname(scriptPath));
-  return basename || 'default';
-}
-
-globalThis.db = async function db(initialData?: unknown): Promise<DbInstance> {
-  const scriptName = getScriptName();
-  const id = nextId();
-  
-  return new Promise((resolve) => {
-    pending.set(id, (msg: SubmitMessage) => {
-      const value = msg.value ?? '{}';
-      let parsedData: unknown;
-      try {
-        parsedData = JSON.parse(value);
-      } catch {
-        parsedData = initialData ?? {};
-      }
-      
-      // Create the DbInstance
-      const instance: DbInstance = {
-        data: parsedData,
-        items: Array.isArray(parsedData) ? parsedData : undefined,
-        write: async () => {
-          const writeId = nextId();
-          return new Promise<void>((writeResolve) => {
-            pending.set(writeId, () => {
-              writeResolve();
-            });
-            
-            const writeMessage: DbMessage = {
-              type: 'db',
-              id: writeId,
-              scriptName,
-              initialData: instance.data,
-            };
-            send(writeMessage);
-          });
-        },
-      };
-      
-      resolve(instance);
-    });
-    
-    const message: DbMessage = {
-      type: 'db',
-      id,
-      scriptName,
-      initialData,
-    };
-    
-    send(message);
-  });
-};
-
-// =============================================================================
-// TIER 5B: Key-Value Store
-// =============================================================================
-
-globalThis.store = {
-  async get(key: string): Promise<unknown> {
-    const id = nextId();
-    
-    return new Promise((resolve) => {
-      pending.set(id, (msg: SubmitMessage) => {
-        const value = msg.value;
-        if (value === undefined || value === null || value === '') {
-          resolve(undefined);
-        } else {
-          try {
-            resolve(JSON.parse(value));
-          } catch {
-            resolve(value);
-          }
-        }
-      });
-      
-      const message: StoreMessage = {
-        type: 'store',
-        id,
-        action: 'get',
-        key,
-      };
-      send(message);
-    });
-  },
-  
-  async set(key: string, value: unknown): Promise<void> {
-    const id = nextId();
-    
-    return new Promise((resolve) => {
-      pending.set(id, () => {
-        resolve();
-      });
-      
-      const message: StoreMessage = {
-        type: 'store',
-        id,
-        action: 'set',
-        key,
-        value,
-      };
-      send(message);
-    });
-  },
 };
 
 // =============================================================================
