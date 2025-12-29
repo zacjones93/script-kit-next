@@ -544,13 +544,13 @@ pub fn icon_from_png(png_data: &[u8]) -> Option<IconKind> {
         .map(IconKind::Image)
 }
 
-/// Render a section header for grouped lists (e.g., "RECENT", "MAIN")
+/// Render a section header for grouped lists (e.g., "Recent", "Main")
 /// 
-/// Visual design for minimal, unobtrusive section headers:
-/// - ALL CAPS text
+/// Visual design for section headers:
+/// - Standard casing (not uppercase)
 /// - Small font (~10-11px via text_xs)
-/// - Light font weight for subtle appearance
-/// - Dimmed color (more subtle than muted)
+/// - Bold font weight for visibility
+/// - Dimmed color (subtle but readable)
 /// - Bottom-aligned within the row (text sits at the bottom edge)
 /// - Left-aligned with list item padding
 /// - No background, no border
@@ -559,7 +559,7 @@ pub fn icon_from_png(png_data: &[u8]) -> Option<IconKind> {
 /// This function returns a full-height flex container that positions text at the bottom.
 /// 
 /// # Arguments
-/// * `label` - The section label (will be uppercased)
+/// * `label` - The section label (displayed as-is, standard casing)
 /// * `colors` - ListItemColors for theme-aware styling
 /// 
 /// # Example
@@ -570,7 +570,7 @@ pub fn icon_from_png(png_data: &[u8]) -> Option<IconKind> {
 pub fn render_section_header(label: &str, colors: ListItemColors) -> impl IntoElement {
     // Full-height container that positions content at the bottom
     // The parent sets h(px(LIST_ITEM_HEIGHT)), so we use h_full() to fill it
-    // and items_end() to push content to the bottom
+    // and justify_end() to push content to the bottom
     div()
         .w_full()
         .h_full()  // Fill parent's height (LIST_ITEM_HEIGHT)
@@ -582,9 +582,9 @@ pub fn render_section_header(label: &str, colors: ListItemColors) -> impl IntoEl
         .child(
             div()
                 .text_xs()
-                .font_weight(FontWeight::LIGHT)  // Light weight for subtle appearance
-                .text_color(rgb(colors.text_dimmed))  // Use dimmed for even more subtle
-                .child(label.to_uppercase())
+                .font_weight(FontWeight::BOLD)  // Bold for visibility
+                .text_color(rgb(colors.text_dimmed))
+                .child(label.to_string())  // Standard casing (not uppercased)
         )
 }
 
