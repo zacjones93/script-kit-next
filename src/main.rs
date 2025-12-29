@@ -917,6 +917,9 @@ struct ScriptListApp {
     pending_path_action: Arc<Mutex<Option<PathInfo>>>,
     // Signal to close path actions dialog (set by callback on Escape/__cancel__)
     close_path_actions: Arc<Mutex<bool>>,
+    // Shared state: whether path actions dialog is currently showing
+    // Used by PathPrompt to implement toggle behavior for Cmd+K
+    path_actions_showing: Arc<Mutex<bool>>,
 }
 
 impl ScriptListApp {
@@ -1087,6 +1090,8 @@ impl ScriptListApp {
             pending_path_action: Arc::new(Mutex::new(None)),
             // Signal to close path actions dialog
             close_path_actions: Arc::new(Mutex::new(false)),
+            // Shared state: path actions dialog visibility (for toggle behavior)
+            path_actions_showing: Arc::new(Mutex::new(false)),
         }
     }
     
@@ -3527,6 +3532,20 @@ impl ScriptListApp {
                         }
                     });
                 
+                // Clone the close_path_actions Arc for the close callback
+                let close_path_actions_clone = self.close_path_actions.clone();
+                
+                let close_actions_callback: std::sync::Arc<dyn Fn() + Send + Sync> = 
+                    std::sync::Arc::new(move || {
+                        logging::log("UI", "Path close actions callback triggered");
+                        if let Ok(mut guard) = close_path_actions_clone.lock() {
+                            *guard = true;
+                        }
+                    });
+                
+                // Clone the path_actions_showing Arc for toggle behavior
+                let path_actions_showing = self.path_actions_showing.clone();
+                
                 let focus_handle = cx.focus_handle();
                 let path_prompt = PathPrompt::new(
                     id.clone(),
@@ -3535,15 +3554,21 @@ impl ScriptListApp {
                     focus_handle.clone(),
                     submit_callback,
                     std::sync::Arc::new(self.theme.clone()),
-                ).with_show_actions(show_actions_callback);
+                )
+                .with_show_actions(show_actions_callback)
+                .with_close_actions(close_actions_callback)
+                .with_actions_showing(path_actions_showing);
                 
                 let entity = cx.new(|_| path_prompt);
                 self.current_view = AppView::PathPrompt { id, entity, focus_handle };
                 self.focused_input = FocusedInput::None;
                 
-                // Clear any previous pending action
+                // Clear any previous pending action and reset showing state
                 if let Ok(mut guard) = self.pending_path_action.lock() {
                     *guard = None;
+                }
+                if let Ok(mut guard) = self.path_actions_showing.lock() {
+                    *guard = false;
                 }
                 
                 defer_resize_to_view(ViewType::ScriptList, 20, cx);
@@ -6183,6 +6208,10 @@ impl ScriptListApp {
                 *close_guard = false;
                 self.show_actions_popup = false;
                 self.actions_dialog = None;
+                // Update shared showing state for toggle behavior
+                if let Ok(mut showing_guard) = self.path_actions_showing.lock() {
+                    *showing_guard = false;
+                }
                 logging::log("UI", "Closed path actions dialog");
             }
         }
@@ -6213,6 +6242,10 @@ impl ScriptListApp {
                 });
                 self.actions_dialog = Some(dialog.clone());
                 self.show_actions_popup = true;
+                // Update shared showing state for toggle behavior
+                if let Ok(mut showing_guard) = self.path_actions_showing.lock() {
+                    *showing_guard = true;
+                }
                 Some(dialog)
             } else if self.show_actions_popup {
                 self.actions_dialog.clone()
@@ -6235,16 +6268,16 @@ impl ScriptListApp {
             .overflow_hidden()
             .rounded(px(design_visual.radius_lg))
             .child(div().size_full().child(entity))
-            // Actions dialog overlays on top
+            // Actions dialog overlays on top (upper-right corner, matching main menu)
             .when_some(actions_dialog, |d, dialog| {
                 d.child(
                     div()
                         .absolute()
                         .inset_0()
                         .flex()
-                        .items_center()
-                        .justify_center()
-                        .bg(rgba(0x00000080)) // Semi-transparent backdrop
+                        .justify_end()
+                        .pt(px(8.))
+                        .pr(px(8.))
                         .child(dialog)
                 )
             })

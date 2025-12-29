@@ -10,7 +10,7 @@ use gpui::{
     div, prelude::*, px, rgb, uniform_list, Context, FocusHandle, Focusable, Render, 
     UniformListScrollHandle, Window,
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::path::Path;
 
 use crate::logging;
@@ -48,6 +48,10 @@ impl PathInfo {
 /// Signature: (path_info: PathInfo)
 pub type ShowActionsCallback = Arc<dyn Fn(PathInfo) + Send + Sync>;
 
+/// Callback for closing actions dialog (toggle behavior)
+/// Signature: ()
+pub type CloseActionsCallback = Arc<dyn Fn() + Send + Sync>;
+
 /// PathPrompt - File/folder picker
 ///
 /// Provides a file browser interface for selecting files or directories.
@@ -81,6 +85,11 @@ pub struct PathPrompt {
     pub list_scroll_handle: UniformListScrollHandle,
     /// Optional callback to show actions dialog
     pub on_show_actions: Option<ShowActionsCallback>,
+    /// Optional callback to close actions dialog (for toggle behavior)
+    pub on_close_actions: Option<CloseActionsCallback>,
+    /// Shared state tracking if actions dialog is currently showing
+    /// Used by PathPrompt to implement toggle behavior for Cmd+K
+    pub actions_showing: Arc<Mutex<bool>>,
     /// Whether to show blinking cursor (for focused state)
     pub cursor_visible: bool,
 }
@@ -131,6 +140,8 @@ impl PathPrompt {
             design_variant: DesignVariant::Default,
             list_scroll_handle: UniformListScrollHandle::new(),
             on_show_actions: None,
+            on_close_actions: None,
+            actions_showing: Arc::new(Mutex::new(false)),
             cursor_visible: true,
         }
     }
@@ -144,6 +155,18 @@ impl PathPrompt {
     /// Set the show actions callback (mutable version)
     pub fn set_show_actions(&mut self, callback: ShowActionsCallback) {
         self.on_show_actions = Some(callback);
+    }
+    
+    /// Set the close actions callback (for toggle behavior)
+    pub fn with_close_actions(mut self, callback: CloseActionsCallback) -> Self {
+        self.on_close_actions = Some(callback);
+        self
+    }
+    
+    /// Set the shared actions_showing state (for toggle behavior)
+    pub fn with_actions_showing(mut self, actions_showing: Arc<Mutex<bool>>) -> Self {
+        self.actions_showing = actions_showing;
+        self
     }
     
     /// Load directory entries from a path
@@ -240,6 +263,28 @@ impl PathPrompt {
                 // Trigger re-render to show ActionsDialog
                 cx.notify();
             }
+        }
+    }
+    
+    /// Close actions dialog (for toggle behavior)
+    fn close_actions(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref callback) = self.on_close_actions {
+            logging::log("PROMPTS", "PathPrompt closing actions dialog");
+            (callback)();
+            cx.notify();
+        }
+    }
+    
+    /// Toggle actions dialog - show if hidden, close if showing
+    fn toggle_actions(&mut self, cx: &mut Context<Self>) {
+        let is_showing = self.actions_showing.lock().map(|g| *g).unwrap_or(false);
+        
+        if is_showing {
+            logging::log("PROMPTS", "PathPrompt toggle: closing actions (was showing)");
+            self.close_actions(cx);
+        } else {
+            logging::log("PROMPTS", "PathPrompt toggle: showing actions (was hidden)");
+            self.show_actions(cx);
         }
     }
     
@@ -359,9 +404,9 @@ impl Render for PathPrompt {
             let key_str = event.keystroke.key.to_lowercase();
             let has_cmd = event.keystroke.modifiers.platform;
             
-            // Check for Cmd+K to show actions
+            // Check for Cmd+K to toggle actions
             if has_cmd && key_str == "k" {
-                this.show_actions(cx);
+                this.toggle_actions(cx);
                 return;
             }
             
@@ -443,12 +488,8 @@ impl Render for PathPrompt {
                         IconKind::Emoji("📄".to_string())
                     };
                     
-                    // Description: show "→" hint for directories
-                    let description = if *is_dir {
-                        Some("→".to_string())
-                    } else {
-                        None
-                    };
+                    // No description needed - folder icon 📁 is sufficient
+                    let description: Option<String> = None;
                     
                     // Use ListItem component for consistent styling with main menu
                     ListItem::new(name.clone(), list_colors)
