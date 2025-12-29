@@ -45,6 +45,9 @@ impl ScriptInfo {
     }
 }
 
+// Import PathInfo from prompts module (use crate:: for local import)
+pub use crate::prompts::PathInfo;
+
 /// Available actions in the actions menu
 #[derive(Debug, Clone)]
 pub struct Action {
@@ -83,6 +86,67 @@ impl Action {
         self.shortcut = Some(shortcut.into());
         self
     }
+}
+
+/// Get actions specific to a file/folder path
+pub fn get_path_context_actions(path_info: &PathInfo) -> Vec<Action> {
+    let mut actions = vec![
+        Action::new(
+            "copy_path",
+            "Copy Path",
+            Some("Copy the full path to clipboard".to_string()),
+            ActionCategory::ScriptContext,
+        ).with_shortcut("⌘⇧C"),
+        Action::new(
+            "open_in_finder",
+            "Open in Finder",
+            Some("Reveal in Finder".to_string()),
+            ActionCategory::ScriptContext,
+        ).with_shortcut("⌘⇧F"),
+        Action::new(
+            "open_in_editor",
+            "Open in Editor",
+            Some("Open in $EDITOR".to_string()),
+            ActionCategory::ScriptContext,
+        ).with_shortcut("⌘E"),
+        Action::new(
+            "open_in_terminal",
+            "Open in Terminal",
+            Some("Open terminal at this location".to_string()),
+            ActionCategory::ScriptContext,
+        ).with_shortcut("⌘T"),
+        Action::new(
+            "copy_filename",
+            "Copy Filename",
+            Some("Copy just the filename".to_string()),
+            ActionCategory::ScriptContext,
+        ),
+        Action::new(
+            "move_to_trash",
+            "Move to Trash",
+            Some(format!("Delete {}", if path_info.is_dir { "folder" } else { "file" })),
+            ActionCategory::ScriptContext,
+        ).with_shortcut("⌘⌫"),
+    ];
+    
+    // Add directory-specific action for navigating into
+    if path_info.is_dir {
+        actions.insert(0, Action::new(
+            "open_directory",
+            format!("Open \"{}\"", path_info.name),
+            Some("Navigate into this directory".to_string()),
+            ActionCategory::ScriptContext,
+        ).with_shortcut("↵"));
+    } else {
+        actions.insert(0, Action::new(
+            "select_file",
+            format!("Select \"{}\"", path_info.name),
+            Some("Submit this file".to_string()),
+            ActionCategory::ScriptContext,
+        ).with_shortcut("↵"));
+    }
+    
+    actions
 }
 
 /// Get actions specific to the focused script
@@ -219,6 +283,39 @@ impl ActionsDialog {
         design_variant: DesignVariant,
     ) -> Self {
         Self::with_script_and_design(focus_handle, on_select, None, theme, design_variant)
+    }
+    
+    /// Create ActionsDialog for a path (file/folder) with path-specific actions
+    pub fn with_path(
+        focus_handle: FocusHandle,
+        on_select: ActionCallback,
+        path_info: &PathInfo,
+        theme: Arc<theme::Theme>,
+    ) -> Self {
+        let actions = get_path_context_actions(path_info);
+        let filtered_actions: Vec<usize> = (0..actions.len()).collect();
+        
+        logging::log("ACTIONS", &format!(
+            "ActionsDialog created for path: {} (is_dir={}) with {} actions", 
+            path_info.path,
+            path_info.is_dir,
+            actions.len()
+        ));
+        
+        ActionsDialog {
+            actions,
+            filtered_actions,
+            selected_index: 0,
+            search_text: String::new(),
+            focus_handle,
+            on_select,
+            focused_script: None,
+            scroll_handle: UniformListScrollHandle::new(),
+            theme,
+            design_variant: DesignVariant::Default,
+            cursor_visible: true,
+            hide_search: false,
+        }
     }
 
     pub fn with_script_and_design(

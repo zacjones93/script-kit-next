@@ -1093,6 +1093,118 @@ mod tests {
     }
 
     // ========================================
+    // Expand Metadata Tests
+    // ========================================
+
+    #[test]
+    fn test_parse_metadata_expand_basic() {
+        let metadata = parse_html_comment_metadata("<!-- expand: :sig -->");
+        assert_eq!(metadata.expand, Some(":sig".to_string()));
+    }
+
+    #[test]
+    fn test_parse_metadata_expand_with_punctuation() {
+        let metadata = parse_html_comment_metadata("<!-- expand: !email -->");
+        assert_eq!(metadata.expand, Some("!email".to_string()));
+    }
+
+    #[test]
+    fn test_parse_metadata_expand_with_double_suffix() {
+        // Common pattern: keyword followed by double char like "ddate,,"
+        let metadata = parse_html_comment_metadata("<!-- expand: ddate,, -->");
+        assert_eq!(metadata.expand, Some("ddate,,".to_string()));
+    }
+
+    #[test]
+    fn test_parse_metadata_expand_with_other_fields() {
+        let metadata = parse_html_comment_metadata("<!--\nexpand: :addr\nshortcut: cmd e\ndescription: Insert address\n-->");
+        assert_eq!(metadata.expand, Some(":addr".to_string()));
+        assert_eq!(metadata.shortcut, Some("cmd e".to_string()));
+        assert_eq!(metadata.description, Some("Insert address".to_string()));
+    }
+
+    #[test]
+    fn test_parse_metadata_expand_empty_value() {
+        // Empty expand value should not be stored
+        let metadata = parse_html_comment_metadata("<!-- expand: -->");
+        assert_eq!(metadata.expand, None);
+    }
+
+    #[test]
+    fn test_parse_markdown_scriptlet_with_expand() {
+        let markdown = r#"## Email Signature
+
+<!-- expand: :sig -->
+
+```type
+Best regards,
+John Doe
+```
+"#;
+        let scriptlets = parse_markdown_as_scriptlets(markdown, None);
+        assert_eq!(scriptlets.len(), 1);
+        assert_eq!(scriptlets[0].name, "Email Signature");
+        assert_eq!(scriptlets[0].metadata.expand, Some(":sig".to_string()));
+        assert_eq!(scriptlets[0].tool, "type");
+    }
+
+    #[test]
+    fn test_parse_markdown_multiple_scriptlets_with_expand() {
+        let markdown = r#"# Snippets
+
+## Date Insert
+
+<!-- expand: :date -->
+
+```type
+{{date}}
+```
+
+## Email Template
+
+<!-- expand: !email -->
+
+```type
+Hello {{name}},
+```
+
+## No Expand
+
+```type
+Plain text
+```
+"#;
+        let scriptlets = parse_markdown_as_scriptlets(markdown, None);
+        assert_eq!(scriptlets.len(), 3);
+        
+        assert_eq!(scriptlets[0].metadata.expand, Some(":date".to_string()));
+        assert_eq!(scriptlets[1].metadata.expand, Some("!email".to_string()));
+        assert_eq!(scriptlets[2].metadata.expand, None);
+    }
+
+    #[test]
+    fn test_expand_metadata_serialization() {
+        let metadata = ScriptletMetadata {
+            expand: Some(":test".to_string()),
+            ..Default::default()
+        };
+        
+        let json = serde_json::to_string(&metadata).unwrap();
+        assert!(json.contains("\"expand\":\":test\""));
+        
+        let deserialized: ScriptletMetadata = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.expand, Some(":test".to_string()));
+    }
+
+    #[test]
+    fn test_expand_metadata_deserialization_missing() {
+        // When expand is not present in JSON, it should be None
+        let json = r#"{"trigger":null,"shortcut":null,"schedule":null,"background":null,"watch":null,"system":null,"description":null}"#;
+        let metadata: ScriptletMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(metadata.expand, None);
+    }
+
+    // ========================================
     // Code Block Extraction Tests
     // ========================================
 

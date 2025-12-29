@@ -16,10 +16,37 @@ use std::path::Path;
 use crate::logging;
 use crate::theme;
 use crate::designs::{DesignVariant, get_tokens};
+use crate::list_item::{ListItem, ListItemColors, IconKind};
 
 /// Callback for prompt submission
 /// Signature: (id: String, value: Option<String>)
 pub type SubmitCallback = Arc<dyn Fn(String, Option<String>) + Send + Sync>;
+
+/// Information about a file/folder path for context-aware actions
+/// Used for path-specific actions in the actions dialog
+#[derive(Debug, Clone)]
+pub struct PathInfo {
+    /// Display name of the file/folder
+    pub name: String,
+    /// Full path to the file/folder
+    pub path: String,
+    /// Whether this is a directory
+    pub is_dir: bool,
+}
+
+impl PathInfo {
+    pub fn new(name: impl Into<String>, path: impl Into<String>, is_dir: bool) -> Self {
+        PathInfo {
+            name: name.into(),
+            path: path.into(),
+            is_dir,
+        }
+    }
+}
+
+/// Callback for showing actions dialog
+/// Signature: (path_info: PathInfo)
+pub type ShowActionsCallback = Arc<dyn Fn(PathInfo) + Send + Sync>;
 
 /// PathPrompt - File/folder picker
 ///
@@ -52,6 +79,10 @@ pub struct PathPrompt {
     pub design_variant: DesignVariant,
     /// Scroll handle for the list
     pub list_scroll_handle: UniformListScrollHandle,
+    /// Optional callback to show actions dialog
+    pub on_show_actions: Option<ShowActionsCallback>,
+    /// Whether to show blinking cursor (for focused state)
+    pub cursor_visible: bool,
 }
 
 /// A file system entry (file or directory)
@@ -99,7 +130,20 @@ impl PathPrompt {
             theme,
             design_variant: DesignVariant::Default,
             list_scroll_handle: UniformListScrollHandle::new(),
+            on_show_actions: None,
+            cursor_visible: true,
         }
+    }
+    
+    /// Set the callback for showing actions dialog
+    pub fn with_show_actions(mut self, callback: ShowActionsCallback) -> Self {
+        self.on_show_actions = Some(callback);
+        self
+    }
+    
+    /// Set the show actions callback (mutable version)
+    pub fn set_show_actions(&mut self, callback: ShowActionsCallback) {
+        self.on_show_actions = Some(callback);
     }
     
     /// Load directory entries from a path
@@ -107,14 +151,7 @@ impl PathPrompt {
         let path = Path::new(dir_path);
         let mut entries = Vec::new();
         
-        // Add parent directory entry if not at root
-        if let Some(parent) = path.parent() {
-            entries.push(PathEntry {
-                name: "..".to_string(),
-                path: parent.to_string_lossy().to_string(),
-                is_dir: true,
-            });
-        }
+        // No ".." entry - use left arrow to navigate to parent
         
         // Read directory entries
         if let Ok(read_dir) = std::fs::read_dir(path) {
@@ -186,7 +223,28 @@ impl PathPrompt {
         cx.notify();
     }
 
+    /// Show actions dialog for the selected entry
+    fn show_actions(&mut self, cx: &mut Context<Self>) {
+        if let Some(entry) = self.filtered_entries.get(self.selected_index) {
+            if let Some(ref callback) = self.on_show_actions {
+                let path_info = PathInfo::new(
+                    entry.name.clone(),
+                    entry.path.clone(),
+                    entry.is_dir,
+                );
+                logging::log("PROMPTS", &format!(
+                    "PathPrompt showing actions for: {} (is_dir={})", 
+                    path_info.path, path_info.is_dir
+                ));
+                (callback)(path_info);
+                // Trigger re-render to show ActionsDialog
+                cx.notify();
+            }
+        }
+    }
+    
     /// Submit the selected path or navigate into directory
+    /// Called when user directly submits (bypassing actions dialog)
     fn submit_selected(&mut self, cx: &mut Context<Self>) {
         if let Some(entry) = self.filtered_entries.get(self.selected_index) {
             if entry.is_dir {
@@ -200,6 +258,18 @@ impl PathPrompt {
         } else if !self.filter_text.is_empty() {
             // If no entry selected but filter has text, submit the filter as a path
             (self.on_submit)(self.id.clone(), Some(self.filter_text.clone()));
+        }
+    }
+    
+    /// Handle Enter key - show actions if callback available, otherwise submit directly
+    fn handle_enter(&mut self, cx: &mut Context<Self>) {
+        // Check if we have an actions callback
+        if self.on_show_actions.is_some() {
+            // Show actions dialog
+            self.show_actions(cx);
+        } else {
+            // No actions callback, submit directly (legacy behavior)
+            self.submit_selected(cx);
         }
     }
 
@@ -248,6 +318,29 @@ impl PathPrompt {
             }
         }
     }
+
+    /// Navigate to parent directory (left arrow / shift+tab)
+    fn navigate_to_parent(&mut self, cx: &mut Context<Self>) {
+        let path = Path::new(&self.current_path);
+        if let Some(parent) = path.parent() {
+            let parent_path = parent.to_string_lossy().to_string();
+            logging::log("PROMPTS", &format!("PathPrompt navigating to parent: {}", parent_path));
+            self.navigate_to(&parent_path, cx);
+        }
+        // If at root, do nothing
+    }
+
+    /// Navigate into selected directory (right arrow / tab)
+    fn navigate_into_selected(&mut self, cx: &mut Context<Self>) {
+        if let Some(entry) = self.filtered_entries.get(self.selected_index) {
+            if entry.is_dir {
+                let path = entry.path.clone();
+                logging::log("PROMPTS", &format!("PathPrompt navigating into: {}", path));
+                self.navigate_to(&path, cx);
+            }
+            // If selected entry is a file, do nothing
+        }
+    }
 }
 
 impl Focusable for PathPrompt {
@@ -256,22 +349,35 @@ impl Focusable for PathPrompt {
     }
 }
 
-/// Height of each list item in pixels
-const ITEM_HEIGHT: f32 = 36.0;
-
 impl Render for PathPrompt {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = get_tokens(self.design_variant);
-        let colors = tokens.colors();
+        let design_colors = tokens.colors();
         let spacing = tokens.spacing();
 
         let handle_key = cx.listener(|this: &mut Self, event: &gpui::KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>| {
             let key_str = event.keystroke.key.to_lowercase();
+            let has_cmd = event.keystroke.modifiers.platform;
+            
+            // Check for Cmd+K to show actions
+            if has_cmd && key_str == "k" {
+                this.show_actions(cx);
+                return;
+            }
             
             match key_str.as_str() {
                 "up" | "arrowup" => this.move_up(cx),
                 "down" | "arrowdown" => this.move_down(cx),
-                "enter" => this.submit_selected(cx),
+                "left" | "arrowleft" => this.navigate_to_parent(cx),
+                "right" | "arrowright" => this.navigate_into_selected(cx),
+                "tab" => {
+                    if event.keystroke.modifiers.shift {
+                        this.navigate_to_parent(cx);
+                    } else {
+                        this.navigate_into_selected(cx);
+                    }
+                }
+                "enter" => this.handle_enter(cx),
                 "escape" => this.submit_cancel(),
                 "backspace" => this.handle_backspace(cx),
                 _ => {
@@ -286,21 +392,28 @@ impl Render for PathPrompt {
             }
         });
 
-        let (main_bg, text_color, text_muted, selected_bg, border_color) = if self.design_variant == DesignVariant::Default {
+        // Use ListItemColors for consistent theming
+        let list_colors = if self.design_variant == DesignVariant::Default {
+            ListItemColors::from_theme(&self.theme)
+        } else {
+            ListItemColors::from_design(&design_colors)
+        };
+
+        let (main_bg, text_color, text_muted, border_color, search_box_bg) = if self.design_variant == DesignVariant::Default {
             (
                 rgb(self.theme.colors.background.main), 
                 rgb(self.theme.colors.text.primary),
                 rgb(self.theme.colors.text.secondary),
-                rgb(self.theme.colors.accent.selected),
                 rgb(self.theme.colors.ui.border),
+                rgb(self.theme.colors.background.search_box),
             )
         } else {
             (
-                rgb(colors.background), 
-                rgb(colors.text_primary),
-                rgb(colors.text_secondary),
-                rgb(colors.accent),
-                rgb(colors.border),
+                rgb(design_colors.background), 
+                rgb(design_colors.text_primary),
+                rgb(design_colors.text_secondary),
+                rgb(design_colors.border),
+                rgb(design_colors.background), // fallback for design variants
             )
         };
 
@@ -314,7 +427,7 @@ impl Render for PathPrompt {
             .map(|e| (e.name.clone(), e.is_dir))
             .collect();
         
-        // Build list items
+        // Build list items using ListItem component for consistent styling
         let list = uniform_list(
             "path-list",
             filtered_count,
@@ -323,47 +436,28 @@ impl Render for PathPrompt {
                     let (name, is_dir) = &entries_for_list[ix];
                     let is_selected = ix == selected_index;
                     
-                    let icon = if name == ".." {
-                        "⬆️"
-                    } else if *is_dir {
-                        "📁"
+                    // Choose icon based on entry type
+                    let icon = if *is_dir {
+                        IconKind::Emoji("📁".to_string())
                     } else {
-                        "📄"
+                        IconKind::Emoji("📄".to_string())
                     };
                     
-                    let item_bg = if is_selected {
-                        selected_bg
+                    // Description: show "→" hint for directories
+                    let description = if *is_dir {
+                        Some("→".to_string())
                     } else {
-                        main_bg
+                        None
                     };
                     
-                    div()
-                        .id(ix)
-                        .h(px(ITEM_HEIGHT))
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_3()
-                        .bg(item_bg)
-                        .rounded_md()
-                        .child(
-                            div().child(icon)
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .overflow_hidden()
-                                .child(name.clone())
-                        )
-                        .when(*is_dir && name != "..", |d| {
-                            d.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(text_muted)
-                                    .child("→")
-                            )
-                        })
+                    // Use ListItem component for consistent styling with main menu
+                    ListItem::new(name.clone(), list_colors)
+                        .index(ix)
+                        .icon_kind(icon)
+                        .description_opt(description)
+                        .selected(is_selected)
+                        .with_accent_bar(true)
+                        .into_any_element()
                 })
                 .collect()
             },
@@ -372,30 +466,52 @@ impl Render for PathPrompt {
         .flex_1()
         .w_full();
 
-        // Header showing current path
+        // Search box showing path prefix + filter text + cursor
+        // Layout: /Users/john/Documents/|search_text▎
+        let path_prefix = format!("{}/", self.current_path.trim_end_matches('/'));
+        let cursor_char = if self.cursor_visible { "▎" } else { "" };
+        
         let header = div()
+            .id(gpui::ElementId::Name("search:path-filter".into()))
             .w_full()
-            .pb_2()
+            .px(px(spacing.item_padding_x))
+            .py(px(spacing.padding_md))
+            .bg(search_box_bg)
             .border_b_1()
             .border_color(border_color)
+            .rounded_t_md()
+            .flex()
+            .flex_row()
+            .items_center()
             .child(
+                // Path prefix in muted color
                 div()
                     .text_sm()
                     .text_color(text_muted)
-                    .child(self.current_path.clone())
+                    .child(path_prefix)
             )
-            .when(!self.filter_text.is_empty(), |d| {
-                d.child(
-                    div()
-                        .pt_1()
-                        .text_sm()
-                        .child(format!("Filter: {}", self.filter_text))
-                )
-            });
+            .child(
+                // Filter text in primary color with cursor
+                div()
+                    .flex_1()
+                    .text_sm()
+                    .flex()
+                    .flex_row()
+                    .child(
+                        div()
+                            .text_color(text_color)
+                            .child(self.filter_text.clone())
+                    )
+                    .child(
+                        div()
+                            .text_color(text_color)
+                            .child(cursor_char)
+                    )
+            );
 
-        // Hint at bottom
+        // Hint at bottom with updated navigation instructions
         let hint_text = self.hint.clone().unwrap_or_else(|| {
-            format!("{} items • ↑↓ navigate • Enter select • Esc cancel", filtered_count)
+            format!("{} items • ↑↓ navigate • ←→ in/out • Enter actions • Tab into • Esc cancel", filtered_count)
         });
         let footer = div()
             .w_full()

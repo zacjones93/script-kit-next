@@ -48,6 +48,10 @@ pub mod process_manager;
 // Scriptlet parsing and variable substitution
 pub mod scriptlets;
 
+// Centralized template variable substitution system
+// Used by expand_manager, template prompts, and future template features
+pub mod template_variables;
+
 // Text injection for text expansion/snippet systems
 pub mod text_injector;
 

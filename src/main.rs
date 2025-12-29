@@ -62,6 +62,9 @@ mod frecency;
 // Scriptlet parsing and variable substitution
 mod scriptlets;
 
+// Centralized template variable substitution system
+mod template_variables;
+
 // Text expansion system components (macOS only)
 #[cfg(target_os = "macos")]
 mod keyboard_monitor;
@@ -74,7 +77,7 @@ mod expand_manager;
 
 use tray::{TrayManager, TrayMenuAction};
 use editor::EditorPrompt;
-use prompts::{SelectPrompt, PathPrompt, EnvPrompt, DropPrompt, TemplatePrompt};
+use prompts::{SelectPrompt, PathPrompt, PathInfo, EnvPrompt, DropPrompt, TemplatePrompt};
 use window_resize::{ViewType, height_for_view, resize_first_window_to_height, initial_window_height, reset_resize_debounce, defer_resize_to_view};
 use crate::toast_manager::ToastManager;
 use crate::components::toast::{Toast, ToastColors, ToastAction};
@@ -526,6 +529,7 @@ enum AppView {
         #[allow(dead_code)]
         id: String,
         entity: Entity<PathPrompt>,
+        focus_handle: FocusHandle,
     },
     /// Showing env prompt for environment variable input with keyring storage
     EnvPrompt {
@@ -908,6 +912,9 @@ struct ScriptListApp {
     hovered_index: Option<usize>,
     // P0-2: Debounce hover notify calls (16ms window to reduce 50% unnecessary re-renders)
     last_hover_notify: std::time::Instant,
+    // Pending path action - when set, show ActionsDialog for this path
+    // Uses Arc<Mutex<>> so callbacks can write to it
+    pending_path_action: Arc<Mutex<Option<PathInfo>>>,
 }
 
 impl ScriptListApp {
@@ -1074,6 +1081,8 @@ impl ScriptListApp {
             hovered_index: None,
             // P0-2: Initialize hover debounce timer
             last_hover_notify: std::time::Instant::now(),
+            // Pending path action - starts as None (Arc<Mutex<>> for callback access)
+            pending_path_action: Arc::new(Mutex::new(None)),
         }
     }
     
@@ -3503,19 +3512,35 @@ impl ScriptListApp {
                         }
                     });
                 
+                // Clone the pending_path_action Arc for the callback
+                let pending_path_action_clone = self.pending_path_action.clone();
+                
+                let show_actions_callback: std::sync::Arc<dyn Fn(PathInfo) + Send + Sync> = 
+                    std::sync::Arc::new(move |path_info| {
+                        logging::log("UI", &format!("Path actions requested for: {}", path_info.path));
+                        if let Ok(mut guard) = pending_path_action_clone.lock() {
+                            *guard = Some(path_info);
+                        }
+                    });
+                
                 let focus_handle = cx.focus_handle();
                 let path_prompt = PathPrompt::new(
                     id.clone(),
                     start_path,
                     hint,
-                    focus_handle,
+                    focus_handle.clone(),
                     submit_callback,
                     std::sync::Arc::new(self.theme.clone()),
-                );
+                ).with_show_actions(show_actions_callback);
                 
                 let entity = cx.new(|_| path_prompt);
-                self.current_view = AppView::PathPrompt { id, entity };
+                self.current_view = AppView::PathPrompt { id, entity, focus_handle };
                 self.focused_input = FocusedInput::None;
+                
+                // Clear any previous pending action
+                if let Ok(mut guard) = self.pending_path_action.lock() {
+                    *guard = None;
+                }
                 
                 defer_resize_to_view(ViewType::ScriptList, 20, cx);
                 cx.notify();
@@ -3938,6 +3963,14 @@ impl Render for ScriptListApp {
                 let is_focused = focus_handle.is_focused(window);
                 if !is_focused {
                     // Clone focus handle to satisfy borrow checker
+                    let fh = focus_handle.clone();
+                    window.focus(&fh, cx);
+                }
+            }
+            AppView::PathPrompt { focus_handle, .. } => {
+                // PathPrompt has its own focus handle - focus it
+                let is_focused = focus_handle.is_focused(window);
+                if !is_focused {
                     let fh = focus_handle.clone();
                     window.focus(&fh, cx);
                 }
@@ -6105,7 +6138,7 @@ impl ScriptListApp {
             .into_any_element()
     }
 
-    fn render_path_prompt(&mut self, entity: Entity<PathPrompt>, _cx: &mut Context<Self>) -> AnyElement {
+    fn render_path_prompt(&mut self, entity: Entity<PathPrompt>, cx: &mut Context<Self>) -> AnyElement {
         // Use design tokens for GLOBAL theming
         let tokens = get_tokens(self.current_design);
         let design_colors = tokens.colors();
@@ -6117,8 +6150,41 @@ impl ScriptListApp {
         let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
         let box_shadows = self.create_box_shadows();
         
+        // Check for pending path action and create ActionsDialog if needed
+        let actions_dialog = if let Ok(mut guard) = self.pending_path_action.lock() {
+            if let Some(path_info) = guard.take() {
+                // Create ActionsDialog for this path
+                let theme_arc = std::sync::Arc::new(self.theme.clone());
+                let path_for_action = path_info.path.clone();
+                let action_callback: std::sync::Arc<dyn Fn(String) + Send + Sync> = 
+                    std::sync::Arc::new(move |action_id| {
+                        logging::log("UI", &format!("Path action selected: {} for path: {}", action_id, path_for_action));
+                        // Actions are handled in handle_path_action() - this callback just logs
+                    });
+                let dialog = cx.new(|cx| {
+                    let focus_handle = cx.focus_handle();
+                    ActionsDialog::with_path(
+                        focus_handle,
+                        action_callback,
+                        &path_info,
+                        theme_arc,
+                    )
+                });
+                self.actions_dialog = Some(dialog.clone());
+                self.show_actions_popup = true;
+                Some(dialog)
+            } else if self.show_actions_popup {
+                self.actions_dialog.clone()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        
         // PathPrompt entity has its own track_focus and on_key_down in its render method.
         div()
+            .relative()
             .flex()
             .flex_col()
             .bg(rgba(bg_with_alpha))
@@ -6128,6 +6194,19 @@ impl ScriptListApp {
             .overflow_hidden()
             .rounded(px(design_visual.radius_lg))
             .child(div().size_full().child(entity))
+            // Actions dialog overlays on top
+            .when_some(actions_dialog, |d, dialog| {
+                d.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(rgba(0x00000080)) // Semi-transparent backdrop
+                        .child(dialog)
+                )
+            })
             .into_any_element()
     }
 

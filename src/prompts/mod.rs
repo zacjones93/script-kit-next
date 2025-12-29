@@ -38,6 +38,10 @@ pub use env::EnvPrompt;
 #[allow(unused_imports)]
 pub use path::PathPrompt;
 #[allow(unused_imports)]
+pub use path::PathInfo;
+#[allow(unused_imports)]
+pub use path::ShowActionsCallback;
+#[allow(unused_imports)]
 pub use select::SelectPrompt;
 #[allow(unused_imports)]
 pub use template::TemplatePrompt;
