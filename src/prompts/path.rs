@@ -471,6 +471,13 @@ impl Render for PathPrompt {
         let path_prefix = format!("{}/", self.current_path.trim_end_matches('/'));
         let cursor_char = if self.cursor_visible { "▎" } else { "" };
         
+        // Get accent color for the actions button
+        let accent_color = if self.design_variant == DesignVariant::Default {
+            rgb(self.theme.colors.accent.selected)
+        } else {
+            rgb(design_colors.accent)
+        };
+        
         let header = div()
             .id(gpui::ElementId::Name("search:path-filter".into()))
             .w_full()
@@ -506,6 +513,36 @@ impl Render for PathPrompt {
                         div()
                             .text_color(text_color)
                             .child(cursor_char)
+                    )
+            )
+            // Actions button hint on the right
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(text_muted)
+                            .child("|")
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(accent_color)
+                            .child("Actions")
+                    )
+                    .child(
+                        div()
+                            .px_1()
+                            .py(px(2.))
+                            .rounded(px(4.))
+                            .bg(border_color)
+                            .text_xs()
+                            .text_color(text_muted)
+                            .child("⌘K")
                     )
             );
 

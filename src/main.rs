@@ -915,6 +915,8 @@ struct ScriptListApp {
     // Pending path action - when set, show ActionsDialog for this path
     // Uses Arc<Mutex<>> so callbacks can write to it
     pending_path_action: Arc<Mutex<Option<PathInfo>>>,
+    // Signal to close path actions dialog (set by callback on Escape/__cancel__)
+    close_path_actions: Arc<Mutex<bool>>,
 }
 
 impl ScriptListApp {
@@ -1083,6 +1085,8 @@ impl ScriptListApp {
             last_hover_notify: std::time::Instant::now(),
             // Pending path action - starts as None (Arc<Mutex<>> for callback access)
             pending_path_action: Arc::new(Mutex::new(None)),
+            // Signal to close path actions dialog
+            close_path_actions: Arc::new(Mutex::new(false)),
         }
     }
     
@@ -3816,6 +3820,18 @@ impl ScriptListApp {
             *session_guard = None;
         }
         
+        // Clear actions popup state (prevents stale actions dialog from persisting)
+        self.show_actions_popup = false;
+        self.actions_dialog = None;
+        
+        // Clear pending path action and close signal
+        if let Ok(mut guard) = self.pending_path_action.lock() {
+            *guard = None;
+        }
+        if let Ok(mut guard) = self.close_path_actions.lock() {
+            *guard = false;
+        }
+        
         logging::log("UI", "State reset complete - view is now ScriptList (filter, selection, scroll cleared)");
         cx.notify();
     }
@@ -3969,10 +3985,21 @@ impl Render for ScriptListApp {
             }
             AppView::PathPrompt { focus_handle, .. } => {
                 // PathPrompt has its own focus handle - focus it
-                let is_focused = focus_handle.is_focused(window);
-                if !is_focused {
-                    let fh = focus_handle.clone();
-                    window.focus(&fh, cx);
+                // But if actions dialog is showing, focus the dialog instead
+                if self.show_actions_popup {
+                    if let Some(ref dialog) = self.actions_dialog {
+                        let dialog_focus_handle = dialog.read(cx).focus_handle.clone();
+                        let is_focused = dialog_focus_handle.is_focused(window);
+                        if !is_focused {
+                            window.focus(&dialog_focus_handle, cx);
+                        }
+                    }
+                } else {
+                    let is_focused = focus_handle.is_focused(window);
+                    if !is_focused {
+                        let fh = focus_handle.clone();
+                        window.focus(&fh, cx);
+                    }
                 }
             }
             _ => {
@@ -6150,16 +6177,30 @@ impl ScriptListApp {
         let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
         let box_shadows = self.create_box_shadows();
         
+        // Check if we should close the actions dialog
+        if let Ok(mut close_guard) = self.close_path_actions.lock() {
+            if *close_guard {
+                *close_guard = false;
+                self.show_actions_popup = false;
+                self.actions_dialog = None;
+                logging::log("UI", "Closed path actions dialog");
+            }
+        }
+        
         // Check for pending path action and create ActionsDialog if needed
         let actions_dialog = if let Ok(mut guard) = self.pending_path_action.lock() {
             if let Some(path_info) = guard.take() {
                 // Create ActionsDialog for this path
                 let theme_arc = std::sync::Arc::new(self.theme.clone());
                 let path_for_action = path_info.path.clone();
+                let close_signal = self.close_path_actions.clone();
                 let action_callback: std::sync::Arc<dyn Fn(String) + Send + Sync> = 
                     std::sync::Arc::new(move |action_id| {
                         logging::log("UI", &format!("Path action selected: {} for path: {}", action_id, path_for_action));
-                        // Actions are handled in handle_path_action() - this callback just logs
+                        // Signal to close dialog on cancel or action selection
+                        if let Ok(mut guard) = close_signal.lock() {
+                            *guard = true;
+                        }
                     });
                 let dialog = cx.new(|cx| {
                     let focus_handle = cx.focus_handle();
