@@ -73,10 +73,21 @@ static APP_CACHE: OnceLock<Vec<AppInfo>> = OnceLock::new();
 
 /// Directories to scan for .app bundles
 const APP_DIRECTORIES: &[&str] = &[
+    // Standard macOS app locations
     "/Applications",
     "/System/Applications",
-    "~/Applications",
+    "/System/Applications/Utilities",
     "/Applications/Utilities",
+    // User-specific apps
+    "~/Applications",
+    // Chrome installed web apps (PWAs)
+    "~/Applications/Chrome Apps.localized",
+    // Edge installed web apps (PWAs)  
+    "~/Applications/Edge Apps.localized",
+    // Arc browser installed web apps
+    "~/Applications/Arc Apps",
+    // Setapp subscription apps (if installed)
+    "/Applications/Setapp",
 ];
 
 /// Get the icon cache directory path (~/.kenv/cache/app-icons/)
