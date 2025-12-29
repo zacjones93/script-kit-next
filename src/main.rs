@@ -6233,15 +6233,12 @@ impl ScriptListApp {
                     });
                 let dialog = cx.new(|cx| {
                     let focus_handle = cx.focus_handle();
-                    let mut dialog = ActionsDialog::with_path(
+                    ActionsDialog::with_path(
                         focus_handle,
                         action_callback,
                         &path_info,
                         theme_arc,
-                    );
-                    // Hide the search box - PathPrompt already has one in its header
-                    dialog.set_hide_search(true);
-                    dialog
+                    )
                 });
                 self.actions_dialog = Some(dialog.clone());
                 self.show_actions_popup = true;
