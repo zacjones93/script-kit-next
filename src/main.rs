@@ -1023,6 +1023,14 @@ enum ExternalCommand {
     SetFilter { text: String },
     /// Trigger a built-in feature by name (for testing)
     TriggerBuiltin { name: String },
+    /// Simulate a key press (for testing)
+    /// key: Key name like "enter", "escape", "up", "down", "k", etc.
+    /// modifiers: Optional array of modifiers ["cmd", "shift", "alt", "ctrl"]
+    SimulateKey { 
+        key: String,
+        #[serde(default)]
+        modifiers: Vec<String>,
+    },
 }
 
 /// Start a thread that listens on stdin for external JSONL commands.
@@ -1305,6 +1313,13 @@ struct ScriptListApp {
     // Pending path action result - when set, execute this action on the stored path
     // Tuple of (action_id, path_info) to handle the action
     pending_path_action_result: Arc<Mutex<Option<(String, PathInfo)>>>,
+}
+
+/// Result of alias matching - either a Script or Scriptlet
+#[derive(Clone, Debug)]
+enum AliasMatch {
+    Script(scripts::Script),
+    Scriptlet(scripts::Scriptlet),
 }
 
 impl ScriptListApp {
@@ -1697,6 +1712,34 @@ impl ScriptListApp {
                 .cloned()
                 .collect()
         }
+    }
+
+    /// Find a script or scriptlet by alias (case-insensitive exact match)
+    /// Returns the first match found (scripts are searched before scriptlets)
+    fn find_alias_match(&self, alias: &str) -> Option<AliasMatch> {
+        let alias_lower = alias.to_lowercase();
+        
+        // Search scripts first
+        for script in &self.scripts {
+            if let Some(ref script_alias) = script.alias {
+                if script_alias.to_lowercase() == alias_lower {
+                    logging::log("ALIAS", &format!("Found script match: '{}' -> '{}'", alias, script.name));
+                    return Some(AliasMatch::Script(script.clone()));
+                }
+            }
+        }
+        
+        // Then search scriptlets
+        for scriptlet in &self.scriptlets {
+            if let Some(ref scriptlet_alias) = scriptlet.alias {
+                if scriptlet_alias.to_lowercase() == alias_lower {
+                    logging::log("ALIAS", &format!("Found scriptlet match: '{}' -> '{}'", alias, scriptlet.name));
+                    return Some(AliasMatch::Scriptlet(scriptlet.clone()));
+                }
+            }
+        }
+        
+        None
     }
 
     fn move_selection_up(&mut self, cx: &mut Context<Self>) {
@@ -3342,6 +3385,7 @@ impl ScriptListApp {
                 path: temp_file,
                 extension: "ts".to_string(),
                 icon: None,
+                alias: None,
             };
             
             self.execute_interactive(&script, cx);
@@ -3686,7 +3730,7 @@ impl ScriptListApp {
                 let editor_prompt = EditorPrompt::with_height(
                     id.clone(),
                     content.unwrap_or_default(),
-                    language.unwrap_or_else(|| "typescript".to_string()),
+                    language.unwrap_or_else(|| "markdown".to_string()),
                     editor_focus_handle.clone(),
                     submit_callback,
                     std::sync::Arc::new(self.theme.clone()),
@@ -3792,6 +3836,7 @@ impl ScriptListApp {
                     path: script_path,
                     extension,
                     icon: None,
+                    alias: None,
                 };
                 
                 logging::log("EXEC", &format!("Executing script: {}", script_name));
@@ -4165,6 +4210,7 @@ impl ScriptListApp {
                 let response_sender = self.response_sender.clone();
                 let submit_callback: std::sync::Arc<dyn Fn(String, Option<String>) + Send + Sync> = 
                     std::sync::Arc::new(move |id, value| {
+                        logging::log("UI", &format!("PathPrompt submit_callback called: id={}, value={:?}", id, value));
                         if let Some(ref sender) = response_sender {
                             let response = Message::Submit { id, value };
                             if let Err(e) = sender.send(response) {
@@ -5975,6 +6021,28 @@ impl ScriptListApp {
                     }
                 }
                 "backspace" => this.update_filter(None, true, false, cx),
+                "space" | " " => {
+                    // Check if current filter text matches an alias
+                    // If so, execute the matching script/scriptlet immediately
+                    if !this.filter_text.is_empty() {
+                        if let Some(alias_match) = this.find_alias_match(&this.filter_text) {
+                            logging::log("ALIAS", &format!("Alias '{}' triggered execution", this.filter_text));
+                            match alias_match {
+                                AliasMatch::Script(script) => {
+                                    this.execute_interactive(&script, cx);
+                                }
+                                AliasMatch::Scriptlet(scriptlet) => {
+                                    this.execute_scriptlet(&scriptlet, cx);
+                                }
+                            }
+                            // Clear filter after alias execution
+                            this.update_filter(None, false, true, cx);
+                            return;
+                        }
+                    }
+                    // No alias match - add space to filter as normal character
+                    this.update_filter(Some(' '), false, false, cx);
+                }
                 _ => {
                     // Allow all printable characters (not control chars like Tab, Escape)
                     // This enables searching for filenames with special chars like ".ts", ".md"
@@ -7002,6 +7070,8 @@ impl ScriptListApp {
         let handle_key = cx.listener(move |this: &mut Self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>| {
             let key_str = event.keystroke.key.to_lowercase();
             let has_cmd = event.keystroke.modifiers.platform;
+            
+            logging::log("KEY", &format!("PathPrompt OUTER handler: key='{}', show_actions_popup={}", key_str, this.show_actions_popup));
             
             // Cmd+K toggles actions from anywhere
             if has_cmd && key_str == "k" {
@@ -10264,6 +10334,87 @@ fn main() {
                                     }
                                     _ => {
                                         logging::log("ERROR", &format!("Unknown built-in: '{}'", name));
+                                    }
+                                }
+                            }
+                            ExternalCommand::SimulateKey { ref key, ref modifiers } => {
+                                logging::log("STDIN", &format!("Simulating key: '{}' with modifiers: {:?}", key, modifiers));
+                                
+                                // Parse modifiers
+                                let has_cmd = modifiers.iter().any(|m| m == "cmd" || m == "meta" || m == "command");
+                                let _has_shift = modifiers.iter().any(|m| m == "shift");
+                                let _has_alt = modifiers.iter().any(|m| m == "alt" || m == "option");
+                                let _has_ctrl = modifiers.iter().any(|m| m == "ctrl" || m == "control");
+                                
+                                // Handle key based on current view
+                                let key_lower = key.to_lowercase();
+                                
+                                match &view.current_view {
+                                    AppView::ScriptList => {
+                                        // Main script list key handling
+                                        if has_cmd && key_lower == "k" {
+                                            logging::log("STDIN", "SimulateKey: Cmd+K - toggle actions");
+                                            view.toggle_actions(ctx, window);
+                                        } else {
+                                            match key_lower.as_str() {
+                                                "up" | "arrowup" => {
+                                                    if view.selected_index > 0 {
+                                                        view.selected_index -= 1;
+                                                        view.list_scroll_handle.scroll_to_item(view.selected_index, ScrollStrategy::Nearest);
+                                                    }
+                                                }
+                                                "down" | "arrowdown" => {
+                                                    let max_index = view.get_filtered_results_cached().len().saturating_sub(1);
+                                                    if view.selected_index < max_index {
+                                                        view.selected_index += 1;
+                                                        view.list_scroll_handle.scroll_to_item(view.selected_index, ScrollStrategy::Nearest);
+                                                    }
+                                                }
+                                                "enter" => {
+                                                    logging::log("STDIN", "SimulateKey: Enter - execute selected");
+                                                    view.execute_selected(ctx);
+                                                }
+                                                "escape" => {
+                                                    logging::log("STDIN", "SimulateKey: Escape - clear filter or hide");
+                                                    if !view.filter_text.is_empty() {
+                                                        view.filter_text.clear();
+                                                        let _ = view.get_filtered_results_cached();
+                                                        view.selected_index = 0;
+                                                    } else {
+                                                        WINDOW_VISIBLE.store(false, Ordering::SeqCst);
+                                                        ctx.hide();
+                                                    }
+                                                }
+                                                _ => {
+                                                    logging::log("STDIN", &format!("SimulateKey: Unhandled key '{}' in ScriptList", key_lower));
+                                                }
+                                            }
+                                        }
+                                    }
+                                    AppView::PathPrompt { entity, .. } => {
+                                        // Path prompt key handling
+                                        logging::log("STDIN", &format!("SimulateKey: Dispatching '{}' to PathPrompt", key_lower));
+                                        let entity_clone = entity.clone();
+                                        entity_clone.update(ctx, |path_prompt: &mut PathPrompt, path_cx| {
+                                            if has_cmd && key_lower == "k" {
+                                                path_prompt.toggle_actions(path_cx);
+                                            } else {
+                                                match key_lower.as_str() {
+                                                    "up" | "arrowup" => path_prompt.move_up(path_cx),
+                                                    "down" | "arrowdown" => path_prompt.move_down(path_cx),
+                                                    "enter" => path_prompt.handle_enter(path_cx),
+                                                    "escape" => path_prompt.submit_cancel(),
+                                                    "left" | "arrowleft" => path_prompt.navigate_to_parent(path_cx),
+                                                    "right" | "arrowright" => path_prompt.navigate_into_selected(path_cx),
+                                                    _ => {
+                                                        logging::log("STDIN", &format!("SimulateKey: Unhandled key '{}' in PathPrompt", key_lower));
+                                                    }
+                                                }
+                                            }
+                                        });
+                                    }
+                                    _ => {
+                                        logging::log("STDIN", "SimulateKey: View not supported for key simulation");
                                     }
                                 }
                             }

@@ -307,7 +307,10 @@ pub struct ScriptletMetadataData {
     /// Keyboard shortcut (e.g., "cmd shift k")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shortcut: Option<String>,
-    /// Cron-style schedule expression
+    /// Raw cron expression (e.g., "*/5 * * * *")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cron: Option<String>,
+    /// Natural language schedule (e.g., "every tuesday at 2pm") - converted to cron internally
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule: Option<String>,
     /// Whether to run in background

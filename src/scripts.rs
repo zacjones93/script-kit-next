@@ -22,6 +22,8 @@ pub struct Script {
     /// Icon name from // Icon: metadata (e.g., "File", "Terminal", "Star")
     /// Defaults to "Code" if not specified
     pub icon: Option<String>,
+    /// Alias for quick triggering (e.g., "gc" for "git-commit")
+    pub alias: Option<String>,
 }
 
 /// Represents a scriptlet parsed from a markdown file
@@ -40,6 +42,8 @@ pub struct Scriptlet {
     pub file_path: Option<String>,
     /// Command slug for execution
     pub command: Option<String>,
+    /// Alias for quick triggering
+    pub alias: Option<String>,
 }
 
 /// Represents match indices for highlighting matched characters
@@ -157,6 +161,8 @@ pub struct ScriptMetadata {
     pub description: Option<String>,
     /// Icon name (e.g., "File", "Terminal", "Star", "Folder")
     pub icon: Option<String>,
+    /// Alias for quick invocation (e.g., "gpt" triggers on "gpt ")
+    pub alias: Option<String>,
 }
 
 /// Parse a single metadata line with lenient matching
@@ -218,6 +224,11 @@ pub fn extract_script_metadata(content: &str) -> ScriptMetadata {
                 "icon" => {
                     if metadata.icon.is_none() && !value.is_empty() {
                         metadata.icon = Some(value);
+                    }
+                }
+                "alias" => {
+                    if metadata.alias.is_none() && !value.is_empty() {
+                        metadata.alias = Some(value);
                     }
                 }
                 _ => {} // Ignore other metadata keys for now
@@ -353,6 +364,7 @@ fn parse_scriptlet_section(section: &str, source_path: Option<&std::path::Path>)
         group: None,
         file_path,
         command: Some(command),
+        alias: metadata.get("alias").cloned(),
     })
 }
 
@@ -514,6 +526,7 @@ pub fn load_scriptlets() -> Vec<Scriptlet> {
                                             },
                                             file_path: Some(file_path),
                                             command: Some(parsed_scriptlet.command),
+                                            alias: parsed_scriptlet.metadata.alias,
                                         });
                                     }
                                 }
@@ -636,6 +649,7 @@ pub fn read_scripts() -> Vec<Script> {
                                                 extension: ext_str.to_string(),
                                                 description: script_metadata.description,
                                                 icon: script_metadata.icon,
+                                                alias: script_metadata.alias,
                                             });
                                         }
                                     }
@@ -1445,6 +1459,7 @@ mod tests {
             group: None,
             file_path: None,
             command: None,
+            alias: None,
         }
     }
 
@@ -1460,6 +1475,7 @@ mod tests {
             group: None,
             file_path: None,
             command: None,
+            alias: None,
         }
     }
 
@@ -1518,6 +1534,7 @@ mod tests {
             group: Some("My Group".to_string()),
             file_path: Some("/path/to/file.md#test".to_string()),
             command: Some("test".to_string()),
+            alias: None,
         };
         
         assert_eq!(scriptlet.group, Some("My Group".to_string()));
@@ -1636,6 +1653,7 @@ mod tests {
             extension: "ts".to_string(),
                 icon: None,
             description: None,
+        alias: None,
         };
         assert_eq!(script.name, "test");
         assert_eq!(script.extension, "ts");
@@ -1650,6 +1668,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("Open a file dialog".to_string()),
+            alias: None,
             },
             Script {
                 name: "savefile".to_string(),
@@ -1657,6 +1676,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -1675,6 +1695,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -1692,6 +1713,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("Open a file dialog".to_string()),
+            alias: None,
             },
             Script {
                 name: "open".to_string(),
@@ -1699,6 +1721,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("Basic open function".to_string()),
+            alias: None,
             },
             Script {
                 name: "reopen".to_string(),
@@ -1706,6 +1729,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -1742,6 +1766,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("Open a file".to_string()),
+            alias: None,
             },
         ];
 
@@ -1774,6 +1799,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             score: 100,
             filename: "test.ts".to_string(),
@@ -1942,6 +1968,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -1958,6 +1985,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "test2".to_string(),
@@ -1965,6 +1993,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -1981,6 +2010,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("database connection helper".to_string()),
+            alias: None,
             },
             Script {
                 name: "bar".to_string(),
@@ -1988,6 +2018,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("ui component".to_string()),
+            alias: None,
             },
         ];
 
@@ -2005,6 +2036,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "bar".to_string(),
@@ -2012,6 +2044,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -2029,6 +2062,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "other".to_string(),
@@ -2036,6 +2070,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("exactmatch in description".to_string()),
+            alias: None,
             },
         ];
 
@@ -2076,6 +2111,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -2096,6 +2132,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("test script".to_string()),
+            alias: None,
             },
         ];
 
@@ -2123,6 +2160,7 @@ mod tests {
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("A test script".to_string()),
+            alias: None,
             },
             score: 100,
             filename: "test.ts".to_string(),
@@ -2149,6 +2187,7 @@ mod tests {
             group: None,
             file_path: None,
             command: None,
+            alias: None,
         };
 
         assert_eq!(scriptlet.name, "Full Scriptlet");
@@ -2186,8 +2225,9 @@ mod tests {
             name: "test".to_string(),
             path: PathBuf::from("/test.ts"),
             extension: "ts".to_string(),
-                icon: None,
+            icon: None,
             description: None, // Would be extracted from file if existed
+            alias: None,
         };
         assert_eq!(script.name, "test");
     }
@@ -2487,6 +2527,7 @@ const x = 1;
             extension: "ts".to_string(),
                 icon: None,
             description: Some("My custom script".to_string()),
+        alias: None,
         };
 
         assert_eq!(script.name, "myScript");
@@ -2503,6 +2544,7 @@ const x = 1;
             extension: "ts".to_string(),
                 icon: None,
             description: Some("desc".to_string()),
+        alias: None,
         };
 
         let cloned = original.clone();
@@ -2544,6 +2586,7 @@ const x = 1;
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "saveFile".to_string(),
@@ -2551,6 +2594,7 @@ const x = 1;
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -2571,6 +2615,7 @@ const x = 1;
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             score: 50,
             filename: "test.ts".to_string(),
@@ -2633,6 +2678,7 @@ third()
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "beta".to_string(),
@@ -2640,6 +2686,7 @@ third()
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "gamma".to_string(),
@@ -2647,6 +2694,7 @@ third()
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -2696,6 +2744,7 @@ third()
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "apple".to_string(),
@@ -2703,6 +2752,7 @@ third()
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "monkey".to_string(),
@@ -2710,6 +2760,7 @@ third()
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -2748,6 +2799,7 @@ third()
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some(format!("Script number {}", i)),
+                alias: None,
             });
         }
 
@@ -2766,6 +2818,7 @@ third()
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("Opens a file".to_string()),
+            alias: None,
             },
         ];
 
@@ -2824,6 +2877,7 @@ open("https://example.com");
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -2845,6 +2899,7 @@ open("https://example.com");
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -2886,6 +2941,7 @@ const obj = { key: "value" };
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -2903,6 +2959,7 @@ const obj = { key: "value" };
             extension: "ts".to_string(),
                 icon: None,
             description: None,
+        alias: None,
         };
 
         assert_eq!(script.extension, "ts");
@@ -2913,6 +2970,7 @@ const obj = { key: "value" };
             extension: "js".to_string(),
             description: None,
             icon: None,
+        alias: None,
         };
 
         assert_eq!(script_js.extension, "js");
@@ -2970,6 +3028,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             score: 0,
             filename: "test.ts".to_string(),
@@ -3020,6 +3079,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "reopen".to_string(),
@@ -3027,6 +3087,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -3046,6 +3107,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "other".to_string(),
@@ -3053,6 +3115,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("test description".to_string()),
+            alias: None,
             },
         ];
 
@@ -3070,6 +3133,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "other".to_string(),
@@ -3077,6 +3141,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -3121,6 +3186,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("Open a file".to_string()),
+            alias: None,
             },
             Script {
                 name: "openfile".to_string(),
@@ -3128,6 +3194,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -3147,6 +3214,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -3164,6 +3232,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("test".to_string()),
+            alias: None,
             },
             Script {
                 name: "bbb".to_string(),
@@ -3171,6 +3240,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("test".to_string()),
+            alias: None,
             },
         ];
 
@@ -3202,6 +3272,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("Test script".to_string()),
+            alias: None,
             },
         ];
 
@@ -3230,6 +3301,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -3248,6 +3320,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "save".to_string(),
@@ -3255,6 +3328,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -3273,6 +3347,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("database connection".to_string()),
+            alias: None,
             },
         ];
 
@@ -3291,6 +3366,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("Opens a file dialog".to_string()),
+            alias: None,
             },
             Script {
                 name: "someScript".to_string(),
@@ -3298,6 +3374,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("Does something".to_string()),
+            alias: None,
             },
             Script {
                 name: "saveData".to_string(),
@@ -3305,6 +3382,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("Saves data to file".to_string()),
+            alias: None,
             },
         ];
 
@@ -3325,6 +3403,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("Search files with grep".to_string()),
+            alias: None,
             },
             Script {
                 name: "find".to_string(),
@@ -3332,6 +3411,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("Find files".to_string()),
+            alias: None,
             },
             Script {
                 name: "search".to_string(),
@@ -3339,6 +3419,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -3359,6 +3440,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("Copy to clipboard".to_string()),
+            alias: None,
             },
         ];
 
@@ -3530,6 +3612,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("My clipboard script".to_string()),
+            alias: None,
             },
         ];
 
@@ -3563,6 +3646,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -3593,6 +3677,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -3701,6 +3786,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -3734,6 +3820,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "save".to_string(),
@@ -3741,6 +3828,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -3771,6 +3859,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "beta".to_string(),
@@ -3778,6 +3867,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -3810,6 +3900,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "beta".to_string(),
@@ -3817,6 +3908,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "gamma".to_string(),
@@ -3824,6 +3916,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -3873,6 +3966,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("A frequently used script".to_string()),
+            alias: None,
             },
             Script {
                 name: "another-script".to_string(),
@@ -3880,6 +3974,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -3977,6 +4072,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: Some("User's frequently used script".to_string()),
+            alias: None,
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -4051,6 +4147,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "zebra-script".to_string(),
@@ -4058,6 +4155,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -4138,6 +4236,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "zebra-script".to_string(),
@@ -4145,6 +4244,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -4218,6 +4318,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "second".to_string(),
@@ -4225,6 +4326,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -4259,6 +4361,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "Other Script".to_string(),
@@ -4266,6 +4369,7 @@ code here
                 extension: "js".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -4286,6 +4390,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "Save Data".to_string(),
@@ -4293,6 +4398,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -4312,6 +4418,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -4330,6 +4437,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
             Script {
                 name: "bar".to_string(),  // Name doesn't match
@@ -4337,6 +4445,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -4356,6 +4465,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -4375,6 +4485,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 
@@ -4399,6 +4510,7 @@ code here
                 group: Some("URLs".to_string()),
                 file_path: Some("/path/to/urls.md#open-github".to_string()),
                 command: Some("open-github".to_string()),
+                alias: None,
             },
             Scriptlet {
                 name: "Copy Text".to_string(),
@@ -4410,6 +4522,7 @@ code here
                 group: None,
                 file_path: Some("/path/to/clipboard.md#copy-text".to_string()),
                 command: Some("copy-text".to_string()),
+                alias: None,
             },
         ];
 
@@ -4431,6 +4544,7 @@ code here
                 group: None,
                 file_path: Some("/path/to/file.md#open-github".to_string()),
                 command: Some("open-github".to_string()),
+                alias: None,
             },
             Scriptlet {
                 name: "Close Tab".to_string(),
@@ -4442,6 +4556,7 @@ code here
                 group: None,
                 file_path: Some("/path/to/file.md#close-tab".to_string()),
                 command: Some("close-tab".to_string()),
+                alias: None,
             },
         ];
 
@@ -4464,6 +4579,7 @@ code here
                 group: None,
                 file_path: Some("/home/user/.kenv/scriptlets/urls.md#test-slug".to_string()),
                 command: Some("test-slug".to_string()),
+                alias: None,
             },
         ];
 
@@ -4486,6 +4602,7 @@ code here
                 group: None,
                 file_path: Some("/path/urls.md#test".to_string()),
                 command: None,
+                alias: None,
             },
         ];
 
@@ -4552,6 +4669,7 @@ code here
                 extension: "ts".to_string(),
                 icon: None,
                 description: None,
+            alias: None,
             },
         ];
 

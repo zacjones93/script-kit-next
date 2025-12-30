@@ -325,19 +325,20 @@ impl PathPrompt {
     
     /// Handle Enter key - always submit the selected path
     /// The calling code (main.rs) will open it with system default via std::process::Command
-    fn handle_enter(&mut self, cx: &mut Context<Self>) {
+    pub fn handle_enter(&mut self, cx: &mut Context<Self>) {
         // Always submit directly - no actions dialog on Enter
         // Actions are available via Cmd+K
         self.submit_selected(cx);
     }
 
     /// Cancel - submit None
-    fn submit_cancel(&mut self) {
+    pub fn submit_cancel(&mut self) {
+        logging::log("PROMPTS", &format!("PathPrompt submit_cancel called - submitting None for id: {}", self.id));
         (self.on_submit)(self.id.clone(), None);
     }
 
     /// Move selection up
-    fn move_up(&mut self, cx: &mut Context<Self>) {
+    pub fn move_up(&mut self, cx: &mut Context<Self>) {
         if self.selected_index > 0 {
             self.selected_index -= 1;
             self.list_scroll_handle.scroll_to_item(self.selected_index, gpui::ScrollStrategy::Top);
@@ -346,7 +347,7 @@ impl PathPrompt {
     }
 
     /// Move selection down
-    fn move_down(&mut self, cx: &mut Context<Self>) {
+    pub fn move_down(&mut self, cx: &mut Context<Self>) {
         if self.selected_index < self.filtered_entries.len().saturating_sub(1) {
             self.selected_index += 1;
             self.list_scroll_handle.scroll_to_item(self.selected_index, gpui::ScrollStrategy::Top);
@@ -378,7 +379,7 @@ impl PathPrompt {
     }
 
     /// Navigate to parent directory (left arrow / shift+tab)
-    fn navigate_to_parent(&mut self, cx: &mut Context<Self>) {
+    pub fn navigate_to_parent(&mut self, cx: &mut Context<Self>) {
         let path = Path::new(&self.current_path);
         if let Some(parent) = path.parent() {
             let parent_path = parent.to_string_lossy().to_string();
@@ -389,7 +390,7 @@ impl PathPrompt {
     }
 
     /// Navigate into selected directory (right arrow / tab)
-    fn navigate_into_selected(&mut self, cx: &mut Context<Self>) {
+    pub fn navigate_into_selected(&mut self, cx: &mut Context<Self>) {
         if let Some(entry) = self.filtered_entries.get(self.selected_index) {
             if entry.is_dir {
                 let path = entry.path.clone();
@@ -453,7 +454,10 @@ impl Render for PathPrompt {
                     }
                 }
                 "enter" => this.handle_enter(cx),
-                "escape" => this.submit_cancel(),
+                "escape" => {
+                    logging::log("PROMPTS", "PathPrompt: Escape key pressed - calling submit_cancel()");
+                    this.submit_cancel();
+                }
                 "backspace" => this.handle_backspace(cx),
                 _ => {
                     if let Some(ref key_char) = event.keystroke.key_char {

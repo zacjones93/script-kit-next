@@ -74,3 +74,6 @@ pub mod expand_manager;
 // OCR module - macOS Vision framework integration
 #[cfg(feature = "ocr")]
 pub mod ocr;
+
+// Script scheduling with cron expressions and natural language
+pub mod scheduler;

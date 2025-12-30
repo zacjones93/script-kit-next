@@ -85,6 +85,10 @@ sysinfo = "0.33"
 core-foundation = "0.10"
 foreign-types = "0.5"
 
+# Cron scheduling support
+croner = "3.0"                 # Parse and validate cron expressions
+english-to-cron = "0.1"        # Convert natural language schedules to cron
+
 [features]
 default = ["ocr"]
 # Enable tests that interact with system APIs (clipboard, accessibility, hotkeys)

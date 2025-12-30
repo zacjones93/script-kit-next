@@ -39,7 +39,9 @@ pub struct ScriptletMetadata {
     pub trigger: Option<String>,
     /// Keyboard shortcut (e.g., "cmd shift k")
     pub shortcut: Option<String>,
-    /// Cron-style schedule expression
+    /// Raw cron expression (e.g., "*/5 * * * *")
+    pub cron: Option<String>,
+    /// Natural language schedule (e.g., "every tuesday at 2pm") - converted to cron internally
     pub schedule: Option<String>,
     /// Whether to run in background
     pub background: Option<bool>,
@@ -51,6 +53,8 @@ pub struct ScriptletMetadata {
     pub description: Option<String>,
     /// Text expansion trigger (e.g., "type,,")
     pub expand: Option<String>,
+    /// Alias trigger - when user types alias + space, immediately run script
+    pub alias: Option<String>,
     /// Any additional metadata key-value pairs
     #[serde(flatten)]
     pub extra: HashMap<String, String>,
@@ -203,12 +207,14 @@ pub fn parse_html_comment_metadata(text: &str) -> ScriptletMetadata {
                     match key.as_str() {
                         "trigger" => metadata.trigger = Some(value),
                         "shortcut" => metadata.shortcut = Some(value),
+                        "cron" => metadata.cron = Some(value),
                         "schedule" => metadata.schedule = Some(value),
                         "background" => metadata.background = Some(value.to_lowercase() == "true" || value == "1"),
                         "watch" => metadata.watch = Some(value),
                         "system" => metadata.system = Some(value),
                         "description" => metadata.description = Some(value),
                         "expand" => metadata.expand = Some(value),
+                        "alias" => metadata.alias = Some(value),
                         _ => {
                             metadata.extra.insert(key, value);
                         }
@@ -1205,6 +1211,124 @@ Plain text
     }
 
     // ========================================
+    // Alias Metadata Tests
+    // ========================================
+
+    #[test]
+    fn test_parse_metadata_alias_basic() {
+        let metadata = parse_html_comment_metadata("<!-- alias: goog -->");
+        assert_eq!(metadata.alias, Some("goog".to_string()));
+    }
+
+    #[test]
+    fn test_parse_metadata_alias_with_punctuation() {
+        let metadata = parse_html_comment_metadata("<!-- alias: g! -->");
+        assert_eq!(metadata.alias, Some("g!".to_string()));
+    }
+
+    #[test]
+    fn test_parse_metadata_alias_with_numbers() {
+        let metadata = parse_html_comment_metadata("<!-- alias: cmd123 -->");
+        assert_eq!(metadata.alias, Some("cmd123".to_string()));
+    }
+
+    #[test]
+    fn test_parse_metadata_alias_with_other_fields() {
+        let metadata = parse_html_comment_metadata("<!--\nalias: search\nshortcut: cmd s\ndescription: Search the web\n-->");
+        assert_eq!(metadata.alias, Some("search".to_string()));
+        assert_eq!(metadata.shortcut, Some("cmd s".to_string()));
+        assert_eq!(metadata.description, Some("Search the web".to_string()));
+    }
+
+    #[test]
+    fn test_parse_metadata_alias_empty_value() {
+        // Empty alias value should not be stored
+        let metadata = parse_html_comment_metadata("<!-- alias: -->");
+        assert_eq!(metadata.alias, None);
+    }
+
+    #[test]
+    fn test_parse_markdown_scriptlet_with_alias() {
+        let markdown = r#"## Google Search
+
+<!-- alias: goog -->
+
+```bash
+open "https://www.google.com/search?q=$1"
+```
+"#;
+        let scriptlets = parse_markdown_as_scriptlets(markdown, None);
+        assert_eq!(scriptlets.len(), 1);
+        assert_eq!(scriptlets[0].name, "Google Search");
+        assert_eq!(scriptlets[0].metadata.alias, Some("goog".to_string()));
+        assert_eq!(scriptlets[0].tool, "bash");
+    }
+
+    #[test]
+    fn test_parse_markdown_multiple_scriptlets_with_alias() {
+        let markdown = r#"# Launchers
+
+## Google Search
+
+<!-- alias: goog -->
+
+```open
+https://google.com
+```
+
+## GitHub
+
+<!-- alias: gh -->
+
+```open
+https://github.com
+```
+
+## No Alias
+
+```open
+https://example.com
+```
+"#;
+        let scriptlets = parse_markdown_as_scriptlets(markdown, None);
+        assert_eq!(scriptlets.len(), 3);
+        
+        assert_eq!(scriptlets[0].metadata.alias, Some("goog".to_string()));
+        assert_eq!(scriptlets[1].metadata.alias, Some("gh".to_string()));
+        assert_eq!(scriptlets[2].metadata.alias, None);
+    }
+
+    #[test]
+    fn test_alias_metadata_serialization() {
+        let metadata = ScriptletMetadata {
+            alias: Some("test".to_string()),
+            ..Default::default()
+        };
+        
+        let json = serde_json::to_string(&metadata).unwrap();
+        assert!(json.contains("\"alias\":\"test\""));
+        
+        let deserialized: ScriptletMetadata = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.alias, Some("test".to_string()));
+    }
+
+    #[test]
+    fn test_alias_metadata_deserialization_missing() {
+        // When alias is not present in JSON, it should be None
+        let json = r#"{"trigger":null,"shortcut":null,"schedule":null,"background":null,"watch":null,"system":null,"description":null}"#;
+        let metadata: ScriptletMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(metadata.alias, None);
+    }
+
+    #[test]
+    fn test_alias_and_expand_together() {
+        // Both alias and expand can coexist on the same scriptlet
+        let metadata = parse_html_comment_metadata("<!--\nalias: goog\nexpand: :google\n-->");
+        assert_eq!(metadata.alias, Some("goog".to_string()));
+        assert_eq!(metadata.expand, Some(":google".to_string()));
+    }
+
+    // ========================================
     // Code Block Extraction Tests
     // ========================================
 
@@ -1967,5 +2091,212 @@ console.log("Hello from Node");
         assert_eq!(get_interpreter_extension("perl"), "pl");
         assert_eq!(get_interpreter_extension("php"), "php");
         assert_eq!(get_interpreter_extension("node"), "js");
+    }
+
+    // ========================================
+    // Cron and Schedule Metadata Tests
+    // ========================================
+
+    #[test]
+    fn test_parse_metadata_cron_basic() {
+        let metadata = parse_html_comment_metadata("<!-- cron: */5 * * * * -->");
+        assert_eq!(metadata.cron, Some("*/5 * * * *".to_string()));
+    }
+
+    #[test]
+    fn test_parse_metadata_cron_hourly() {
+        let metadata = parse_html_comment_metadata("<!-- cron: 0 * * * * -->");
+        assert_eq!(metadata.cron, Some("0 * * * *".to_string()));
+    }
+
+    #[test]
+    fn test_parse_metadata_cron_daily() {
+        let metadata = parse_html_comment_metadata("<!-- cron: 0 9 * * * -->");
+        assert_eq!(metadata.cron, Some("0 9 * * *".to_string()));
+    }
+
+    #[test]
+    fn test_parse_metadata_cron_weekly() {
+        let metadata = parse_html_comment_metadata("<!-- cron: 0 9 * * 1 -->");
+        assert_eq!(metadata.cron, Some("0 9 * * 1".to_string()));
+    }
+
+    #[test]
+    fn test_parse_metadata_schedule_natural_language() {
+        let metadata = parse_html_comment_metadata("<!-- schedule: every hour -->");
+        assert_eq!(metadata.schedule, Some("every hour".to_string()));
+    }
+
+    #[test]
+    fn test_parse_metadata_schedule_every_tuesday() {
+        let metadata = parse_html_comment_metadata("<!-- schedule: every tuesday at 2pm -->");
+        assert_eq!(metadata.schedule, Some("every tuesday at 2pm".to_string()));
+    }
+
+    #[test]
+    fn test_parse_metadata_schedule_every_day() {
+        let metadata = parse_html_comment_metadata("<!-- schedule: every day at 9am -->");
+        assert_eq!(metadata.schedule, Some("every day at 9am".to_string()));
+    }
+
+    #[test]
+    fn test_parse_metadata_cron_with_other_fields() {
+        let metadata = parse_html_comment_metadata("<!--\ncron: 0 */6 * * *\ndescription: Runs every 6 hours\nbackground: true\n-->");
+        assert_eq!(metadata.cron, Some("0 */6 * * *".to_string()));
+        assert_eq!(metadata.description, Some("Runs every 6 hours".to_string()));
+        assert_eq!(metadata.background, Some(true));
+    }
+
+    #[test]
+    fn test_parse_metadata_schedule_with_other_fields() {
+        let metadata = parse_html_comment_metadata("<!--\nschedule: every weekday at 9am\ndescription: Morning task\nbackground: true\n-->");
+        assert_eq!(metadata.schedule, Some("every weekday at 9am".to_string()));
+        assert_eq!(metadata.description, Some("Morning task".to_string()));
+        assert_eq!(metadata.background, Some(true));
+    }
+
+    #[test]
+    fn test_parse_metadata_cron_and_schedule_together() {
+        // Both can exist, though typically only one would be used
+        let metadata = parse_html_comment_metadata("<!--\ncron: 0 9 * * *\nschedule: every day at 9am\n-->");
+        assert_eq!(metadata.cron, Some("0 9 * * *".to_string()));
+        assert_eq!(metadata.schedule, Some("every day at 9am".to_string()));
+    }
+
+    #[test]
+    fn test_parse_metadata_cron_empty_value() {
+        // Empty cron value should not be stored
+        let metadata = parse_html_comment_metadata("<!-- cron: -->");
+        assert_eq!(metadata.cron, None);
+    }
+
+    #[test]
+    fn test_parse_metadata_schedule_empty_value() {
+        // Empty schedule value should not be stored
+        let metadata = parse_html_comment_metadata("<!-- schedule: -->");
+        assert_eq!(metadata.schedule, None);
+    }
+
+    #[test]
+    fn test_parse_markdown_scriptlet_with_cron() {
+        let markdown = r#"## Hourly Backup
+
+<!-- cron: 0 * * * * -->
+
+```bash
+backup.sh
+```
+"#;
+        let scriptlets = parse_markdown_as_scriptlets(markdown, None);
+        assert_eq!(scriptlets.len(), 1);
+        assert_eq!(scriptlets[0].name, "Hourly Backup");
+        assert_eq!(scriptlets[0].metadata.cron, Some("0 * * * *".to_string()));
+        assert_eq!(scriptlets[0].tool, "bash");
+    }
+
+    #[test]
+    fn test_parse_markdown_scriptlet_with_schedule() {
+        let markdown = r#"## Weekly Report
+
+<!-- schedule: every monday at 8am -->
+
+```bash
+generate-report.sh
+```
+"#;
+        let scriptlets = parse_markdown_as_scriptlets(markdown, None);
+        assert_eq!(scriptlets.len(), 1);
+        assert_eq!(scriptlets[0].name, "Weekly Report");
+        assert_eq!(scriptlets[0].metadata.schedule, Some("every monday at 8am".to_string()));
+        assert_eq!(scriptlets[0].tool, "bash");
+    }
+
+    #[test]
+    fn test_parse_markdown_multiple_scriptlets_with_cron_and_schedule() {
+        let markdown = r#"# Scheduled Tasks
+
+## Every 5 Minutes Check
+
+<!-- cron: */5 * * * * -->
+
+```bash
+check-status.sh
+```
+
+## Daily Cleanup
+
+<!-- schedule: every day at midnight -->
+
+```bash
+cleanup.sh
+```
+
+## No Schedule
+
+```bash
+manual-task.sh
+```
+"#;
+        let scriptlets = parse_markdown_as_scriptlets(markdown, None);
+        assert_eq!(scriptlets.len(), 3);
+        
+        assert_eq!(scriptlets[0].metadata.cron, Some("*/5 * * * *".to_string()));
+        assert_eq!(scriptlets[0].metadata.schedule, None);
+        
+        assert_eq!(scriptlets[1].metadata.cron, None);
+        assert_eq!(scriptlets[1].metadata.schedule, Some("every day at midnight".to_string()));
+        
+        assert_eq!(scriptlets[2].metadata.cron, None);
+        assert_eq!(scriptlets[2].metadata.schedule, None);
+    }
+
+    #[test]
+    fn test_cron_metadata_serialization() {
+        let metadata = ScriptletMetadata {
+            cron: Some("0 9 * * 1-5".to_string()),
+            ..Default::default()
+        };
+        
+        let json = serde_json::to_string(&metadata).unwrap();
+        assert!(json.contains("\"cron\":\"0 9 * * 1-5\""));
+        
+        let deserialized: ScriptletMetadata = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.cron, Some("0 9 * * 1-5".to_string()));
+    }
+
+    #[test]
+    fn test_schedule_metadata_serialization() {
+        let metadata = ScriptletMetadata {
+            schedule: Some("every friday at 5pm".to_string()),
+            ..Default::default()
+        };
+        
+        let json = serde_json::to_string(&metadata).unwrap();
+        assert!(json.contains("\"schedule\":\"every friday at 5pm\""));
+        
+        let deserialized: ScriptletMetadata = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.schedule, Some("every friday at 5pm".to_string()));
+    }
+
+    #[test]
+    fn test_cron_metadata_deserialization_missing() {
+        // When cron is not present in JSON, it should be None
+        let json = r#"{"trigger":null,"shortcut":null,"schedule":null,"background":null,"watch":null,"system":null,"description":null}"#;
+        let metadata: ScriptletMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(metadata.cron, None);
+    }
+
+    #[test]
+    fn test_cron_complex_expression() {
+        // Test parsing complex cron expressions with ranges and lists
+        let metadata = parse_html_comment_metadata("<!-- cron: 0 9,12,18 * * 1-5 -->");
+        assert_eq!(metadata.cron, Some("0 9,12,18 * * 1-5".to_string()));
+    }
+
+    #[test]
+    fn test_cron_six_field_expression() {
+        // Some cron parsers support seconds as the first field
+        let metadata = parse_html_comment_metadata("<!-- cron: 0 30 9 * * * -->");
+        assert_eq!(metadata.cron, Some("0 30 9 * * *".to_string()));
     }
 }
