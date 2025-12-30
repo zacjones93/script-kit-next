@@ -1935,7 +1935,7 @@ mod tests {
                 description: Some("Open a file dialog".to_string()),
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "savefile".to_string(),
@@ -1945,7 +1945,7 @@ mod tests {
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -1984,7 +1984,7 @@ mod tests {
                 description: Some("Open a file dialog".to_string()),
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "open".to_string(),
@@ -1994,7 +1994,7 @@ mod tests {
                 description: Some("Basic open function".to_string()),
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "reopen".to_string(),
@@ -2004,7 +2004,7 @@ mod tests {
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -2079,7 +2079,7 @@ mod tests {
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             score: 100,
             filename: "test.ts".to_string(),
@@ -2267,7 +2267,7 @@ mod tests {
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "test2".to_string(),
@@ -2277,7 +2277,7 @@ mod tests {
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -2296,7 +2296,7 @@ mod tests {
                 description: Some("database connection helper".to_string()),
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "bar".to_string(),
@@ -2306,7 +2306,7 @@ mod tests {
                 description: Some("ui component".to_string()),
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -2326,7 +2326,7 @@ mod tests {
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "bar".to_string(),
@@ -2336,7 +2336,7 @@ mod tests {
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -2356,7 +2356,7 @@ mod tests {
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "other".to_string(),
@@ -2366,7 +2366,7 @@ mod tests {
                 description: Some("exactmatch in description".to_string()),
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -2462,7 +2462,7 @@ mod tests {
                 description: Some("A test script".to_string()),
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             score: 100,
             filename: "test.ts".to_string(),
@@ -3072,7 +3072,7 @@ const x = 1;
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "saveFile".to_string(),
@@ -3082,7 +3082,7 @@ const x = 1;
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -3103,7 +3103,7 @@ const x = 1;
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             score: 50,
             filename: "test.ts".to_string(),
@@ -3168,7 +3168,7 @@ third()
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "beta".to_string(),
@@ -3178,7 +3178,7 @@ third()
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "gamma".to_string(),
@@ -3188,7 +3188,7 @@ third()
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -3240,7 +3240,7 @@ third()
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "apple".to_string(),
@@ -3250,7 +3250,7 @@ third()
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "monkey".to_string(),
@@ -3260,7 +3260,7 @@ third()
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -3539,7 +3539,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             score: 0,
             filename: "test.ts".to_string(),
@@ -3592,7 +3592,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "reopen".to_string(),
@@ -3602,7 +3602,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -3624,7 +3624,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "other".to_string(),
@@ -3634,7 +3634,7 @@ code here
                 description: Some("test description".to_string()),
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -3654,7 +3654,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "other".to_string(),
@@ -3664,7 +3664,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -3711,7 +3711,7 @@ code here
                 description: Some("Open a file".to_string()),
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "openfile".to_string(),
@@ -3721,7 +3721,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -3761,7 +3761,7 @@ code here
                 description: Some("test".to_string()),
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "bbb".to_string(),
@@ -3771,7 +3771,7 @@ code here
                 description: Some("test".to_string()),
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -3856,7 +3856,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "save".to_string(),
@@ -3866,7 +3866,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -3906,7 +3906,7 @@ code here
                 description: Some("Opens a file dialog".to_string()),
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "someScript".to_string(),
@@ -3916,7 +3916,7 @@ code here
                 description: Some("Does something".to_string()),
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "saveData".to_string(),
@@ -3926,7 +3926,7 @@ code here
                 description: Some("Saves data to file".to_string()),
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -3949,7 +3949,7 @@ code here
                 description: Some("Search files with grep".to_string()),
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "find".to_string(),
@@ -3959,7 +3959,7 @@ code here
                 description: Some("Find files".to_string()),
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "search".to_string(),
@@ -3969,7 +3969,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -4388,7 +4388,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "save".to_string(),
@@ -4398,7 +4398,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -4435,7 +4435,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "beta".to_string(),
@@ -4445,7 +4445,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -4478,7 +4478,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "beta".to_string(),
@@ -4488,7 +4488,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "gamma".to_string(),
@@ -4498,7 +4498,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -4549,7 +4549,7 @@ code here
                 description: Some("A frequently used script".to_string()),
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "another-script".to_string(),
@@ -4559,7 +4559,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -4733,7 +4733,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "zebra-script".to_string(),
@@ -4743,7 +4743,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -4826,7 +4826,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "zebra-script".to_string(),
@@ -4836,7 +4836,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -4912,7 +4912,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "second".to_string(),
@@ -4922,7 +4922,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -4962,7 +4962,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "Other Script".to_string(),
@@ -4972,7 +4972,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -4995,7 +4995,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "Save Data".to_string(),
@@ -5005,7 +5005,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 
@@ -5049,7 +5049,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
             Script {
                 name: "bar".to_string(),                           // Name doesn't match
@@ -5059,7 +5059,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
-            ..Default::default()
+                ..Default::default()
             },
         ];
 

@@ -72,7 +72,7 @@ impl McpServer {
     /// * `kenv_path` - Path to ~/.kenv directory
     pub fn new(port: u16, kenv_path: PathBuf) -> Result<Self> {
         let token = Self::load_or_create_token(&kenv_path)?;
-        
+
         Ok(Self {
             port,
             token,
@@ -92,13 +92,13 @@ impl McpServer {
     /// Load existing token or create a new one
     fn load_or_create_token(kenv_path: &PathBuf) -> Result<String> {
         let token_path = kenv_path.join("agent-token");
-        
+
         if token_path.exists() {
             let token = fs::read_to_string(&token_path)
                 .context("Failed to read agent-token file")?
                 .trim()
                 .to_string();
-            
+
             if !token.is_empty() {
                 info!("Loaded existing agent token from {:?}", token_path);
                 return Ok(token);
@@ -107,14 +107,12 @@ impl McpServer {
 
         // Generate new token
         let token = uuid::Uuid::new_v4().to_string();
-        
+
         // Ensure kenv directory exists
-        fs::create_dir_all(kenv_path)
-            .context("Failed to create .kenv directory")?;
-        
-        fs::write(&token_path, &token)
-            .context("Failed to write agent-token file")?;
-        
+        fs::create_dir_all(kenv_path).context("Failed to create .kenv directory")?;
+
+        fs::write(&token_path, &token).context("Failed to write agent-token file")?;
+
         info!("Generated new agent token at {:?}", token_path);
         Ok(token)
     }
@@ -145,10 +143,9 @@ impl McpServer {
         let discovery_path = self.kenv_path.join("server.json");
         let json = serde_json::to_string_pretty(&discovery)
             .context("Failed to serialize discovery info")?;
-        
-        fs::write(&discovery_path, json)
-            .context("Failed to write server.json")?;
-        
+
+        fs::write(&discovery_path, json).context("Failed to write server.json")?;
+
         info!("Wrote discovery file to {:?}", discovery_path);
         Ok(())
     }
@@ -178,9 +175,10 @@ impl McpServer {
 
         let listener = TcpListener::bind(format!("127.0.0.1:{}", self.port))
             .with_context(|| format!("Failed to bind to port {}", self.port))?;
-        
+
         // Set non-blocking for graceful shutdown
-        listener.set_nonblocking(true)
+        listener
+            .set_nonblocking(true)
             .context("Failed to set non-blocking mode")?;
 
         let running = self.running.clone();
@@ -191,7 +189,7 @@ impl McpServer {
 
         let handle = thread::spawn(move || {
             info!("MCP server started on port {}", DEFAULT_PORT);
-            
+
             while running.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((stream, addr)) => {
@@ -218,7 +216,7 @@ impl McpServer {
             if discovery_path.exists() {
                 let _ = fs::remove_file(&discovery_path);
             }
-            
+
             info!("MCP server stopped");
         });
 
@@ -266,12 +264,12 @@ impl Drop for ServerHandle {
 /// Handle a single HTTP connection
 fn handle_connection(mut stream: TcpStream, expected_token: &str) -> Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
-    
+
     // Read request line
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
     let request_line = request_line.trim();
-    
+
     debug!("Request: {}", request_line);
 
     // Parse method and path
@@ -315,9 +313,7 @@ fn handle_connection(mut stream: TcpStream, expected_token: &str) -> Result<()> 
 
     // Route request
     match (method, path) {
-        ("GET", "/health") => {
-            send_response(&mut stream, 200, "OK", r#"{"status":"healthy"}"#)
-        }
+        ("GET", "/health") => send_response(&mut stream, 200, "OK", r#"{"status":"healthy"}"#),
         ("GET", "/") => {
             let info = serde_json::json!({
                 "name": "Script Kit MCP Server",
@@ -330,9 +326,7 @@ fn handle_connection(mut stream: TcpStream, expected_token: &str) -> Result<()> 
             // Handle JSON-RPC request
             handle_rpc_request(&mut reader, &mut stream, &headers)
         }
-        _ => {
-            send_response(&mut stream, 404, "Not Found", "Endpoint not found")
-        }
+        _ => send_response(&mut stream, 404, "Not Found", "Endpoint not found"),
     }
 }
 
@@ -372,7 +366,9 @@ fn handle_rpc_request(
 
     // Parse and handle request with full context
     let response = match mcp_protocol::parse_request(&body_str) {
-        Ok(request) => mcp_protocol::handle_request_with_context(request, &scripts, &scriptlets, None),
+        Ok(request) => {
+            mcp_protocol::handle_request_with_context(request, &scripts, &scriptlets, None)
+        }
         Err(error_response) => error_response,
     };
 
@@ -389,9 +385,12 @@ fn send_response(stream: &mut TcpStream, status: u16, reason: &str, body: &str) 
          Connection: close\r\n\
          \r\n\
          {}",
-        status, reason, body.len(), body
+        status,
+        reason,
+        body.len(),
+        body
     );
-    
+
     stream.write_all(response.as_bytes())?;
     stream.flush()?;
     Ok(())
@@ -414,20 +413,22 @@ mod tests {
     /// Helper to send an HTTP request and get the response
     fn http_request(port: u16, method: &str, path: &str, token: Option<&str>) -> (u16, String) {
         let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
-        
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+
         let mut request = format!("{} {} HTTP/1.1\r\nHost: localhost\r\n", method, path);
         if let Some(token) = token {
             request.push_str(&format!("Authorization: Bearer {}\r\n", token));
         }
         request.push_str("\r\n");
-        
+
         stream.write_all(request.as_bytes()).unwrap();
         stream.flush().unwrap();
-        
+
         let mut response = String::new();
         stream.read_to_string(&mut response).unwrap();
-        
+
         // Parse status code from response
         let status_line = response.lines().next().unwrap_or("");
         let status_code = status_line
@@ -435,36 +436,32 @@ mod tests {
             .nth(1)
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
-        
+
         // Get body (after blank line)
-        let body = response
-            .split("\r\n\r\n")
-            .nth(1)
-            .unwrap_or("")
-            .to_string();
-        
+        let body = response.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+
         (status_code, body)
     }
 
     #[test]
     fn test_server_starts_and_stops() {
         let (server, _temp_dir) = create_test_server(43211);
-        
+
         // Server should not be running initially
         assert!(!server.is_running());
-        
+
         // Start server
         let handle = server.start().unwrap();
-        
+
         // Give server time to start
         thread::sleep(std::time::Duration::from_millis(100));
-        
+
         // Server should be running
         assert!(handle.is_running());
-        
+
         // Stop server
         handle.stop();
-        
+
         // Server should stop
         assert!(!server.is_running());
     }
@@ -473,12 +470,12 @@ mod tests {
     fn test_health_endpoint_returns_200() {
         let (server, _temp_dir) = create_test_server(43212);
         let _handle = server.start().unwrap();
-        
+
         // Give server time to start
         thread::sleep(std::time::Duration::from_millis(100));
-        
+
         let (status, body) = http_request(43212, "GET", "/health", None);
-        
+
         assert_eq!(status, 200);
         assert!(body.contains("healthy"));
     }
@@ -487,13 +484,13 @@ mod tests {
     fn test_auth_rejects_invalid_token() {
         let (server, _temp_dir) = create_test_server(43213);
         let _handle = server.start().unwrap();
-        
+
         thread::sleep(std::time::Duration::from_millis(100));
-        
+
         // Request to root without token should fail
         let (status, _) = http_request(43213, "GET", "/", None);
         assert_eq!(status, 401);
-        
+
         // Request with wrong token should fail
         let (status, _) = http_request(43213, "GET", "/", Some("wrong-token"));
         assert_eq!(status, 401);
@@ -504,11 +501,11 @@ mod tests {
         let (server, _temp_dir) = create_test_server(43214);
         let token = server.token().to_string();
         let _handle = server.start().unwrap();
-        
+
         thread::sleep(std::time::Duration::from_millis(100));
-        
+
         let (status, body) = http_request(43214, "GET", "/", Some(&token));
-        
+
         assert_eq!(status, 200);
         assert!(body.contains("Script Kit MCP Server"));
     }
@@ -516,29 +513,29 @@ mod tests {
     #[test]
     fn test_discovery_file_created() {
         let (server, temp_dir) = create_test_server(43215);
-        
+
         // Discovery file should not exist before start
         let discovery_path = temp_dir.path().join("server.json");
         assert!(!discovery_path.exists());
-        
+
         // Start server
         let handle = server.start().unwrap();
         thread::sleep(std::time::Duration::from_millis(100));
-        
+
         // Discovery file should exist
         assert!(discovery_path.exists());
-        
+
         // Verify contents
         let content = fs::read_to_string(&discovery_path).unwrap();
         let discovery: DiscoveryInfo = serde_json::from_str(&content).unwrap();
-        
+
         assert!(discovery.url.contains("43215"));
         assert_eq!(discovery.version, VERSION);
         assert!(discovery.capabilities.scripts);
-        
+
         // Stop server
         handle.stop();
-        
+
         // Discovery file should be removed after stop
         thread::sleep(std::time::Duration::from_millis(100));
         assert!(!discovery_path.exists());
@@ -548,25 +545,25 @@ mod tests {
     fn test_generates_token_if_missing() {
         let temp_dir = TempDir::new().unwrap();
         let token_path = temp_dir.path().join("agent-token");
-        
+
         // Token file should not exist
         assert!(!token_path.exists());
-        
+
         // Create server - should generate token
         let server = McpServer::new(43216, temp_dir.path().to_path_buf()).unwrap();
-        
+
         // Token file should now exist
         assert!(token_path.exists());
-        
+
         // Token should be a valid UUID-like string
         let token = server.token();
         assert!(!token.is_empty());
         assert!(token.len() >= 32); // UUID v4 format
-        
+
         // Token should match file contents
         let file_token = fs::read_to_string(&token_path).unwrap();
         assert_eq!(token, file_token.trim());
-        
+
         // Creating another server should use the same token
         let server2 = McpServer::new(43217, temp_dir.path().to_path_buf()).unwrap();
         assert_eq!(server.token(), server2.token());
@@ -581,8 +578,10 @@ mod tests {
     /// Helper to send a POST request with a JSON body
     fn http_post_json(port: u16, path: &str, token: &str, body: &str) -> (u16, String) {
         let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
-        
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+
         let request = format!(
             "POST {} HTTP/1.1\r\n\
              Host: localhost\r\n\
@@ -591,15 +590,18 @@ mod tests {
              Content-Length: {}\r\n\
              \r\n\
              {}",
-            path, token, body.len(), body
+            path,
+            token,
+            body.len(),
+            body
         );
-        
+
         stream.write_all(request.as_bytes()).unwrap();
         stream.flush().unwrap();
-        
+
         let mut response = String::new();
         stream.read_to_string(&mut response).unwrap();
-        
+
         // Parse status code from response
         let status_line = response.lines().next().unwrap_or("");
         let status_code = status_line
@@ -607,14 +609,10 @@ mod tests {
             .nth(1)
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
-        
+
         // Get body (after blank line)
-        let body = response
-            .split("\r\n\r\n")
-            .nth(1)
-            .unwrap_or("")
-            .to_string();
-        
+        let body = response.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+
         (status_code, body)
     }
 
@@ -623,14 +621,14 @@ mod tests {
         let (server, _temp_dir) = create_test_server(43219);
         let token = server.token().to_string();
         let _handle = server.start().unwrap();
-        
+
         thread::sleep(std::time::Duration::from_millis(100));
-        
+
         let request = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#;
         let (status, body) = http_post_json(43219, "/rpc", &token, request);
-        
+
         assert_eq!(status, 200);
-        
+
         // Parse response
         let response: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(response["jsonrpc"], "2.0");
@@ -643,14 +641,14 @@ mod tests {
         let (server, _temp_dir) = create_test_server(43220);
         let token = server.token().to_string();
         let _handle = server.start().unwrap();
-        
+
         thread::sleep(std::time::Duration::from_millis(100));
-        
+
         let request = r#"{"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{}}"#;
         let (status, body) = http_post_json(43220, "/rpc", &token, request);
-        
+
         assert_eq!(status, 200);
-        
+
         let response: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(response["jsonrpc"], "2.0");
         assert_eq!(response["id"], "init-1");
@@ -663,19 +661,22 @@ mod tests {
         let (server, _temp_dir) = create_test_server(43221);
         let token = server.token().to_string();
         let _handle = server.start().unwrap();
-        
+
         thread::sleep(std::time::Duration::from_millis(100));
-        
+
         let request = r#"{"jsonrpc":"2.0","id":99,"method":"unknown/method","params":{}}"#;
         let (status, body) = http_post_json(43221, "/rpc", &token, request);
-        
+
         assert_eq!(status, 200);
-        
+
         let response: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(response["jsonrpc"], "2.0");
         assert_eq!(response["id"], 99);
         assert_eq!(response["error"]["code"], -32601);
-        assert!(response["error"]["message"].as_str().unwrap().contains("Method not found"));
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Method not found"));
     }
 
     #[test]
@@ -683,14 +684,14 @@ mod tests {
         let (server, _temp_dir) = create_test_server(43222);
         let token = server.token().to_string();
         let _handle = server.start().unwrap();
-        
+
         thread::sleep(std::time::Duration::from_millis(100));
-        
+
         let request = r#"{"jsonrpc":"2.0", invalid}"#;
         let (status, body) = http_post_json(43222, "/rpc", &token, request);
-        
+
         assert_eq!(status, 200);
-        
+
         let response: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(response["error"]["code"], -32700); // Parse error
     }
@@ -699,13 +700,15 @@ mod tests {
     fn test_rpc_endpoint_requires_auth() {
         let (server, _temp_dir) = create_test_server(43223);
         let _handle = server.start().unwrap();
-        
+
         thread::sleep(std::time::Duration::from_millis(100));
-        
+
         // Try POST /rpc without token - should fail auth
         let mut stream = TcpStream::connect("127.0.0.1:43223").unwrap();
-        stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
-        
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+
         let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
         let request = format!(
             "POST /rpc HTTP/1.1\r\n\
@@ -714,22 +717,23 @@ mod tests {
              Content-Length: {}\r\n\
              \r\n\
              {}",
-            body.len(), body
+            body.len(),
+            body
         );
-        
+
         stream.write_all(request.as_bytes()).unwrap();
         stream.flush().unwrap();
-        
+
         let mut response = String::new();
         stream.read_to_string(&mut response).unwrap();
-        
+
         let status_line = response.lines().next().unwrap_or("");
         let status_code: u16 = status_line
             .split_whitespace()
             .nth(1)
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
-        
+
         assert_eq!(status_code, 401);
     }
 
@@ -738,14 +742,14 @@ mod tests {
         let (server, _temp_dir) = create_test_server(43224);
         let token = server.token().to_string();
         let _handle = server.start().unwrap();
-        
+
         thread::sleep(std::time::Duration::from_millis(100));
-        
+
         let request = r#"{"jsonrpc":"2.0","id":2,"method":"resources/list","params":{}}"#;
         let (status, body) = http_post_json(43224, "/rpc", &token, request);
-        
+
         assert_eq!(status, 200);
-        
+
         let response: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(response["jsonrpc"], "2.0");
         assert_eq!(response["id"], 2);

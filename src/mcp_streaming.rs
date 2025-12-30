@@ -176,8 +176,7 @@ impl AuditLogger {
         }
 
         // Serialize entry to JSON
-        let json =
-            serde_json::to_string(entry).context("Failed to serialize audit log entry")?;
+        let json = serde_json::to_string(entry).context("Failed to serialize audit log entry")?;
 
         // Append to log file
         let mut file = OpenOptions::new()
@@ -381,7 +380,11 @@ mod tests {
 
         // Log a successful call
         logger
-            .log_success("tools/run_script", serde_json::json!({"name": "test.ts"}), 100)
+            .log_success(
+                "tools/run_script",
+                serde_json::json!({"name": "test.ts"}),
+                100,
+            )
             .expect("Should write log successfully");
 
         // Log file should now exist
@@ -428,10 +431,7 @@ mod tests {
             serde_json::from_str(content.trim()).expect("Log entry should be valid JSON");
 
         // Verify all required fields
-        assert!(
-            !entry.timestamp.is_empty(),
-            "timestamp must be present"
-        );
+        assert!(!entry.timestamp.is_empty(), "timestamp must be present");
         assert!(
             entry.timestamp.contains("T"),
             "timestamp must be ISO 8601 format"
@@ -444,7 +444,12 @@ mod tests {
 
         // Test failure entry format
         logger
-            .log_failure("tools/fail", serde_json::json!({}), 10, "Something went wrong")
+            .log_failure(
+                "tools/fail",
+                serde_json::json!({}),
+                10,
+                "Something went wrong",
+            )
             .unwrap();
 
         let content = fs::read_to_string(logger.log_path()).unwrap();

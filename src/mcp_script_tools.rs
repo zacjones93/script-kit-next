@@ -80,7 +80,7 @@ fn slugify_name(name: &str) -> String {
 pub fn generate_tool_from_script(script: &Script) -> Option<ToolDefinition> {
     // Only scripts with schema.input become tools
     let schema = script.schema.as_ref()?;
-    
+
     // Skip scripts with empty input schema
     if schema.input.is_empty() {
         return None;
@@ -103,7 +103,7 @@ pub fn generate_tool_from_script(script: &Script) -> Option<ToolDefinition> {
 /// Generate a ScriptTool from a script (includes the script reference)
 pub fn generate_script_tool(script: &Script) -> Option<ScriptTool> {
     let schema = script.schema.as_ref()?;
-    
+
     if schema.input.is_empty() {
         return None;
     }
@@ -146,7 +146,7 @@ pub fn find_script_by_tool_name<'a>(scripts: &'a [Script], tool_name: &str) -> O
 
     // Extract the slug from "scripts/{slug}"
     let slug = tool_name.strip_prefix("scripts/")?;
-    
+
     // Find script where slugified name matches
     scripts.iter().find(|s| slugify_name(&s.name) == slug)
 }
@@ -184,7 +184,8 @@ pub fn handle_script_tool_call(
                 "script_path": script.path.to_string_lossy(),
                 "arguments": arguments,
                 "message": format!("Script '{}' queued for execution", script.name)
-            }).to_string(),
+            })
+            .to_string(),
         }],
         is_error: None,
     }
@@ -260,7 +261,10 @@ mod tests {
 
         let tool = generate_tool_from_script(&script);
 
-        assert!(tool.is_some(), "Script with schema.input should generate tool");
+        assert!(
+            tool.is_some(),
+            "Script with schema.input should generate tool"
+        );
         let tool = tool.unwrap();
 
         // Verify tool properties
@@ -630,8 +634,7 @@ mod tests {
     fn test_handle_script_tool_call_not_found() {
         let scripts = vec![];
 
-        let result =
-            handle_script_tool_call(&scripts, "scripts/unknown", &serde_json::json!({}));
+        let result = handle_script_tool_call(&scripts, "scripts/unknown", &serde_json::json!({}));
 
         assert_eq!(result.is_error, Some(true));
         assert!(result.content[0].text.contains("not found"));

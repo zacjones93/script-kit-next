@@ -2427,11 +2427,11 @@ const item = await arg("Todo item");
 "#;
         let scriptlets = parse_markdown_as_scriptlets(markdown, None);
         assert_eq!(scriptlets.len(), 1);
-        
+
         let scriptlet = &scriptlets[0];
         assert_eq!(scriptlet.name, "Quick Todo");
         assert_eq!(scriptlet.tool, "ts");
-        
+
         // Typed metadata should be populated
         assert!(scriptlet.typed_metadata.is_some());
         let typed = scriptlet.typed_metadata.as_ref().unwrap();
@@ -2463,10 +2463,10 @@ output({ result: title.toUpperCase() });
 "#;
         let scriptlets = parse_markdown_as_scriptlets(markdown, None);
         assert_eq!(scriptlets.len(), 1);
-        
+
         let scriptlet = &scriptlets[0];
         assert!(scriptlet.schema.is_some());
-        
+
         let schema = scriptlet.schema.as_ref().unwrap();
         assert_eq!(schema.input.len(), 1);
         assert!(schema.input.contains_key("title"));
@@ -2488,12 +2488,15 @@ echo "Hello from legacy"
 "#;
         let scriptlets = parse_markdown_as_scriptlets(markdown, None);
         assert_eq!(scriptlets.len(), 1);
-        
+
         let scriptlet = &scriptlets[0];
         // HTML comment metadata should still work
         assert_eq!(scriptlet.metadata.shortcut, Some("cmd l".to_string()));
-        assert_eq!(scriptlet.metadata.description, Some("A legacy script using HTML comments".to_string()));
-        
+        assert_eq!(
+            scriptlet.metadata.description,
+            Some("A legacy script using HTML comments".to_string())
+        );
+
         // Typed metadata should be None since no codefence metadata block
         assert!(scriptlet.typed_metadata.is_none());
         assert!(scriptlet.schema.is_none());
@@ -2507,7 +2510,7 @@ echo "Hello from legacy"
             "ts".to_string(),
             "console.log('test')".to_string(),
         );
-        
+
         // New fields should exist and default to None
         assert!(scriptlet.typed_metadata.is_none());
         assert!(scriptlet.schema.is_none());
@@ -2532,20 +2535,23 @@ console.log("mixed");
 "#;
         let scriptlets = parse_markdown_as_scriptlets(markdown, None);
         assert_eq!(scriptlets.len(), 1);
-        
+
         let scriptlet = &scriptlets[0];
-        
+
         // Codefence metadata should populate typed_metadata
         assert!(scriptlet.typed_metadata.is_some());
         let typed = scriptlet.typed_metadata.as_ref().unwrap();
         assert_eq!(typed.name, Some("Codefence Name".to_string()));
         assert_eq!(typed.description, Some("Codefence description".to_string()));
         assert_eq!(typed.shortcut, Some("cmd y".to_string()));
-        
+
         // HTML comments should still populate legacy metadata struct
         // (for backward compatibility)
         assert_eq!(scriptlet.metadata.shortcut, Some("cmd x".to_string()));
-        assert_eq!(scriptlet.metadata.description, Some("HTML description".to_string()));
+        assert_eq!(
+            scriptlet.metadata.description,
+            Some("HTML description".to_string())
+        );
     }
 
     #[test]
@@ -2572,16 +2578,16 @@ console.log(name);
 "#;
         let scriptlets = parse_markdown_as_scriptlets(markdown, None);
         assert_eq!(scriptlets.len(), 1);
-        
+
         let scriptlet = &scriptlets[0];
-        
+
         // Both should be populated
         assert!(scriptlet.typed_metadata.is_some());
         assert!(scriptlet.schema.is_some());
-        
+
         let typed = scriptlet.typed_metadata.as_ref().unwrap();
         assert_eq!(typed.name, Some("Full Featured".to_string()));
-        
+
         let schema = scriptlet.schema.as_ref().unwrap();
         assert!(schema.input.contains_key("name"));
     }

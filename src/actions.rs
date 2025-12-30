@@ -983,7 +983,8 @@ impl Render for ActionsDialog {
 
                                     // Add top border for category separator (non-first items only)
                                     if is_category_start {
-                                        action_item = action_item.border_t_1().border_color(separator_color);
+                                        action_item =
+                                            action_item.border_t_1().border_color(separator_color);
                                     }
 
                                     // Content container with proper padding

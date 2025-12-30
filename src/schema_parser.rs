@@ -48,36 +48,36 @@ pub struct FieldDef {
     /// The type of this field
     #[serde(rename = "type", default)]
     pub field_type: FieldType,
-    
+
     /// Whether this field is required (defaults to false)
     #[serde(default)]
     pub required: bool,
-    
+
     /// Human-readable description for AI agents and documentation
     pub description: Option<String>,
-    
+
     /// Default value if not provided
     pub default: Option<serde_json::Value>,
-    
+
     /// For array types, the type of items
     pub items: Option<String>,
-    
+
     /// For object types, nested field definitions
     pub properties: Option<HashMap<String, FieldDef>>,
-    
+
     /// Enum values (for string fields with limited options)
     #[serde(rename = "enum")]
     pub enum_values: Option<Vec<String>>,
-    
+
     /// Minimum value (for numbers) or length (for strings/arrays)
     pub min: Option<f64>,
-    
+
     /// Maximum value (for numbers) or length (for strings/arrays)
     pub max: Option<f64>,
-    
+
     /// Regex pattern for validation (strings only)
     pub pattern: Option<String>,
-    
+
     /// Example value for documentation
     pub example: Option<serde_json::Value>,
 }
@@ -88,7 +88,7 @@ pub struct Schema {
     /// Input fields - what the script expects to receive
     #[serde(default)]
     pub input: HashMap<String, FieldDef>,
-    
+
     /// Output fields - what the script will produce
     #[serde(default)]
     pub output: HashMap<String, FieldDef>,
@@ -120,16 +120,16 @@ pub fn extract_schema(content: &str) -> SchemaParseResult {
 
     // Find `schema = ` or `schema=` pattern
     let schema_pattern = find_schema_assignment(content);
-    
+
     if let Some((start_idx, obj_start)) = schema_pattern {
         // Extract the object literal
         match extract_object_literal(content, obj_start) {
             Ok((json_str, end_idx)) => {
                 result.span = Some((start_idx, end_idx));
-                
+
                 // Normalize and parse
                 let normalized = normalize_js_object(&json_str);
-                
+
                 match serde_json::from_str::<Schema>(&normalized) {
                     Ok(schema) => {
                         debug!(
@@ -140,7 +140,9 @@ pub fn extract_schema(content: &str) -> SchemaParseResult {
                         result.schema = Some(schema);
                     }
                     Err(e) => {
-                        result.errors.push(format!("Failed to parse schema JSON: {}", e));
+                        result
+                            .errors
+                            .push(format!("Failed to parse schema JSON: {}", e));
                     }
                 }
             }
@@ -157,12 +159,12 @@ pub fn extract_schema(content: &str) -> SchemaParseResult {
 fn find_schema_assignment(content: &str) -> Option<(usize, usize)> {
     // First try direct assignment patterns: schema = { ... }
     let assignment_patterns = ["schema=", "schema =", "schema  ="];
-    
+
     for pattern in assignment_patterns {
         if let Some(idx) = content.find(pattern) {
             let after_eq = idx + pattern.len();
             let rest = &content[after_eq..];
-            
+
             for (i, c) in rest.char_indices() {
                 if c == '{' {
                     return Some((idx, after_eq + i));
@@ -172,10 +174,10 @@ fn find_schema_assignment(content: &str) -> Option<(usize, usize)> {
             }
         }
     }
-    
+
     // Then try defineSchema() function pattern: defineSchema({ ... })
     let define_patterns = ["defineSchema({", "defineSchema ({", "defineSchema  ({"];
-    
+
     for pattern in define_patterns {
         if let Some(idx) = content.find(pattern) {
             // Find the opening brace after defineSchema
@@ -183,7 +185,7 @@ fn find_schema_assignment(content: &str) -> Option<(usize, usize)> {
             return Some((idx, after_define));
         }
     }
-    
+
     None
 }
 
@@ -201,7 +203,7 @@ fn extract_object_literal(content: &str, start: usize) -> Result<(String, usize)
 
     for (i, &byte) in bytes[start..].iter().enumerate() {
         let c = byte as char;
-        
+
         if escape_next {
             escape_next = false;
             continue;
@@ -306,15 +308,19 @@ fn normalize_js_object(js: &str) -> String {
         // Handle unquoted keys
         if c.is_alphabetic() || c == '_' || c == '$' {
             let mut key_end = i;
-            while key_end < len && (chars[key_end].is_alphanumeric() || chars[key_end] == '_' || chars[key_end] == '$') {
+            while key_end < len
+                && (chars[key_end].is_alphanumeric()
+                    || chars[key_end] == '_'
+                    || chars[key_end] == '$')
+            {
                 key_end += 1;
             }
-            
+
             let mut colon_pos = key_end;
             while colon_pos < len && chars[colon_pos].is_whitespace() {
                 colon_pos += 1;
             }
-            
+
             if colon_pos < len && chars[colon_pos] == ':' {
                 let key: String = chars[i..key_end].iter().collect();
                 result.push('"');
@@ -376,7 +382,7 @@ impl Schema {
 
 fn field_to_json_schema(field: &FieldDef) -> serde_json::Value {
     let mut schema = serde_json::Map::new();
-    
+
     let type_str = match field.field_type {
         FieldType::String => "string",
         FieldType::Number => "number",
@@ -385,10 +391,16 @@ fn field_to_json_schema(field: &FieldDef) -> serde_json::Value {
         FieldType::Object => "object",
         FieldType::Any => "any",
     };
-    schema.insert("type".to_string(), serde_json::Value::String(type_str.to_string()));
+    schema.insert(
+        "type".to_string(),
+        serde_json::Value::String(type_str.to_string()),
+    );
 
     if let Some(desc) = &field.description {
-        schema.insert("description".to_string(), serde_json::Value::String(desc.clone()));
+        schema.insert(
+            "description".to_string(),
+            serde_json::Value::String(desc.clone()),
+        );
     }
 
     if let Some(default) = &field.default {
@@ -396,7 +408,8 @@ fn field_to_json_schema(field: &FieldDef) -> serde_json::Value {
     }
 
     if let Some(enum_vals) = &field.enum_values {
-        let vals: Vec<serde_json::Value> = enum_vals.iter()
+        let vals: Vec<serde_json::Value> = enum_vals
+            .iter()
             .map(|s| serde_json::Value::String(s.clone()))
             .collect();
         schema.insert("enum".to_string(), serde_json::Value::Array(vals));
@@ -419,7 +432,10 @@ fn field_to_json_schema(field: &FieldDef) -> serde_json::Value {
     }
 
     if let Some(pattern) = &field.pattern {
-        schema.insert("pattern".to_string(), serde_json::Value::String(pattern.clone()));
+        schema.insert(
+            "pattern".to_string(),
+            serde_json::Value::String(pattern.clone()),
+        );
     }
 
     if let Some(items) = &field.items {
@@ -431,7 +447,10 @@ fn field_to_json_schema(field: &FieldDef) -> serde_json::Value {
         for (name, prop_field) in props {
             prop_schemas.insert(name.clone(), field_to_json_schema(prop_field));
         }
-        schema.insert("properties".to_string(), serde_json::Value::Object(prop_schemas));
+        schema.insert(
+            "properties".to_string(),
+            serde_json::Value::Object(prop_schemas),
+        );
     }
 
     if let Some(example) = &field.example {
@@ -460,10 +479,10 @@ schema = {
         let result = extract_schema(content);
         assert!(result.schema.is_some(), "Errors: {:?}", result.errors);
         let schema = result.schema.unwrap();
-        
+
         assert_eq!(schema.input.len(), 1);
         assert_eq!(schema.output.len(), 1);
-        
+
         let title_field = schema.input.get("title").unwrap();
         assert_eq!(title_field.field_type, FieldType::String);
         assert!(title_field.required);
@@ -486,13 +505,31 @@ schema = {
 "#;
         let result = extract_schema(content);
         let schema = result.schema.unwrap();
-        
-        assert_eq!(schema.input.get("name").unwrap().field_type, FieldType::String);
-        assert_eq!(schema.input.get("count").unwrap().field_type, FieldType::Number);
-        assert_eq!(schema.input.get("enabled").unwrap().field_type, FieldType::Boolean);
-        assert_eq!(schema.input.get("items").unwrap().field_type, FieldType::Array);
-        assert_eq!(schema.input.get("config").unwrap().field_type, FieldType::Object);
-        assert_eq!(schema.input.get("anything").unwrap().field_type, FieldType::Any);
+
+        assert_eq!(
+            schema.input.get("name").unwrap().field_type,
+            FieldType::String
+        );
+        assert_eq!(
+            schema.input.get("count").unwrap().field_type,
+            FieldType::Number
+        );
+        assert_eq!(
+            schema.input.get("enabled").unwrap().field_type,
+            FieldType::Boolean
+        );
+        assert_eq!(
+            schema.input.get("items").unwrap().field_type,
+            FieldType::Array
+        );
+        assert_eq!(
+            schema.input.get("config").unwrap().field_type,
+            FieldType::Object
+        );
+        assert_eq!(
+            schema.input.get("anything").unwrap().field_type,
+            FieldType::Any
+        );
     }
 
     #[test]
@@ -521,14 +558,21 @@ schema = {
 "#;
         let result = extract_schema(content);
         let schema = result.schema.unwrap();
-        
+
         let username = schema.input.get("username").unwrap();
         assert_eq!(username.min, Some(3.0));
         assert_eq!(username.max, Some(20.0));
         assert_eq!(username.pattern, Some("^[a-z]+$".to_string()));
-        
+
         let status = schema.input.get("status").unwrap();
-        assert_eq!(status.enum_values, Some(vec!["active".to_string(), "inactive".to_string(), "pending".to_string()]));
+        assert_eq!(
+            status.enum_values,
+            Some(vec![
+                "active".to_string(),
+                "inactive".to_string(),
+                "pending".to_string()
+            ])
+        );
     }
 
     #[test]
@@ -546,7 +590,7 @@ schema = {
 "#;
         let result = extract_schema(content);
         let schema = result.schema.unwrap();
-        
+
         let count = schema.input.get("count").unwrap();
         assert_eq!(count.default, Some(serde_json::json!(10)));
         assert_eq!(count.example, Some(serde_json::json!(42)));
@@ -605,13 +649,13 @@ schema = {
 "#;
         let result = extract_schema(content);
         let schema = result.schema.unwrap();
-        
+
         let json_schema = schema.to_json_schema_input();
-        
+
         assert_eq!(json_schema["type"], "object");
         assert!(json_schema["properties"]["title"].is_object());
         assert_eq!(json_schema["properties"]["title"]["type"], "string");
-        
+
         let required = json_schema["required"].as_array().unwrap();
         assert!(required.contains(&serde_json::json!("title")));
         assert!(!required.contains(&serde_json::json!("count")));
@@ -645,7 +689,10 @@ schema = {
         let result = extract_schema(content);
         assert!(result.schema.is_some());
         let schema = result.schema.unwrap();
-        assert_eq!(schema.input.get("name").unwrap().description, Some("The name".to_string()));
+        assert_eq!(
+            schema.input.get("name").unwrap().description,
+            Some("The name".to_string())
+        );
     }
 
     #[test]
@@ -696,22 +743,32 @@ const { greeting } = await input()
 output({ message: `Hello ${greeting}!` })
 "#;
         let result = extract_schema(content);
-        assert!(result.schema.is_some(), "defineSchema() should be parseable. Errors: {:?}", result.errors);
-        
+        assert!(
+            result.schema.is_some(),
+            "defineSchema() should be parseable. Errors: {:?}",
+            result.errors
+        );
+
         let schema = result.schema.unwrap();
         assert_eq!(schema.input.len(), 2, "Should have 2 input fields");
         assert_eq!(schema.output.len(), 1, "Should have 1 output field");
-        
+
         // Verify input fields
-        let greeting = schema.input.get("greeting").expect("Should have greeting field");
+        let greeting = schema
+            .input
+            .get("greeting")
+            .expect("Should have greeting field");
         assert!(greeting.required, "greeting should be required");
         assert_eq!(greeting.description, Some("Greeting message".to_string()));
-        
+
         let count = schema.input.get("count").expect("Should have count field");
         assert!(!count.required, "count should not be required");
-        
+
         // Verify output fields
-        let message = schema.output.get("message").expect("Should have message field");
+        let message = schema
+            .output
+            .get("message")
+            .expect("Should have message field");
         assert_eq!(message.description, Some("Response message".to_string()));
     }
 
@@ -726,7 +783,7 @@ schema = {
 "#;
         let result1 = extract_schema(direct);
         assert!(result1.schema.is_some(), "Direct assignment should work");
-        
+
         // defineSchema function pattern
         let define_fn = r#"
 const { input, output } = defineSchema({
@@ -735,7 +792,7 @@ const { input, output } = defineSchema({
 "#;
         let result2 = extract_schema(define_fn);
         assert!(result2.schema.is_some(), "defineSchema() should work");
-        
+
         // Both should produce same schema
         let schema1 = result1.schema.unwrap();
         let schema2 = result2.schema.unwrap();

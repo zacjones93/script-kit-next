@@ -8,8 +8,8 @@ use gpui::{
     div, hsla, list, point, prelude::*, px, rgb, rgba, size, svg, uniform_list, AnyElement, App,
     Application, Bounds, BoxShadow, Context, ElementId, Entity, FocusHandle, Focusable,
     ListAlignment, ListSizingBehavior, ListState, Pixels, Render, ScrollStrategy, SharedString,
-    Timer, UniformListScrollHandle, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowHandle, WindowOptions,
+    Timer, UniformListScrollHandle, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
+    WindowOptions,
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -7114,7 +7114,8 @@ impl ScriptListApp {
             }
 
             // Scroll to reveal selected item
-            self.main_list_state.scroll_to_reveal_item(self.selected_index);
+            self.main_list_state
+                .scroll_to_reveal_item(self.selected_index);
 
             // Capture entity handle for use in the render closure
             let entity = cx.entity();
@@ -7123,92 +7124,112 @@ impl ScriptListApp {
             let theme_colors = ListItemColors::from_theme(&self.theme);
             let current_design = self.current_design;
 
-            let variable_height_list = list(self.main_list_state.clone(), move |ix, _window, cx| {
-                // Access entity state inside the closure
-                entity.update(cx, |this, cx| {
-                    let current_selected = this.selected_index;
-                    let current_hovered = this.hovered_index;
+            let variable_height_list =
+                list(self.main_list_state.clone(), move |ix, _window, cx| {
+                    // Access entity state inside the closure
+                    entity.update(cx, |this, cx| {
+                        let current_selected = this.selected_index;
+                        let current_hovered = this.hovered_index;
 
-                    if let Some(grouped_item) = grouped_items_clone.get(ix) {
-                        match grouped_item {
-                            GroupedListItem::SectionHeader(label) => {
-                                // Section header at 24px height (SECTION_HEADER_HEIGHT)
-                                div()
-                                    .id(ElementId::NamedInteger("section-header".into(), ix as u64))
-                                    .h(px(SECTION_HEADER_HEIGHT))
-                                    .child(render_section_header(label, theme_colors))
-                                    .into_any_element()
-                            }
-                            GroupedListItem::Item(result_idx) => {
-                                // Regular item at 48px height (LIST_ITEM_HEIGHT)
-                                if let Some(result) = flat_results_clone.get(*result_idx) {
-                                    let is_selected = ix == current_selected;
-                                    let is_hovered = current_hovered == Some(ix);
-
-                                    // Create hover handler
-                                    let hover_handler = cx.listener(move |this: &mut ScriptListApp, hovered: &bool, _window, cx| {
-                                        let now = std::time::Instant::now();
-                                        const HOVER_DEBOUNCE_MS: u64 = 16;
-
-                                        if *hovered {
-                                            // Mouse entered - set hovered_index with debounce
-                                            if this.hovered_index != Some(ix)
-                                                && now.duration_since(this.last_hover_notify).as_millis() >= HOVER_DEBOUNCE_MS as u128
-                                            {
-                                                this.hovered_index = Some(ix);
-                                                this.last_hover_notify = now;
-                                                cx.notify();
-                                            }
-                                        } else if this.hovered_index == Some(ix) {
-                                            // Mouse left - clear hovered_index if it was this item
-                                            this.hovered_index = None;
-                                            this.last_hover_notify = now;
-                                            cx.notify();
-                                        }
-                                    });
-
-                                    // Create click handler
-                                    let click_handler = cx.listener(move |this: &mut ScriptListApp, _event: &gpui::ClickEvent, _window, cx| {
-                                        if this.selected_index != ix {
-                                            this.selected_index = ix;
-                                            cx.notify();
-                                        }
-                                    });
-
-                                    // Dispatch to design-specific item renderer
-                                    let item_element = render_design_item(
-                                        current_design,
-                                        result,
-                                        ix,
-                                        is_selected,
-                                        is_hovered,
-                                        theme_colors,
-                                    );
-
+                        if let Some(grouped_item) = grouped_items_clone.get(ix) {
+                            match grouped_item {
+                                GroupedListItem::SectionHeader(label) => {
+                                    // Section header at 24px height (SECTION_HEADER_HEIGHT)
                                     div()
-                                        .id(ElementId::NamedInteger("script-item".into(), ix as u64))
-                                        .h(px(LIST_ITEM_HEIGHT)) // Explicit 48px height
-                                        .on_hover(hover_handler)
-                                        .on_click(click_handler)
-                                        .child(item_element)
+                                        .id(ElementId::NamedInteger(
+                                            "section-header".into(),
+                                            ix as u64,
+                                        ))
+                                        .h(px(SECTION_HEADER_HEIGHT))
+                                        .child(render_section_header(label, theme_colors))
                                         .into_any_element()
-                                } else {
-                                    // Fallback for missing result
-                                    div().h(px(LIST_ITEM_HEIGHT)).into_any_element()
+                                }
+                                GroupedListItem::Item(result_idx) => {
+                                    // Regular item at 48px height (LIST_ITEM_HEIGHT)
+                                    if let Some(result) = flat_results_clone.get(*result_idx) {
+                                        let is_selected = ix == current_selected;
+                                        let is_hovered = current_hovered == Some(ix);
+
+                                        // Create hover handler
+                                        let hover_handler = cx.listener(
+                                            move |this: &mut ScriptListApp,
+                                                  hovered: &bool,
+                                                  _window,
+                                                  cx| {
+                                                let now = std::time::Instant::now();
+                                                const HOVER_DEBOUNCE_MS: u64 = 16;
+
+                                                if *hovered {
+                                                    // Mouse entered - set hovered_index with debounce
+                                                    if this.hovered_index != Some(ix)
+                                                        && now
+                                                            .duration_since(this.last_hover_notify)
+                                                            .as_millis()
+                                                            >= HOVER_DEBOUNCE_MS as u128
+                                                    {
+                                                        this.hovered_index = Some(ix);
+                                                        this.last_hover_notify = now;
+                                                        cx.notify();
+                                                    }
+                                                } else if this.hovered_index == Some(ix) {
+                                                    // Mouse left - clear hovered_index if it was this item
+                                                    this.hovered_index = None;
+                                                    this.last_hover_notify = now;
+                                                    cx.notify();
+                                                }
+                                            },
+                                        );
+
+                                        // Create click handler
+                                        let click_handler = cx.listener(
+                                            move |this: &mut ScriptListApp,
+                                                  _event: &gpui::ClickEvent,
+                                                  _window,
+                                                  cx| {
+                                                if this.selected_index != ix {
+                                                    this.selected_index = ix;
+                                                    cx.notify();
+                                                }
+                                            },
+                                        );
+
+                                        // Dispatch to design-specific item renderer
+                                        let item_element = render_design_item(
+                                            current_design,
+                                            result,
+                                            ix,
+                                            is_selected,
+                                            is_hovered,
+                                            theme_colors,
+                                        );
+
+                                        div()
+                                            .id(ElementId::NamedInteger(
+                                                "script-item".into(),
+                                                ix as u64,
+                                            ))
+                                            .h(px(LIST_ITEM_HEIGHT)) // Explicit 48px height
+                                            .on_hover(hover_handler)
+                                            .on_click(click_handler)
+                                            .child(item_element)
+                                            .into_any_element()
+                                    } else {
+                                        // Fallback for missing result
+                                        div().h(px(LIST_ITEM_HEIGHT)).into_any_element()
+                                    }
                                 }
                             }
+                        } else {
+                            // Fallback for out-of-bounds index
+                            div().h(px(LIST_ITEM_HEIGHT)).into_any_element()
                         }
-                    } else {
-                        // Fallback for out-of-bounds index
-                        div().h(px(LIST_ITEM_HEIGHT)).into_any_element()
-                    }
+                    })
                 })
-            })
-            // Enable proper scroll handling for mouse wheel/trackpad
-            // ListSizingBehavior::Infer sets overflow.y = Overflow::Scroll internally
-            // which is required for the list's hitbox to capture scroll wheel events
-            .with_sizing_behavior(ListSizingBehavior::Infer)
-            .h_full();
+                // Enable proper scroll handling for mouse wheel/trackpad
+                // ListSizingBehavior::Infer sets overflow.y = Overflow::Scroll internally
+                // which is required for the list's hitbox to capture scroll wheel events
+                .with_sizing_behavior(ListSizingBehavior::Infer)
+                .h_full();
 
             // Wrap list in a relative container with scrollbar overlay
             div()
@@ -11969,24 +11990,22 @@ fn main() {
     // Server runs on localhost:43210 with Bearer token authentication
     // Discovery file written to ~/.kenv/server.json
     let _mcp_handle = match mcp_server::McpServer::with_defaults() {
-        Ok(server) => {
-            match server.start() {
-                Ok(handle) => {
-                    logging::log(
-                        "MCP",
-                        &format!(
-                            "MCP server started on {} (token in ~/.kenv/agent-token)",
-                            server.url()
-                        ),
-                    );
-                    Some(handle)
-                }
-                Err(e) => {
-                    logging::log("MCP", &format!("Failed to start MCP server: {}", e));
-                    None
-                }
+        Ok(server) => match server.start() {
+            Ok(handle) => {
+                logging::log(
+                    "MCP",
+                    &format!(
+                        "MCP server started on {} (token in ~/.kenv/agent-token)",
+                        server.url()
+                    ),
+                );
+                Some(handle)
             }
-        }
+            Err(e) => {
+                logging::log("MCP", &format!("Failed to start MCP server: {}", e));
+                None
+            }
+        },
         Err(e) => {
             logging::log("MCP", &format!("Failed to create MCP server: {}", e));
             None

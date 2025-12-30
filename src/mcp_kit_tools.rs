@@ -78,7 +78,7 @@ pub fn is_kit_tool(name: &str) -> bool {
 }
 
 /// Handle a kit/* namespace tool call
-/// 
+///
 /// Note: This returns a result that the caller should use to actually perform
 /// the window operations. The actual show/hide operations require GPUI context
 /// which is not available in this module.
@@ -131,7 +131,7 @@ mod tests {
     fn test_kit_show_tool_definition() {
         let tools = get_kit_tool_definitions();
         let show_tool = tools.iter().find(|t| t.name == "kit/show");
-        
+
         assert!(show_tool.is_some(), "kit/show tool should be defined");
         let tool = show_tool.unwrap();
         assert_eq!(tool.name, "kit/show");
@@ -144,7 +144,7 @@ mod tests {
     fn test_kit_hide_tool_definition() {
         let tools = get_kit_tool_definitions();
         let hide_tool = tools.iter().find(|t| t.name == "kit/hide");
-        
+
         assert!(hide_tool.is_some(), "kit/hide tool should be defined");
         let tool = hide_tool.unwrap();
         assert_eq!(tool.name, "kit/hide");
@@ -157,7 +157,7 @@ mod tests {
     fn test_kit_state_tool_definition() {
         let tools = get_kit_tool_definitions();
         let state_tool = tools.iter().find(|t| t.name == "kit/state");
-        
+
         assert!(state_tool.is_some(), "kit/state tool should be defined");
         let tool = state_tool.unwrap();
         assert_eq!(tool.name, "kit/state");
@@ -169,9 +169,9 @@ mod tests {
     #[test]
     fn test_tools_list_includes_kit_tools() {
         let tools = get_kit_tool_definitions();
-        
+
         assert_eq!(tools.len(), 3, "Should have exactly 3 kit tools");
-        
+
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(tool_names.contains(&"kit/show"));
         assert!(tool_names.contains(&"kit/hide"));
@@ -181,7 +181,7 @@ mod tests {
     #[test]
     fn test_kit_show_call_succeeds() {
         let result = handle_kit_tool_call("kit/show", &serde_json::json!({}));
-        
+
         assert!(result.is_error.is_none() || result.is_error == Some(false));
         assert!(!result.content.is_empty());
         assert_eq!(result.content[0].content_type, "text");
@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn test_kit_hide_call_succeeds() {
         let result = handle_kit_tool_call("kit/hide", &serde_json::json!({}));
-        
+
         assert!(result.is_error.is_none() || result.is_error == Some(false));
         assert!(!result.content.is_empty());
         assert_eq!(result.content[0].content_type, "text");
@@ -201,15 +201,15 @@ mod tests {
     #[test]
     fn test_kit_state_returns_json() {
         let result = handle_kit_tool_call("kit/state", &serde_json::json!({}));
-        
+
         assert!(result.is_error.is_none() || result.is_error == Some(false));
         assert!(!result.content.is_empty());
         assert_eq!(result.content[0].content_type, "text");
-        
+
         // Verify the result is valid JSON with expected fields
         let state: Result<AppState, _> = serde_json::from_str(&result.content[0].text);
         assert!(state.is_ok(), "kit/state should return valid JSON");
-        
+
         let state = state.unwrap();
         // Default state should have visible=false, focused=false
         assert!(!state.visible);
@@ -222,7 +222,7 @@ mod tests {
         assert!(is_kit_tool("kit/hide"));
         assert!(is_kit_tool("kit/state"));
         assert!(is_kit_tool("kit/custom"));
-        
+
         assert!(!is_kit_tool("scripts/run"));
         assert!(!is_kit_tool("resources/list"));
         assert!(!is_kit_tool("kitshow")); // No slash
@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn test_unknown_kit_tool_returns_error() {
         let result = handle_kit_tool_call("kit/unknown", &serde_json::json!({}));
-        
+
         assert_eq!(result.is_error, Some(true));
         assert!(!result.content.is_empty());
         assert!(result.content[0].text.contains("Unknown kit tool"));
@@ -241,12 +241,12 @@ mod tests {
     fn test_tool_definition_serialization() {
         let tools = get_kit_tool_definitions();
         let json = serde_json::to_value(&tools);
-        
+
         assert!(json.is_ok(), "Tool definitions should serialize to JSON");
-        
+
         let json = json.unwrap();
         assert!(json.is_array());
-        
+
         // Check the first tool has expected structure
         let first_tool = &json[0];
         assert!(first_tool.get("name").is_some());
@@ -261,14 +261,17 @@ mod tests {
             focused: true,
             active_prompt: Some("arg".to_string()),
         };
-        
+
         let json = serde_json::to_value(&state);
         assert!(json.is_ok());
-        
+
         let json = json.unwrap();
         assert_eq!(json.get("visible").and_then(|v| v.as_bool()), Some(true));
         assert_eq!(json.get("focused").and_then(|v| v.as_bool()), Some(true));
-        assert_eq!(json.get("activePrompt").and_then(|v| v.as_str()), Some("arg"));
+        assert_eq!(
+            json.get("activePrompt").and_then(|v| v.as_str()),
+            Some("arg")
+        );
     }
 
     #[test]
@@ -280,10 +283,10 @@ mod tests {
             }],
             is_error: None,
         };
-        
+
         let json = serde_json::to_string(&result);
         assert!(json.is_ok());
-        
+
         let json = json.unwrap();
         // is_error should be omitted when None
         assert!(!json.contains("isError"));

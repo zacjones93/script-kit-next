@@ -301,7 +301,9 @@ pub fn handle_request_with_context(
         Some(McpMethod::ToolsList) => handle_tools_list_with_scripts(request, scripts),
         Some(McpMethod::ToolsCall) => handle_tools_call_with_scripts(request, scripts),
         Some(McpMethod::ResourcesList) => handle_resources_list(request),
-        Some(McpMethod::ResourcesRead) => handle_resources_read_with_context(request, scripts, scriptlets, app_state),
+        Some(McpMethod::ResourcesRead) => {
+            handle_resources_read_with_context(request, scripts, scriptlets, app_state)
+        }
         None => JsonRpcResponse::error(
             request.id,
             error_codes::METHOD_NOT_FOUND,
@@ -343,17 +345,20 @@ fn handle_tools_list(request: JsonRpcRequest) -> JsonRpcResponse {
 
 /// Handle tools/list request with script context
 /// This allows including dynamically loaded script tools
-pub fn handle_tools_list_with_scripts(request: JsonRpcRequest, scripts: &[Script]) -> JsonRpcResponse {
+pub fn handle_tools_list_with_scripts(
+    request: JsonRpcRequest,
+    scripts: &[Script],
+) -> JsonRpcResponse {
     // Get kit/* namespace tools
     let mut all_tools = mcp_kit_tools::get_kit_tool_definitions();
-    
+
     // Get scripts/* namespace tools (only scripts with schema.input)
     let script_tools = mcp_script_tools::get_script_tool_definitions(scripts);
     all_tools.extend(script_tools);
-    
+
     // Convert to JSON value
     let tools_json = serde_json::to_value(&all_tools).unwrap_or(serde_json::json!([]));
-    
+
     JsonRpcResponse::success(
         request.id,
         serde_json::json!({
@@ -371,7 +376,10 @@ fn handle_tools_call(request: JsonRpcRequest) -> JsonRpcResponse {
 
 /// Handle tools/call request with script context
 /// This allows handling scripts/* namespace tool calls
-pub fn handle_tools_call_with_scripts(request: JsonRpcRequest, scripts: &[Script]) -> JsonRpcResponse {
+pub fn handle_tools_call_with_scripts(
+    request: JsonRpcRequest,
+    scripts: &[Script],
+) -> JsonRpcResponse {
     // Validate params
     let params = request.params.as_object();
     if params.is_none() {
@@ -394,7 +402,10 @@ pub fn handle_tools_call_with_scripts(request: JsonRpcRequest, scripts: &[Script
     }
 
     let tool_name = tool_name.unwrap();
-    let arguments = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+    let arguments = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
 
     // Route kit/* namespace tools
     if mcp_kit_tools::is_kit_tool(tool_name) {
@@ -466,22 +477,14 @@ fn handle_resources_read_with_context(
     }
 
     let uri = uri.unwrap();
-    
+
     // Read the resource
     match mcp_resources::read_resource(uri, scripts, scriptlets, app_state) {
-        Ok(content) => {
-            JsonRpcResponse::success(
-                request.id,
-                mcp_resources::resource_content_to_value(content),
-            )
-        }
-        Err(err) => {
-            JsonRpcResponse::error(
-                request.id,
-                error_codes::METHOD_NOT_FOUND,
-                err,
-            )
-        }
+        Ok(content) => JsonRpcResponse::success(
+            request.id,
+            mcp_resources::resource_content_to_value(content),
+        ),
+        Err(err) => JsonRpcResponse::error(request.id, error_codes::METHOD_NOT_FOUND, err),
     }
 }
 
@@ -615,19 +618,23 @@ mod tests {
         let result = response.result.unwrap();
         let tools = result.get("tools").and_then(|v| v.as_array());
         assert!(tools.is_some());
-        
+
         let tools = tools.unwrap();
         // Should have at least the kit/* tools
         assert!(!tools.is_empty(), "tools/list should return kit tools");
-        
+
         // Verify kit tools are present
-        let tool_names: Vec<&str> = tools.iter()
+        let tool_names: Vec<&str> = tools
+            .iter()
             .filter_map(|t| t.get("name").and_then(|n| n.as_str()))
             .collect();
-        
+
         assert!(tool_names.contains(&"kit/show"), "Should include kit/show");
         assert!(tool_names.contains(&"kit/hide"), "Should include kit/hide");
-        assert!(tool_names.contains(&"kit/state"), "Should include kit/state");
+        assert!(
+            tool_names.contains(&"kit/state"),
+            "Should include kit/state"
+        );
     }
 
     #[test]
@@ -648,18 +655,22 @@ mod tests {
         let result = response.result.unwrap();
         let resources = result.get("resources").and_then(|v| v.as_array());
         assert!(resources.is_some());
-        
+
         let resources = resources.unwrap();
         assert_eq!(resources.len(), 3, "Should have 3 resources");
-        
+
         // Verify expected resources are present
-        let uris: Vec<&str> = resources.iter()
+        let uris: Vec<&str> = resources
+            .iter()
             .filter_map(|r| r.get("uri").and_then(|u| u.as_str()))
             .collect();
-        
+
         assert!(uris.contains(&"kit://state"), "Should include kit://state");
         assert!(uris.contains(&"scripts://"), "Should include scripts://");
-        assert!(uris.contains(&"scriptlets://"), "Should include scriptlets://");
+        assert!(
+            uris.contains(&"scriptlets://"),
+            "Should include scriptlets://"
+        );
     }
 
     // =======================================================
@@ -848,7 +859,7 @@ mod tests {
         // Should succeed (not return an error)
         assert!(response.error.is_none(), "kit/show call should succeed");
         assert!(response.result.is_some());
-        
+
         let result = response.result.unwrap();
         // Should have content array
         assert!(result.get("content").is_some());
@@ -870,7 +881,7 @@ mod tests {
 
         assert!(response.error.is_none(), "kit/hide call should succeed");
         assert!(response.result.is_some());
-        
+
         let result = response.result.unwrap();
         assert!(result.get("content").is_some());
     }
@@ -891,24 +902,24 @@ mod tests {
 
         assert!(response.error.is_none(), "kit/state call should succeed");
         assert!(response.result.is_some());
-        
+
         let result = response.result.unwrap();
         assert!(result.get("content").is_some());
-        
+
         // Verify the content is valid JSON with state fields
         let content = result.get("content").and_then(|c| c.as_array());
         assert!(content.is_some());
-        
+
         let content = content.unwrap();
         assert!(!content.is_empty());
-        
+
         let text = content[0].get("text").and_then(|t| t.as_str());
         assert!(text.is_some());
-        
+
         // Should be parseable as AppState JSON
         let state: Result<serde_json::Value, _> = serde_json::from_str(text.unwrap());
         assert!(state.is_ok(), "kit/state should return valid JSON");
-        
+
         let state = state.unwrap();
         assert!(state.get("visible").is_some());
         assert!(state.get("focused").is_some());
@@ -929,9 +940,12 @@ mod tests {
         let response = handle_request(request);
 
         // Should succeed but with isError flag in result
-        assert!(response.error.is_none(), "Should return result, not protocol error");
+        assert!(
+            response.error.is_none(),
+            "Should return result, not protocol error"
+        );
         assert!(response.result.is_some());
-        
+
         let result = response.result.unwrap();
         // isError should be true for unknown kit tools
         assert_eq!(result.get("isError").and_then(|e| e.as_bool()), Some(true));
@@ -953,9 +967,12 @@ mod tests {
 
         // scripts/* tools now go through script handler which returns isError: true
         // instead of a protocol error, because it's a valid namespace
-        assert!(response.error.is_none(), "Should return result, not protocol error");
+        assert!(
+            response.error.is_none(),
+            "Should return result, not protocol error"
+        );
         assert!(response.result.is_some());
-        
+
         let result = response.result.unwrap();
         assert_eq!(result.get("isError").and_then(|e| e.as_bool()), Some(true));
     }
@@ -1011,7 +1028,10 @@ mod tests {
 
             Script {
                 name: name.to_string(),
-                path: PathBuf::from(format!("/test/{}.ts", name.to_lowercase().replace(' ', "-"))),
+                path: PathBuf::from(format!(
+                    "/test/{}.ts",
+                    name.to_lowercase().replace(' ', "-")
+                )),
                 extension: "ts".to_string(),
                 description: description.map(|s| s.to_string()),
                 icon: None,
@@ -1065,7 +1085,10 @@ mod tests {
 
         #[test]
         fn test_tools_list_script_tool_has_correct_schema() {
-            let scripts = vec![test_script_with_schema("Test Script", Some("Test description"))];
+            let scripts = vec![test_script_with_schema(
+                "Test Script",
+                Some("Test description"),
+            )];
 
             let request = JsonRpcRequest {
                 jsonrpc: "2.0".to_string(),
@@ -1101,7 +1124,10 @@ mod tests {
 
         #[test]
         fn test_tools_call_script_tool() {
-            let scripts = vec![test_script_with_schema("Create Note", Some("Creates notes"))];
+            let scripts = vec![test_script_with_schema(
+                "Create Note",
+                Some("Creates notes"),
+            )];
 
             let request = JsonRpcRequest {
                 jsonrpc: "2.0".to_string(),
@@ -1176,7 +1202,10 @@ mod tests {
                 .iter()
                 .filter(|n| n.starts_with("scripts/"))
                 .collect();
-            assert!(script_tools.is_empty(), "No script tools when scripts list is empty");
+            assert!(
+                script_tools.is_empty(),
+                "No script tools when scripts list is empty"
+            );
         }
 
         #[test]
@@ -1239,7 +1268,10 @@ mod tests {
         fn test_script(name: &str, description: Option<&str>) -> Script {
             Script {
                 name: name.to_string(),
-                path: PathBuf::from(format!("/test/{}.ts", name.to_lowercase().replace(' ', "-"))),
+                path: PathBuf::from(format!(
+                    "/test/{}.ts",
+                    name.to_lowercase().replace(' ', "-")
+                )),
                 extension: "ts".to_string(),
                 description: description.map(|s| s.to_string()),
                 icon: None,
@@ -1281,20 +1313,23 @@ mod tests {
             };
 
             let response = handle_request_with_context(request, &scripts, &[], None);
-            
+
             assert!(response.error.is_none(), "Should succeed");
             assert!(response.result.is_some());
-            
+
             let result = response.result.unwrap();
             let contents = result.get("contents").and_then(|c| c.as_array());
             assert!(contents.is_some());
-            
+
             let contents = contents.unwrap();
             assert_eq!(contents.len(), 1);
-            
+
             let content = &contents[0];
-            assert_eq!(content.get("uri").and_then(|u| u.as_str()), Some("scripts://"));
-            
+            assert_eq!(
+                content.get("uri").and_then(|u| u.as_str()),
+                Some("scripts://")
+            );
+
             // Parse the text as JSON
             let text = content.get("text").and_then(|t| t.as_str()).unwrap();
             let parsed: Vec<serde_json::Value> = serde_json::from_str(text).unwrap();
@@ -1316,9 +1351,9 @@ mod tests {
             };
 
             let response = handle_request_with_context(request, &[], &scriptlets, None);
-            
+
             assert!(response.error.is_none(), "Should succeed");
-            
+
             let result = response.result.unwrap();
             let contents = result.get("contents").and_then(|c| c.as_array()).unwrap();
             let text = contents[0].get("text").and_then(|t| t.as_str()).unwrap();
@@ -1345,14 +1380,14 @@ mod tests {
             };
 
             let response = handle_request_with_context(request, &[], &[], Some(&app_state));
-            
+
             assert!(response.error.is_none(), "Should succeed");
-            
+
             let result = response.result.unwrap();
             let contents = result.get("contents").and_then(|c| c.as_array()).unwrap();
             let text = contents[0].get("text").and_then(|t| t.as_str()).unwrap();
             let parsed: mcp_resources::AppStateResource = serde_json::from_str(text).unwrap();
-            
+
             assert!(parsed.visible);
             assert!(parsed.focused);
             assert_eq!(parsed.script_count, 5);
@@ -1370,13 +1405,21 @@ mod tests {
             };
 
             let response = handle_request_with_context(request, &[], &[], None);
-            
-            assert!(response.error.is_some(), "Unknown resource should return error");
+
+            assert!(
+                response.error.is_some(),
+                "Unknown resource should return error"
+            );
             assert_eq!(
                 response.error.as_ref().unwrap().code,
                 error_codes::METHOD_NOT_FOUND
             );
-            assert!(response.error.as_ref().unwrap().message.contains("Resource not found"));
+            assert!(response
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("Resource not found"));
         }
 
         #[test]
@@ -1401,10 +1444,9 @@ mod tests {
                     params: serde_json::json!({"uri": uri}),
                 };
 
-                let response = handle_request_with_context(
-                    request, &scripts, &scriptlets, Some(&app_state)
-                );
-                
+                let response =
+                    handle_request_with_context(request, &scripts, &scriptlets, Some(&app_state));
+
                 assert!(response.error.is_none(), "Should succeed for {}", uri);
                 assert!(response.result.is_some());
             }

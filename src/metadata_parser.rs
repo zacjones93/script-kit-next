@@ -88,17 +88,17 @@ pub fn extract_typed_metadata(content: &str) -> MetadataParseResult {
 
     // Find `metadata = ` or `metadata=` pattern
     let metadata_pattern = find_metadata_assignment(content);
-    
+
     if let Some((start_idx, obj_start)) = metadata_pattern {
         // Extract the object literal
         match extract_object_literal(content, obj_start) {
             Ok((json_str, end_idx)) => {
                 result.span = Some((start_idx, end_idx));
-                
+
                 // Parse as JSON (JavaScript object literals are mostly JSON-compatible)
                 // We do minimal preprocessing to handle JS-specific syntax
                 let normalized = normalize_js_object(&json_str);
-                
+
                 match serde_json::from_str::<TypedMetadata>(&normalized) {
                     Ok(metadata) => {
                         debug!(
@@ -109,7 +109,9 @@ pub fn extract_typed_metadata(content: &str) -> MetadataParseResult {
                         result.metadata = Some(metadata);
                     }
                     Err(e) => {
-                        result.errors.push(format!("Failed to parse metadata JSON: {}", e));
+                        result
+                            .errors
+                            .push(format!("Failed to parse metadata JSON: {}", e));
                     }
                 }
             }
@@ -127,13 +129,13 @@ pub fn extract_typed_metadata(content: &str) -> MetadataParseResult {
 fn find_metadata_assignment(content: &str) -> Option<(usize, usize)> {
     // Look for `metadata` followed by optional whitespace and `=`
     let patterns = ["metadata=", "metadata =", "metadata  ="];
-    
+
     for pattern in patterns {
         if let Some(idx) = content.find(pattern) {
             // Find the `{` after `=`
             let after_eq = idx + pattern.len();
             let rest = &content[after_eq..];
-            
+
             // Skip whitespace to find `{`
             for (i, c) in rest.char_indices() {
                 if c == '{' {
@@ -145,7 +147,7 @@ fn find_metadata_assignment(content: &str) -> Option<(usize, usize)> {
             }
         }
     }
-    
+
     None
 }
 
@@ -164,7 +166,7 @@ fn extract_object_literal(content: &str, start: usize) -> Result<(String, usize)
 
     for (i, &byte) in bytes[start..].iter().enumerate() {
         let c = byte as char;
-        
+
         if escape_next {
             escape_next = false;
             continue;
@@ -278,16 +280,20 @@ fn normalize_js_object(js: &str) -> String {
         if c.is_alphabetic() || c == '_' || c == '$' {
             // Check if this looks like an unquoted key
             let mut key_end = i;
-            while key_end < len && (chars[key_end].is_alphanumeric() || chars[key_end] == '_' || chars[key_end] == '$') {
+            while key_end < len
+                && (chars[key_end].is_alphanumeric()
+                    || chars[key_end] == '_'
+                    || chars[key_end] == '$')
+            {
                 key_end += 1;
             }
-            
+
             // Skip whitespace after key
             let mut colon_pos = key_end;
             while colon_pos < len && chars[colon_pos].is_whitespace() {
                 colon_pos += 1;
             }
-            
+
             // If followed by colon, it's an unquoted key
             if colon_pos < len && chars[colon_pos] == ':' {
                 let key: String = chars[i..key_end].iter().collect();
@@ -350,9 +356,12 @@ metadata = {
         let result = extract_typed_metadata(content);
         assert!(result.errors.is_empty(), "Errors: {:?}", result.errors);
         let meta = result.metadata.unwrap();
-        
+
         assert_eq!(meta.name, Some("Full Script".to_string()));
-        assert_eq!(meta.description, Some("A script with all fields".to_string()));
+        assert_eq!(
+            meta.description,
+            Some("A script with all fields".to_string())
+        );
         assert_eq!(meta.author, Some("John Doe".to_string()));
         assert_eq!(meta.enter, Some("Execute".to_string()));
         assert_eq!(meta.alias, Some("fs".to_string()));
@@ -480,7 +489,7 @@ metadata = {
         let content = r#"metadata = { name: "Minimal" }"#;
         let result = extract_typed_metadata(content);
         let meta = result.metadata.unwrap();
-        
+
         assert_eq!(meta.name, Some("Minimal".to_string()));
         assert_eq!(meta.description, None);
         assert_eq!(meta.tags, Vec::<String>::new());

@@ -127,7 +127,10 @@ pub fn get_resource_definitions() -> Vec<McpResource> {
         McpResource {
             uri: "kit://state".to_string(),
             name: "App State".to_string(),
-            description: Some("Current Script Kit application state including visibility, focus, and counts".to_string()),
+            description: Some(
+                "Current Script Kit application state including visibility, focus, and counts"
+                    .to_string(),
+            ),
             mime_type: "application/json".to_string(),
         },
         McpResource {
@@ -146,13 +149,13 @@ pub fn get_resource_definitions() -> Vec<McpResource> {
 }
 
 /// Read a specific resource by URI
-/// 
+///
 /// # Arguments
 /// * `uri` - The resource URI to read
 /// * `scripts` - Available scripts for scripts:// resource
 /// * `scriptlets` - Available scriptlets for scriptlets:// resource
 /// * `app_state` - Current app state for kit://state resource
-/// 
+///
 /// # Returns
 /// * `Ok(ResourceContent)` - The resource content
 /// * `Err(String)` - Error message if resource not found
@@ -175,7 +178,7 @@ fn read_state_resource(app_state: Option<&AppStateResource>) -> Result<ResourceC
     let state = app_state.cloned().unwrap_or_default();
     let json = serde_json::to_string_pretty(&state)
         .map_err(|e| format!("Failed to serialize app state: {}", e))?;
-    
+
     Ok(ResourceContent {
         uri: "kit://state".to_string(),
         mime_type: "application/json".to_string(),
@@ -188,7 +191,7 @@ fn read_scripts_resource(scripts: &[Script]) -> Result<ResourceContent, String> 
     let entries: Vec<ScriptResourceEntry> = scripts.iter().map(ScriptResourceEntry::from).collect();
     let json = serde_json::to_string_pretty(&entries)
         .map_err(|e| format!("Failed to serialize scripts: {}", e))?;
-    
+
     Ok(ResourceContent {
         uri: "scripts://".to_string(),
         mime_type: "application/json".to_string(),
@@ -198,10 +201,13 @@ fn read_scripts_resource(scripts: &[Script]) -> Result<ResourceContent, String> 
 
 /// Read scriptlets:// resource
 fn read_scriptlets_resource(scriptlets: &[Scriptlet]) -> Result<ResourceContent, String> {
-    let entries: Vec<ScriptletResourceEntry> = scriptlets.iter().map(ScriptletResourceEntry::from).collect();
+    let entries: Vec<ScriptletResourceEntry> = scriptlets
+        .iter()
+        .map(ScriptletResourceEntry::from)
+        .collect();
     let json = serde_json::to_string_pretty(&entries)
         .map_err(|e| format!("Failed to serialize scriptlets: {}", e))?;
-    
+
     Ok(ResourceContent {
         uri: "scriptlets://".to_string(),
         mime_type: "application/json".to_string(),
@@ -224,7 +230,8 @@ pub fn resource_content_to_value(content: ResourceContent) -> Value {
 pub fn resource_list_to_value(resources: &[McpResource]) -> Value {
     serde_json::to_value(serde_json::json!({
         "resources": resources
-    })).unwrap_or(serde_json::json!({"resources": []}))
+    }))
+    .unwrap_or(serde_json::json!({"resources": []}))
 }
 
 #[cfg(test)]
@@ -240,7 +247,10 @@ mod tests {
     fn test_script(name: &str, description: Option<&str>) -> Script {
         Script {
             name: name.to_string(),
-            path: PathBuf::from(format!("/test/{}.ts", name.to_lowercase().replace(' ', "-"))),
+            path: PathBuf::from(format!(
+                "/test/{}.ts",
+                name.to_lowercase().replace(' ', "-")
+            )),
             extension: "ts".to_string(),
             description: description.map(|s| s.to_string()),
             icon: None,
@@ -271,18 +281,24 @@ mod tests {
     fn test_resources_list_includes_all() {
         // REQUIREMENT: resources/list returns all three resources
         let resources = get_resource_definitions();
-        
+
         assert_eq!(resources.len(), 3, "Should have exactly 3 resources");
-        
+
         let uris: Vec<&str> = resources.iter().map(|r| r.uri.as_str()).collect();
         assert!(uris.contains(&"kit://state"), "Should include kit://state");
         assert!(uris.contains(&"scripts://"), "Should include scripts://");
-        assert!(uris.contains(&"scriptlets://"), "Should include scriptlets://");
-        
+        assert!(
+            uris.contains(&"scriptlets://"),
+            "Should include scriptlets://"
+        );
+
         // Verify all have required fields
         for resource in &resources {
             assert!(!resource.name.is_empty(), "Resource should have a name");
-            assert_eq!(resource.mime_type, "application/json", "Should be JSON mime type");
+            assert_eq!(
+                resource.mime_type, "application/json",
+                "Should be JSON mime type"
+            );
             assert!(resource.description.is_some(), "Should have a description");
         }
     }
@@ -294,18 +310,18 @@ mod tests {
             test_script("My Script", Some("Does something")),
             test_script("Another Script", None),
         ];
-        
+
         let result = read_resource("scripts://", &scripts, &[], None);
         assert!(result.is_ok(), "Should successfully read scripts resource");
-        
+
         let content = result.unwrap();
         assert_eq!(content.uri, "scripts://");
         assert_eq!(content.mime_type, "application/json");
-        
+
         // Parse the JSON and verify structure
-        let parsed: Vec<ScriptResourceEntry> = serde_json::from_str(&content.text)
-            .expect("Should be valid JSON array");
-        
+        let parsed: Vec<ScriptResourceEntry> =
+            serde_json::from_str(&content.text).expect("Should be valid JSON array");
+
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].name, "My Script");
         assert_eq!(parsed[0].description, Some("Does something".to_string()));
@@ -320,18 +336,21 @@ mod tests {
             test_scriptlet("Open URL", "open", Some("Opens a URL")),
             test_scriptlet("Paste Text", "paste", None),
         ];
-        
+
         let result = read_resource("scriptlets://", &[], &scriptlets, None);
-        assert!(result.is_ok(), "Should successfully read scriptlets resource");
-        
+        assert!(
+            result.is_ok(),
+            "Should successfully read scriptlets resource"
+        );
+
         let content = result.unwrap();
         assert_eq!(content.uri, "scriptlets://");
         assert_eq!(content.mime_type, "application/json");
-        
+
         // Parse the JSON and verify structure
-        let parsed: Vec<ScriptletResourceEntry> = serde_json::from_str(&content.text)
-            .expect("Should be valid JSON array");
-        
+        let parsed: Vec<ScriptletResourceEntry> =
+            serde_json::from_str(&content.text).expect("Should be valid JSON array");
+
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].name, "Open URL");
         assert_eq!(parsed[0].tool, "open");
@@ -351,18 +370,18 @@ mod tests {
             filter_text: Some("test".to_string()),
             selected_index: Some(3),
         };
-        
+
         let result = read_resource("kit://state", &[], &[], Some(&app_state));
         assert!(result.is_ok(), "Should successfully read state resource");
-        
+
         let content = result.unwrap();
         assert_eq!(content.uri, "kit://state");
         assert_eq!(content.mime_type, "application/json");
-        
+
         // Parse and verify
-        let parsed: AppStateResource = serde_json::from_str(&content.text)
-            .expect("Should be valid JSON");
-        
+        let parsed: AppStateResource =
+            serde_json::from_str(&content.text).expect("Should be valid JSON");
+
         assert!(parsed.visible);
         assert!(parsed.focused);
         assert_eq!(parsed.script_count, 10);
@@ -376,10 +395,10 @@ mod tests {
         // When no app state is provided, should return defaults
         let result = read_resource("kit://state", &[], &[], None);
         assert!(result.is_ok());
-        
+
         let content = result.unwrap();
         let parsed: AppStateResource = serde_json::from_str(&content.text).unwrap();
-        
+
         assert!(!parsed.visible);
         assert!(!parsed.focused);
         assert_eq!(parsed.script_count, 0);
@@ -392,11 +411,17 @@ mod tests {
     fn test_unknown_resource_returns_error() {
         // REQUIREMENT: Unknown URI returns error
         let result = read_resource("unknown://resource", &[], &[], None);
-        
+
         assert!(result.is_err(), "Unknown resource should return error");
         let error = result.unwrap_err();
-        assert!(error.contains("Resource not found"), "Error should mention resource not found");
-        assert!(error.contains("unknown://resource"), "Error should include the URI");
+        assert!(
+            error.contains("Resource not found"),
+            "Error should mention resource not found"
+        );
+        assert!(
+            error.contains("unknown://resource"),
+            "Error should include the URI"
+        );
     }
 
     #[test]
@@ -406,33 +431,39 @@ mod tests {
             mime_type: "application/json".to_string(),
             text: r#"{"foo":"bar"}"#.to_string(),
         };
-        
+
         let value = resource_content_to_value(content);
-        
+
         // Should have contents array
         let contents = value.get("contents").and_then(|c| c.as_array());
         assert!(contents.is_some());
-        
+
         let contents = contents.unwrap();
         assert_eq!(contents.len(), 1);
-        
+
         let first = &contents[0];
-        assert_eq!(first.get("uri").and_then(|u| u.as_str()), Some("test://uri"));
-        assert_eq!(first.get("mimeType").and_then(|m| m.as_str()), Some("application/json"));
+        assert_eq!(
+            first.get("uri").and_then(|u| u.as_str()),
+            Some("test://uri")
+        );
+        assert_eq!(
+            first.get("mimeType").and_then(|m| m.as_str()),
+            Some("application/json")
+        );
     }
 
     #[test]
     fn test_resource_list_to_value() {
         let resources = get_resource_definitions();
         let value = resource_list_to_value(&resources);
-        
+
         // Should have resources array
         let resource_array = value.get("resources").and_then(|r| r.as_array());
         assert!(resource_array.is_some());
-        
+
         let resource_array = resource_array.unwrap();
         assert_eq!(resource_array.len(), 3);
-        
+
         // First resource should have expected fields
         let first = &resource_array[0];
         assert!(first.get("uri").is_some());
@@ -446,22 +477,25 @@ mod tests {
 
     #[test]
     fn test_script_resource_entry_from_script() {
-        use crate::schema_parser::{Schema, FieldDef, FieldType};
+        use crate::schema_parser::{FieldDef, FieldType, Schema};
         use std::collections::HashMap;
-        
+
         // Script without schema
         let script_no_schema = test_script("No Schema", Some("Test"));
         let entry: ScriptResourceEntry = (&script_no_schema).into();
         assert!(!entry.has_schema);
-        
+
         // Script with schema
         let mut input = HashMap::new();
-        input.insert("name".to_string(), FieldDef {
-            field_type: FieldType::String,
-            required: true,
-            ..Default::default()
-        });
-        
+        input.insert(
+            "name".to_string(),
+            FieldDef {
+                field_type: FieldType::String,
+                required: true,
+                ..Default::default()
+            },
+        );
+
         let script_with_schema = Script {
             name: "With Schema".to_string(),
             path: PathBuf::from("/test/with-schema.ts"),
@@ -476,7 +510,7 @@ mod tests {
                 output: HashMap::new(),
             }),
         };
-        
+
         let entry: ScriptResourceEntry = (&script_with_schema).into();
         assert!(entry.has_schema);
     }
@@ -495,9 +529,9 @@ mod tests {
             command: None,
             alias: None,
         };
-        
+
         let entry: ScriptletResourceEntry = (&scriptlet).into();
-        
+
         assert_eq!(entry.name, "Full Scriptlet");
         assert_eq!(entry.description, Some("Test description".to_string()));
         assert_eq!(entry.tool, "bash");
@@ -514,13 +548,13 @@ mod tests {
             description: Some("Test description".to_string()),
             mime_type: "application/json".to_string(),
         };
-        
+
         let json = serde_json::to_string(&resource).unwrap();
-        
+
         // Should have mimeType (camelCase)
         assert!(json.contains("\"mimeType\""));
         assert!(!json.contains("\"mime_type\""));
-        
+
         // Deserialize back
         let parsed: McpResource = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.uri, "test://");
@@ -531,7 +565,7 @@ mod tests {
     fn test_empty_scripts_resource() {
         let result = read_resource("scripts://", &[], &[], None);
         assert!(result.is_ok());
-        
+
         let content = result.unwrap();
         let parsed: Vec<ScriptResourceEntry> = serde_json::from_str(&content.text).unwrap();
         assert!(parsed.is_empty());
@@ -541,7 +575,7 @@ mod tests {
     fn test_empty_scriptlets_resource() {
         let result = read_resource("scriptlets://", &[], &[], None);
         assert!(result.is_ok());
-        
+
         let content = result.unwrap();
         let parsed: Vec<ScriptletResourceEntry> = serde_json::from_str(&content.text).unwrap();
         assert!(parsed.is_empty());

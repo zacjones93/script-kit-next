@@ -62,41 +62,41 @@ pub struct CodeBlock {
 /// `CodefenceParseResult` with parsed metadata, schema, code, and any errors
 pub fn parse_codefence_metadata(content: &str) -> CodefenceParseResult {
     let mut result = CodefenceParseResult::default();
-    
+
     let blocks = extract_all_codefence_blocks(content);
-    
+
     for (language, block_content) in blocks {
         match language.as_str() {
-            "metadata" => {
-                match serde_json::from_str::<TypedMetadata>(&block_content) {
-                    Ok(metadata) => {
-                        debug!(
-                            name = ?metadata.name,
-                            description = ?metadata.description,
-                            "Parsed codefence metadata"
-                        );
-                        result.metadata = Some(metadata);
-                    }
-                    Err(e) => {
-                        result.errors.push(format!("Failed to parse metadata JSON: {}", e));
-                    }
+            "metadata" => match serde_json::from_str::<TypedMetadata>(&block_content) {
+                Ok(metadata) => {
+                    debug!(
+                        name = ?metadata.name,
+                        description = ?metadata.description,
+                        "Parsed codefence metadata"
+                    );
+                    result.metadata = Some(metadata);
                 }
-            }
-            "schema" => {
-                match serde_json::from_str::<Schema>(&block_content) {
-                    Ok(schema) => {
-                        debug!(
-                            input_fields = schema.input.len(),
-                            output_fields = schema.output.len(),
-                            "Parsed codefence schema"
-                        );
-                        result.schema = Some(schema);
-                    }
-                    Err(e) => {
-                        result.errors.push(format!("Failed to parse schema JSON: {}", e));
-                    }
+                Err(e) => {
+                    result
+                        .errors
+                        .push(format!("Failed to parse metadata JSON: {}", e));
                 }
-            }
+            },
+            "schema" => match serde_json::from_str::<Schema>(&block_content) {
+                Ok(schema) => {
+                    debug!(
+                        input_fields = schema.input.len(),
+                        output_fields = schema.output.len(),
+                        "Parsed codefence schema"
+                    );
+                    result.schema = Some(schema);
+                }
+                Err(e) => {
+                    result
+                        .errors
+                        .push(format!("Failed to parse schema JSON: {}", e));
+                }
+            },
             // Skip empty language specifier
             "" => {}
             // Any other language is treated as code
@@ -111,7 +111,7 @@ pub fn parse_codefence_metadata(content: &str) -> CodefenceParseResult {
             }
         }
     }
-    
+
     result
 }
 
@@ -120,17 +120,17 @@ pub fn parse_codefence_metadata(content: &str) -> CodefenceParseResult {
 fn extract_all_codefence_blocks(content: &str) -> Vec<(String, String)> {
     let mut blocks = Vec::new();
     let lines: Vec<&str> = content.lines().collect();
-    
+
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
         let trimmed = line.trim_start();
-        
+
         // Check for opening fence (``` or ~~~)
         if let Some((fence_char, fence_count, language)) = detect_fence_opening(trimmed) {
             let mut block_lines = Vec::new();
             i += 1;
-            
+
             // Collect content until closing fence
             while i < lines.len() {
                 let current = lines[i].trim_start();
@@ -140,14 +140,14 @@ fn extract_all_codefence_blocks(content: &str) -> Vec<(String, String)> {
                 block_lines.push(lines[i]);
                 i += 1;
             }
-            
+
             let block_content = block_lines.join("\n");
             blocks.push((language, block_content.trim().to_string()));
         }
-        
+
         i += 1;
     }
-    
+
     blocks
 }
 
@@ -160,7 +160,7 @@ fn detect_fence_opening(line: &str) -> Option<(char, usize, String)> {
         let language = rest.split_whitespace().next().unwrap_or("").to_string();
         return Some(('`', backtick_count, language));
     }
-    
+
     // Try tildes
     let tilde_count = line.chars().take_while(|&c| c == '~').count();
     if tilde_count >= 3 {
@@ -168,7 +168,7 @@ fn detect_fence_opening(line: &str) -> Option<(char, usize, String)> {
         let language = rest.split_whitespace().next().unwrap_or("").to_string();
         return Some(('~', tilde_count, language));
     }
-    
+
     None
 }
 
@@ -178,7 +178,7 @@ fn is_closing_fence(line: &str, fence_char: char, min_count: usize) -> bool {
     if count < min_count {
         return false;
     }
-    
+
     // Rest of line should be empty or whitespace
     let rest = &line[count..];
     rest.chars().all(|c| c.is_whitespace())
@@ -207,10 +207,10 @@ const item = await arg("Todo item");
 ```
 "#;
         let result = parse_codefence_metadata(content);
-        
+
         assert!(result.errors.is_empty(), "Errors: {:?}", result.errors);
         assert!(result.metadata.is_some());
-        
+
         let metadata = result.metadata.unwrap();
         assert_eq!(metadata.name, Some("Quick Todo".to_string()));
         assert_eq!(metadata.description, Some("Add a todo item".to_string()));
@@ -232,14 +232,14 @@ const { item } = await input();
 ```
 "#;
         let result = parse_codefence_metadata(content);
-        
+
         assert!(result.errors.is_empty(), "Errors: {:?}", result.errors);
         assert!(result.schema.is_some());
-        
+
         let schema = result.schema.unwrap();
         assert_eq!(schema.input.len(), 1);
         assert!(schema.input.contains_key("item"));
-        
+
         let item_field = schema.input.get("item").unwrap();
         assert_eq!(item_field.field_type, FieldType::String);
         assert!(item_field.required);
@@ -270,25 +270,28 @@ output({ id });
 ```
 "#;
         let result = parse_codefence_metadata(content);
-        
+
         assert!(result.errors.is_empty(), "Errors: {:?}", result.errors);
-        
+
         // Check metadata
         assert!(result.metadata.is_some());
         let metadata = result.metadata.unwrap();
         assert_eq!(metadata.name, Some("Quick Todo".to_string()));
         assert_eq!(metadata.description, Some("Add a todo item".to_string()));
         assert_eq!(metadata.icon, Some("CheckSquare".to_string()));
-        
+
         // Check schema
         assert!(result.schema.is_some());
         let schema = result.schema.unwrap();
         assert_eq!(schema.input.len(), 1);
         assert_eq!(schema.output.len(), 1);
-        
+
         let item_field = schema.input.get("item").unwrap();
-        assert_eq!(item_field.description, Some("The todo item text".to_string()));
-        
+        assert_eq!(
+            item_field.description,
+            Some("The todo item text".to_string())
+        );
+
         assert!(schema.output.contains_key("id"));
     }
 
@@ -303,7 +306,7 @@ Some text here with no code fences at all.
 - List item 2
 "#;
         let result = parse_codefence_metadata(content);
-        
+
         assert!(result.metadata.is_none());
         assert!(result.schema.is_none());
         assert!(result.code.is_none());
@@ -322,7 +325,7 @@ console.log("test");
 ```
 "#;
         let result = parse_codefence_metadata(content);
-        
+
         assert!(result.metadata.is_none());
         assert!(!result.errors.is_empty());
         assert!(result.errors[0].contains("Failed to parse metadata JSON"));
@@ -341,7 +344,7 @@ console.log(result);
 ```
 "#;
         let result = parse_codefence_metadata(content);
-        
+
         assert!(result.code.is_some());
         let code = result.code.unwrap();
         assert_eq!(code.language, "ts");
@@ -365,7 +368,7 @@ second code block
 ```
 "#;
         let result = parse_codefence_metadata(content);
-        
+
         assert!(result.code.is_some());
         let code = result.code.unwrap();
         assert_eq!(code.content, "first code block");
@@ -383,10 +386,13 @@ console.log("tilde fences");
 ~~~
 "#;
         let result = parse_codefence_metadata(content);
-        
+
         assert!(result.metadata.is_some());
-        assert_eq!(result.metadata.unwrap().name, Some("Tilde Test".to_string()));
-        
+        assert_eq!(
+            result.metadata.unwrap().name,
+            Some("Tilde Test".to_string())
+        );
+
         assert!(result.code.is_some());
         assert_eq!(result.code.unwrap().language, "ts");
     }
@@ -403,7 +409,7 @@ const x = 1;
 ~~~
 "#;
         let result = parse_codefence_metadata(content);
-        
+
         assert!(result.metadata.is_some());
         assert!(result.code.is_some());
         assert_eq!(result.code.unwrap().language, "ts");
@@ -432,10 +438,10 @@ const x = 1;
 ```
 "#;
         let result = parse_codefence_metadata(content);
-        
+
         assert!(result.errors.is_empty(), "Errors: {:?}", result.errors);
         assert!(result.metadata.is_some());
-        
+
         let meta = result.metadata.unwrap();
         assert_eq!(meta.name, Some("Full Script".to_string()));
         assert_eq!(meta.description, Some("A complete script".to_string()));
@@ -470,17 +476,35 @@ const x = 1;
 ```
 "#;
         let result = parse_codefence_metadata(content);
-        
+
         assert!(result.errors.is_empty(), "Errors: {:?}", result.errors);
         assert!(result.schema.is_some());
-        
+
         let schema = result.schema.unwrap();
-        assert_eq!(schema.input.get("name").unwrap().field_type, FieldType::String);
-        assert_eq!(schema.input.get("count").unwrap().field_type, FieldType::Number);
-        assert_eq!(schema.input.get("enabled").unwrap().field_type, FieldType::Boolean);
-        assert_eq!(schema.input.get("items").unwrap().field_type, FieldType::Array);
-        assert_eq!(schema.input.get("config").unwrap().field_type, FieldType::Object);
-        assert_eq!(schema.input.get("anything").unwrap().field_type, FieldType::Any);
+        assert_eq!(
+            schema.input.get("name").unwrap().field_type,
+            FieldType::String
+        );
+        assert_eq!(
+            schema.input.get("count").unwrap().field_type,
+            FieldType::Number
+        );
+        assert_eq!(
+            schema.input.get("enabled").unwrap().field_type,
+            FieldType::Boolean
+        );
+        assert_eq!(
+            schema.input.get("items").unwrap().field_type,
+            FieldType::Array
+        );
+        assert_eq!(
+            schema.input.get("config").unwrap().field_type,
+            FieldType::Object
+        );
+        assert_eq!(
+            schema.input.get("anything").unwrap().field_type,
+            FieldType::Any
+        );
     }
 
     #[test]
@@ -491,7 +515,7 @@ const x = 1;
 ```
 "#;
         let result = parse_codefence_metadata(content);
-        
+
         assert!(result.schema.is_none());
         assert!(!result.errors.is_empty());
         assert!(result.errors[0].contains("Failed to parse schema JSON"));
@@ -500,15 +524,18 @@ const x = 1;
     #[test]
     fn test_different_code_languages() {
         let languages = vec!["bash", "python", "ruby", "js", "kit", "template"];
-        
+
         for lang in languages {
-            let content = format!(r#"
+            let content = format!(
+                r#"
 ```{}
 code content
 ```
-"#, lang);
+"#,
+                lang
+            );
             let result = parse_codefence_metadata(&content);
-            
+
             assert!(result.code.is_some(), "Failed for language: {}", lang);
             assert_eq!(result.code.unwrap().language, lang);
         }
@@ -524,10 +551,10 @@ code content
 ```
 "#;
         let result = parse_codefence_metadata(content);
-        
+
         // Empty metadata should fail to parse as JSON
         assert!(!result.errors.is_empty() || result.metadata.is_none());
-        
+
         // Empty code block should still be captured
         assert!(result.code.is_some());
         assert_eq!(result.code.unwrap().content, "");
@@ -546,10 +573,13 @@ code content
 ```
 "#;
         let result = parse_codefence_metadata(content);
-        
+
         assert!(result.metadata.is_some());
-        assert_eq!(result.metadata.unwrap().name, Some("Whitespace Test".to_string()));
-        
+        assert_eq!(
+            result.metadata.unwrap().name,
+            Some("Whitespace Test".to_string())
+        );
+
         assert!(result.code.is_some());
         let code = result.code.unwrap();
         // Content should preserve internal whitespace but trim outer
@@ -574,7 +604,7 @@ console.log("hello");
 ```
 "#;
         let result = parse_codefence_metadata(content);
-        
+
         assert!(result.metadata.is_some());
         assert!(result.code.is_some());
         // The code block should contain the nested fence example
@@ -598,12 +628,15 @@ code here
 ```
 "#;
         let result = parse_codefence_metadata(content);
-        
+
         assert!(result.metadata.is_some());
         assert!(result.schema.is_some());
         assert!(result.code.is_some());
-        
-        assert_eq!(result.metadata.unwrap().name, Some("Order Test".to_string()));
+
+        assert_eq!(
+            result.metadata.unwrap().name,
+            Some("Order Test".to_string())
+        );
         assert!(result.schema.unwrap().input.contains_key("x"));
     }
 
@@ -617,11 +650,11 @@ echo "Hello World"
 ```
 "#;
         let result = parse_codefence_metadata(content);
-        
+
         assert!(result.metadata.is_none());
         assert!(result.schema.is_none());
         assert!(result.code.is_some());
-        
+
         let code = result.code.unwrap();
         assert_eq!(code.language, "bash");
         assert_eq!(code.content, "echo \"Hello World\"");
@@ -639,7 +672,7 @@ echo "Hello World"
 ```
 "#;
         let result = parse_codefence_metadata(content);
-        
+
         assert_eq!(result.errors.len(), 2);
         assert!(result.errors[0].contains("metadata"));
         assert!(result.errors[1].contains("schema"));
