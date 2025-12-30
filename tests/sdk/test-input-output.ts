@@ -259,6 +259,51 @@ async function runTests() {
     }
   }
 
+  // ============================================
+  // Test 8: defineSchema assigns to global and returns typed schema
+  // ============================================
+  resetState();
+  {
+    const testName = 'defineSchema-assigns-and-returns';
+    logTest(testName, 'running');
+    const start = Date.now();
+    
+    try {
+      // Call defineSchema
+      const mySchema = defineSchema({
+        input: {
+          name: { type: 'string', required: true },
+          count: { type: 'number' }
+        },
+        output: {
+          result: { type: 'string' }
+        }
+      });
+      
+      // Check it returns the schema
+      const hasInput = mySchema.input && 'name' in mySchema.input;
+      const hasOutput = mySchema.output && 'result' in mySchema.output;
+      
+      // Check it assigns to global schema
+      const globalSchema = (globalThis as any).schema;
+      const globalHasInput = globalSchema?.input && 'name' in globalSchema.input;
+      
+      if (hasInput && hasOutput && globalHasInput) {
+        logTest(testName, 'pass', { 
+          result: { returnedSchema: !!mySchema, globalAssigned: !!globalSchema },
+          duration_ms: Date.now() - start 
+        });
+      } else {
+        logTest(testName, 'fail', { 
+          error: `defineSchema didn't work correctly: hasInput=${hasInput}, hasOutput=${hasOutput}, globalHasInput=${globalHasInput}`,
+          duration_ms: Date.now() - start 
+        });
+      }
+    } catch (err) {
+      logTest(testName, 'fail', { error: String(err), duration_ms: Date.now() - start });
+    }
+  }
+
   console.error('[TEST] All input()/output() tests completed');
 }
 

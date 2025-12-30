@@ -560,6 +560,166 @@ export interface Config {
  */
 export type SchemaFieldType = 'string' | 'number' | 'boolean' | 'array' | 'object' | 'any';
 
+// =============================================================================
+// Schema Type Inference Utilities
+// =============================================================================
+
+/**
+ * Maps a SchemaFieldType string to its TypeScript type.
+ * Used internally for type inference from schema definitions.
+ */
+type SchemaTypeMap = {
+  string: string;
+  number: number;
+  boolean: boolean;
+  array: unknown[];
+  object: Record<string, unknown>;
+  any: unknown;
+};
+
+/**
+ * Infers the TypeScript type from a SchemaFieldDef.
+ * Handles required/optional, enums, arrays with typed items, and nested objects.
+ * 
+ * @example
+ * ```typescript
+ * // { type: 'string' } -> string
+ * // { type: 'string', enum: ['a', 'b'] as const } -> 'a' | 'b'
+ * // { type: 'array', items: 'number' } -> number[]
+ * // { type: 'object', properties: { name: { type: 'string' } } } -> { name: string }
+ * ```
+ */
+type InferFieldType<F extends SchemaFieldDef> = 
+  // Handle enums: narrow to literal union
+  F extends { enum: readonly (infer E)[] } 
+    ? E
+  // Handle arrays with typed items
+  : F extends { type: 'array'; items: infer I extends SchemaFieldType }
+    ? SchemaTypeMap[I][]
+  // Handle nested objects
+  : F extends { type: 'object'; properties: infer P extends Record<string, SchemaFieldDef> }
+    ? { [K in keyof P]: InferFieldType<P[K]> }
+  // Handle basic types
+  : F extends { type: infer T extends SchemaFieldType }
+    ? SchemaTypeMap[T]
+  : unknown;
+
+/**
+ * Extracts keys of required fields from a schema record.
+ */
+type RequiredKeys<T extends Record<string, SchemaFieldDef>> = {
+  [K in keyof T]: T[K] extends { required: true } ? K : never;
+}[keyof T];
+
+/**
+ * Extracts keys of optional fields from a schema record.
+ */
+type OptionalKeys<T extends Record<string, SchemaFieldDef>> = {
+  [K in keyof T]: T[K] extends { required: true } ? never : K;
+}[keyof T];
+
+/**
+ * Infers a TypeScript interface from a schema input/output definition.
+ * Required fields are non-optional, others are optional.
+ * 
+ * @example
+ * ```typescript
+ * type Input = InferSchema<{
+ *   title: { type: 'string'; required: true };
+ *   tags: { type: 'array'; items: 'string' };
+ * }>;
+ * // Result: { title: string; tags?: string[] }
+ * ```
+ */
+export type InferSchema<T extends Record<string, SchemaFieldDef>> = 
+  { [K in RequiredKeys<T>]: InferFieldType<T[K]> } &
+  { [K in OptionalKeys<T>]?: InferFieldType<T[K]> };
+
+/**
+ * Infers the input type from a ScriptSchema.
+ * Use this with `typeof schema` to get compile-time type safety.
+ * 
+ * @example
+ * ```typescript
+ * const schema = {
+ *   input: {
+ *     greeting: { type: 'string', required: true },
+ *     count: { type: 'number' }
+ *   }
+ * } as const;
+ * 
+ * type MyInput = InferInput<typeof schema>;
+ * // Result: { greeting: string; count?: number }
+ * 
+ * const data = await input<MyInput>();
+ * console.log(data.greeting); // TypeScript knows this is string
+ * ```
+ */
+export type InferInput<S extends { input?: Record<string, SchemaFieldDef> }> = 
+  S extends { input: infer I extends Record<string, SchemaFieldDef> }
+    ? InferSchema<I>
+    : Record<string, unknown>;
+
+/**
+ * Infers the output type from a ScriptSchema.
+ * Use this with `typeof schema` to get compile-time type safety.
+ * 
+ * @example
+ * ```typescript
+ * const schema = {
+ *   output: {
+ *     path: { type: 'string' },
+ *     wordCount: { type: 'number' }
+ *   }
+ * } as const;
+ * 
+ * type MyOutput = InferOutput<typeof schema>;
+ * // Result: { path?: string; wordCount?: number }
+ * 
+ * output({ path: '/notes/test.md' } satisfies Partial<MyOutput>);
+ * ```
+ */
+export type InferOutput<S extends { output?: Record<string, SchemaFieldDef> }> = 
+  S extends { output: infer O extends Record<string, SchemaFieldDef> }
+    ? InferSchema<O>
+    : Record<string, unknown>;
+
+/**
+ * Helper function to define a schema with full type inference.
+ * Using this instead of direct assignment enables TypeScript to infer
+ * the exact types for input() and output() calls.
+ * 
+ * @example
+ * ```typescript
+ * // Define schema with type inference
+ * const schema = defineSchema({
+ *   input: {
+ *     greeting: { type: 'string', required: true },
+ *     recipient: { type: 'string', default: 'World' }
+ *   },
+ *   output: {
+ *     message: { type: 'string' },
+ *     timestamp: { type: 'string' }
+ *   }
+ * });
+ * 
+ * // Now input() and output() are fully typed!
+ * const { greeting, recipient } = await input<InferInput<typeof schema>>();
+ * //     ^ string    ^ string | undefined
+ * 
+ * output({ message: `${greeting}, ${recipient}!` });
+ * //       ^ TypeScript knows this must be { message?: string; timestamp?: string }
+ * ```
+ * 
+ * @param schema - The schema definition object
+ * @returns The same schema with preserved literal types for inference
+ */
+export function defineSchema<T extends ScriptSchema>(schema: T): T {
+  // Also assign to global for runtime parsing by the app
+  (globalThis as any).schema = schema;
+  return schema;
+}
+
 /**
  * Field definition for schema input/output.
  * Defines the type, validation rules, and documentation for a single field.
@@ -3971,6 +4131,12 @@ let scriptInputData: Record<string, unknown> | null = null;
 let scriptOutputData: Record<string, unknown> = {};
 
 /**
+ * Assign defineSchema to globalThis for runtime access.
+ * The function itself is defined and exported above with the type utilities.
+ */
+globalThis.defineSchema = defineSchema;
+
+/**
  * Receive typed input for the script.
  * 
  * When a script has a `schema` with `input` fields defined, this function
@@ -4080,6 +4246,33 @@ declare global {
   // Metadata and Schema globals (set at top of script, parsed by app)
   var metadata: ScriptMetadata;
   var schema: ScriptSchema;
+
+  // ==========================================================================
+  // Schema Type Inference (also exported from module for import usage)
+  // ==========================================================================
+  
+  /**
+   * Helper function to define a schema with full type inference.
+   * Assigns to global `schema` and returns the typed schema for inference.
+   * 
+   * @example
+   * ```typescript
+   * const mySchema = defineSchema({
+   *   input: {
+   *     greeting: { type: 'string', required: true },
+   *     count: { type: 'number' }
+   *   },
+   *   output: {
+   *     message: { type: 'string' }
+   *   }
+   * } as const);
+   * 
+   * // Types are inferred!
+   * const { greeting, count } = await input<InferInput<typeof mySchema>>();
+   * output({ message: `${greeting} x${count}` } satisfies InferOutput<typeof mySchema>);
+   * ```
+   */
+  function defineSchema<T extends ScriptSchema>(schema: T): T;
 
   // AI-First Protocol functions
   function input<T extends Record<string, unknown> = Record<string, unknown>>(): Promise<T>;
