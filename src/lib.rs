@@ -48,6 +48,9 @@ pub mod process_manager;
 // Scriptlet parsing and variable substitution
 pub mod scriptlets;
 
+// VSCode snippet syntax parser for template() SDK function
+pub mod snippet;
+
 // HTML form parsing for form() prompt
 pub mod form_parser;
 

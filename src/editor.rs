@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::logging;
+use crate::snippet::ParsedSnippet;
 use crate::syntax::{highlight_code_lines, HighlightedLine};
 use crate::theme::Theme;
 
@@ -105,6 +106,17 @@ struct EditorSnapshot {
     selection: Selection,
 }
 
+/// State for snippet/template mode in the editor
+#[derive(Debug, Clone)]
+pub struct SnippetState {
+    /// The parsed snippet with all tabstop info
+    pub snippet: ParsedSnippet,
+    /// Current tabstop index in the navigation order (0..tabstops.len())
+    pub current_tabstop_idx: usize,
+    /// Whether we've visited all tabstops (ready to exit snippet mode)
+    pub completed: bool,
+}
+
 /// EditorPrompt - Full-featured code editor
 pub struct EditorPrompt {
     // Identity
@@ -139,6 +151,9 @@ pub struct EditorPrompt {
 
     // Change detection for render logging (avoid spam)
     last_render_state: Option<RenderState>,
+
+    // Snippet/template mode state
+    snippet_state: Option<SnippetState>,
 }
 
 /// Tracked state for change detection in render logging
@@ -230,7 +245,106 @@ impl EditorPrompt {
             config,
             content_height,
             last_render_state: None,
+            snippet_state: None,
         }
+    }
+
+    /// Create a new EditorPrompt in template/snippet mode
+    ///
+    /// Parses the template string for VSCode snippet syntax ($1, ${1:default}, etc.)
+    /// and enables tabstop navigation with Tab/Shift+Tab.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_template(
+        id: String,
+        template: String,
+        language: String,
+        focus_handle: FocusHandle,
+        on_submit: SubmitCallback,
+        theme: Arc<Theme>,
+        config: Arc<Config>,
+        content_height: Option<gpui::Pixels>,
+    ) -> Self {
+        logging::log(
+            "EDITOR",
+            &format!(
+                "EditorPrompt::with_template id={}, lang={}, template_len={}, height={:?}",
+                id,
+                language,
+                template.len(),
+                content_height
+            ),
+        );
+
+        let snippet = ParsedSnippet::parse(&template);
+        let content = snippet.text.clone();
+
+        logging::log(
+            "EDITOR",
+            &format!(
+                "Parsed snippet with {} tabstops, expanded to {} chars",
+                snippet.tabstops.len(),
+                content.len()
+            ),
+        );
+
+        let rope = Rope::from_str(&content);
+        let highlighted_lines = highlight_code_lines(&content, &language);
+
+        // Set up initial cursor position and selection
+        let (cursor, selection) = if !snippet.tabstops.is_empty() {
+            // Select the first tabstop's range
+            let first_tabstop = &snippet.tabstops[0];
+            if let Some(&(start, end)) = first_tabstop.ranges.first() {
+                let start_pos = Self::byte_to_cursor_static(&rope, start);
+                let end_pos = Self::byte_to_cursor_static(&rope, end);
+                (end_pos, Selection::new(start_pos, end_pos))
+            } else {
+                (CursorPosition::start(), Selection::caret(CursorPosition::start()))
+            }
+        } else {
+            (CursorPosition::start(), Selection::caret(CursorPosition::start()))
+        };
+
+        let snippet_state = if snippet.tabstops.is_empty() {
+            None
+        } else {
+            Some(SnippetState {
+                snippet,
+                current_tabstop_idx: 0,
+                completed: false,
+            })
+        };
+
+        Self {
+            id,
+            rope,
+            language,
+            cursor,
+            selection,
+            cursor_visible: true,
+            highlighted_lines,
+            needs_rehighlight: false,
+            scroll_handle: UniformListScrollHandle::new(),
+            undo_stack: VecDeque::with_capacity(MAX_UNDO_HISTORY),
+            redo_stack: VecDeque::new(),
+            focus_handle,
+            on_submit,
+            theme,
+            config,
+            content_height,
+            last_render_state: None,
+            snippet_state,
+        }
+    }
+
+    /// Convert byte offset to CursorPosition (static helper for constructor)
+    fn byte_to_cursor_static(rope: &Rope, byte_offset: usize) -> CursorPosition {
+        // Convert byte offset to char offset
+        let char_offset = rope.byte_to_char(byte_offset.min(rope.len_bytes()));
+        let line = rope.char_to_line(char_offset);
+        let line_start = rope.line_to_char(line);
+        let column = char_offset - line_start;
+        CursorPosition::new(line, column)
     }
 
     /// Set the content height (for dynamic resizing)
@@ -706,6 +820,98 @@ impl EditorPrompt {
         (self.on_submit)(self.id.clone(), None);
     }
 
+    /// Navigate to the next tabstop in snippet mode
+    fn next_tabstop(&mut self) {
+        let Some(state) = &mut self.snippet_state else {
+            return;
+        };
+
+        let tabstop_count = state.snippet.tabstops.len();
+        if tabstop_count == 0 {
+            return;
+        }
+
+        // Move to next tabstop
+        state.current_tabstop_idx += 1;
+
+        if state.current_tabstop_idx >= tabstop_count {
+            // We've visited all tabstops - exit snippet mode
+            state.completed = true;
+            logging::log("EDITOR", "Snippet mode complete - all tabstops visited");
+            
+            // Clear snippet state and position cursor at end of last tabstop
+            self.snippet_state = None;
+            self.selection = Selection::caret(self.cursor);
+            return;
+        }
+
+        // Select the new tabstop's range(s)
+        self.select_current_tabstop();
+    }
+
+    /// Navigate to the previous tabstop in snippet mode
+    fn prev_tabstop(&mut self) {
+        let Some(state) = &mut self.snippet_state else {
+            return;
+        };
+
+        if state.current_tabstop_idx == 0 {
+            // Already at first tabstop, can't go back
+            return;
+        }
+
+        state.current_tabstop_idx -= 1;
+        self.select_current_tabstop();
+    }
+
+    /// Select the current tabstop's range(s) in snippet mode
+    fn select_current_tabstop(&mut self) {
+        let Some(state) = &self.snippet_state else {
+            return;
+        };
+
+        let tabstops = &state.snippet.tabstops;
+        if state.current_tabstop_idx >= tabstops.len() {
+            return;
+        }
+
+        let tabstop = &tabstops[state.current_tabstop_idx];
+        
+        // For now, select only the first range (primary)
+        // Linked editing support will be added in a future PR
+        if let Some(&(start, end)) = tabstop.ranges.first() {
+            let start_pos = Self::byte_to_cursor_static(&self.rope, start);
+            let end_pos = Self::byte_to_cursor_static(&self.rope, end);
+            
+            self.cursor = end_pos;
+            self.selection = Selection::new(start_pos, end_pos);
+            
+            logging::log(
+                "EDITOR",
+                &format!(
+                    "Tabstop {} selected: range ({}, {}) -> cursor at ({}, {})",
+                    tabstop.index, start, end, end_pos.line, end_pos.column
+                ),
+            );
+        }
+    }
+
+    /// Check if we're currently in snippet mode
+    #[allow(dead_code)]
+    pub fn in_snippet_mode(&self) -> bool {
+        self.snippet_state.is_some()
+    }
+
+    /// Get the current tabstop index (if in snippet mode)
+    #[allow(dead_code)]
+    pub fn current_tabstop_index(&self) -> Option<usize> {
+        self.snippet_state.as_ref().map(|s| {
+            s.snippet.tabstops.get(s.current_tabstop_idx)
+                .map(|t| t.index)
+                .unwrap_or(0)
+        })
+    }
+
     /// Handle keyboard input
     fn handle_key_event(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
         let key = event.keystroke.key.to_lowercase();
@@ -757,7 +963,22 @@ impl EditorPrompt {
             ("backspace", _, _, _) => self.backspace(),
             ("delete", _, _, _) => self.delete(),
             ("enter", false, _, _) => self.insert_newline(),
-            ("tab", false, false, false) => self.insert_text("    "), // 4 spaces for tab
+            
+            // Tab handling - snippet mode or regular indent
+            ("tab", false, false, false) => {
+                if self.snippet_state.is_some() {
+                    self.next_tabstop();
+                } else {
+                    self.insert_text("    "); // 4 spaces for tab
+                }
+            }
+            ("tab", false, true, false) => {
+                // Shift+Tab - previous tabstop in snippet mode
+                if self.snippet_state.is_some() {
+                    self.prev_tabstop();
+                }
+                // In non-snippet mode, Shift+Tab does nothing for now
+            }
 
             // Character input
             _ => {
@@ -1341,5 +1562,68 @@ mod tests {
                 pattern
             );
         }
+    }
+
+    #[test]
+    fn test_snippet_state_creation() {
+        let snippet = ParsedSnippet::parse("Hello ${1:world}!");
+        let state = SnippetState {
+            snippet,
+            current_tabstop_idx: 0,
+            completed: false,
+        };
+        assert_eq!(state.current_tabstop_idx, 0);
+        assert!(!state.completed);
+        assert_eq!(state.snippet.tabstops.len(), 1);
+    }
+
+    #[test]
+    fn test_snippet_state_with_multiple_tabstops() {
+        let snippet = ParsedSnippet::parse("${1:first} ${2:second} ${0:end}");
+        let state = SnippetState {
+            snippet,
+            current_tabstop_idx: 0,
+            completed: false,
+        };
+        // Order should be 1, 2, 0 (0 is always last)
+        assert_eq!(state.snippet.tabstops.len(), 3);
+        assert_eq!(state.snippet.tabstops[0].index, 1);
+        assert_eq!(state.snippet.tabstops[1].index, 2);
+        assert_eq!(state.snippet.tabstops[2].index, 0);
+    }
+
+    #[test]
+    fn test_byte_to_cursor_static() {
+        let rope = Rope::from_str("Hello\nWorld");
+        
+        // "Hello" is 5 bytes, cursor at start
+        let pos = EditorPrompt::byte_to_cursor_static(&rope, 0);
+        assert_eq!(pos.line, 0);
+        assert_eq!(pos.column, 0);
+        
+        // After "Hello" (position 5)
+        let pos = EditorPrompt::byte_to_cursor_static(&rope, 5);
+        assert_eq!(pos.line, 0);
+        assert_eq!(pos.column, 5);
+        
+        // After "Hello\n" (position 6) - start of second line
+        let pos = EditorPrompt::byte_to_cursor_static(&rope, 6);
+        assert_eq!(pos.line, 1);
+        assert_eq!(pos.column, 0);
+        
+        // "Hello\nWor" (position 9)
+        let pos = EditorPrompt::byte_to_cursor_static(&rope, 9);
+        assert_eq!(pos.line, 1);
+        assert_eq!(pos.column, 3);
+    }
+
+    #[test]
+    fn test_byte_to_cursor_static_clamps_to_end() {
+        let rope = Rope::from_str("Hello");
+        
+        // Beyond end should clamp
+        let pos = EditorPrompt::byte_to_cursor_static(&rope, 100);
+        assert_eq!(pos.line, 0);
+        assert_eq!(pos.column, 5);
     }
 }

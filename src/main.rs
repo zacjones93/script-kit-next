@@ -65,6 +65,9 @@ mod frecency;
 // Scriptlet parsing and variable substitution
 mod scriptlets;
 
+// VSCode snippet syntax parser for template() SDK function
+mod snippet;
+
 // HTML form parsing for form() prompt
 mod form_parser;
 
@@ -83,6 +86,9 @@ mod expand_manager;
 
 // Script scheduling with cron expressions and natural language
 mod scheduler;
+
+// HUD manager - system-level overlay notifications (separate floating windows)
+mod hud_manager;
 
 use crate::components::toast::{Toast, ToastAction, ToastColors};
 use crate::toast_manager::ToastManager;
@@ -588,6 +594,154 @@ fn hotkey_channel() -> &'static (async_channel::Sender<()>, async_channel::Recei
     HOTKEY_CHANNEL.get_or_init(|| async_channel::bounded(10))
 }
 
+// SCRIPT_HOTKEY_CHANNEL: Channel for script shortcut events (sends script path)
+static SCRIPT_HOTKEY_CHANNEL: OnceLock<(
+    async_channel::Sender<String>,
+    async_channel::Receiver<String>,
+)> = OnceLock::new();
+
+/// Get the script hotkey channel, initializing it on first access
+fn script_hotkey_channel() -> &'static (async_channel::Sender<String>, async_channel::Receiver<String>)
+{
+    SCRIPT_HOTKEY_CHANNEL.get_or_init(|| async_channel::bounded(10))
+}
+
+/// Parse a shortcut string into (Modifiers, Code).
+///
+/// Supports flexible formats:
+/// - Space-separated: "opt i", "cmd shift k"
+/// - Plus-separated: "cmd+shift+k", "ctrl+alt+delete"
+/// - Mixed: "cmd + shift + k"
+/// - Various modifier names: cmd/command/meta/⌘, ctrl/control/^, alt/opt/option/⌥, shift/⇧
+///
+/// Returns None if the shortcut string is invalid.
+fn parse_shortcut(shortcut: &str) -> Option<(Modifiers, Code)> {
+    // Normalize the shortcut: replace + with space, collapse whitespace
+    let normalized = shortcut
+        .replace('+', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    
+    let parts: Vec<&str> = normalized.split_whitespace().collect();
+    if parts.is_empty() {
+        return None;
+    }
+
+    let mut modifiers = Modifiers::empty();
+    let mut key_part: Option<&str> = None;
+
+    for part in &parts {
+        let part_lower = part.to_lowercase();
+        match part_lower.as_str() {
+            // Meta/Command key - many variations
+            "cmd" | "command" | "meta" | "super" | "win" | "⌘" => modifiers |= Modifiers::META,
+            // Control key
+            "ctrl" | "control" | "ctl" | "^" => modifiers |= Modifiers::CONTROL,
+            // Alt/Option key
+            "alt" | "opt" | "option" | "⌥" => modifiers |= Modifiers::ALT,
+            // Shift key
+            "shift" | "shft" | "⇧" => modifiers |= Modifiers::SHIFT,
+            // If not a modifier, it's the key
+            _ => key_part = Some(part),
+        }
+    }
+
+    let key = key_part?;
+    let key_lower = key.to_lowercase();
+
+    let code = match key_lower.as_str() {
+        // Letters
+        "a" => Code::KeyA,
+        "b" => Code::KeyB,
+        "c" => Code::KeyC,
+        "d" => Code::KeyD,
+        "e" => Code::KeyE,
+        "f" => Code::KeyF,
+        "g" => Code::KeyG,
+        "h" => Code::KeyH,
+        "i" => Code::KeyI,
+        "j" => Code::KeyJ,
+        "k" => Code::KeyK,
+        "l" => Code::KeyL,
+        "m" => Code::KeyM,
+        "n" => Code::KeyN,
+        "o" => Code::KeyO,
+        "p" => Code::KeyP,
+        "q" => Code::KeyQ,
+        "r" => Code::KeyR,
+        "s" => Code::KeyS,
+        "t" => Code::KeyT,
+        "u" => Code::KeyU,
+        "v" => Code::KeyV,
+        "w" => Code::KeyW,
+        "x" => Code::KeyX,
+        "y" => Code::KeyY,
+        "z" => Code::KeyZ,
+        // Numbers
+        "0" => Code::Digit0,
+        "1" => Code::Digit1,
+        "2" => Code::Digit2,
+        "3" => Code::Digit3,
+        "4" => Code::Digit4,
+        "5" => Code::Digit5,
+        "6" => Code::Digit6,
+        "7" => Code::Digit7,
+        "8" => Code::Digit8,
+        "9" => Code::Digit9,
+        // Function keys
+        "f1" => Code::F1,
+        "f2" => Code::F2,
+        "f3" => Code::F3,
+        "f4" => Code::F4,
+        "f5" => Code::F5,
+        "f6" => Code::F6,
+        "f7" => Code::F7,
+        "f8" => Code::F8,
+        "f9" => Code::F9,
+        "f10" => Code::F10,
+        "f11" => Code::F11,
+        "f12" => Code::F12,
+        // Special keys
+        "space" => Code::Space,
+        "enter" | "return" => Code::Enter,
+        "tab" => Code::Tab,
+        "escape" | "esc" => Code::Escape,
+        "backspace" | "back" => Code::Backspace,
+        "delete" | "del" => Code::Delete,
+        ";" | "semicolon" => Code::Semicolon,
+        "'" | "quote" | "apostrophe" => Code::Quote,
+        "," | "comma" => Code::Comma,
+        "." | "period" | "dot" => Code::Period,
+        "/" | "slash" | "forwardslash" => Code::Slash,
+        "\\" | "backslash" => Code::Backslash,
+        "[" | "bracketleft" | "leftbracket" => Code::BracketLeft,
+        "]" | "bracketright" | "rightbracket" => Code::BracketRight,
+        "-" | "minus" | "dash" | "hyphen" => Code::Minus,
+        "=" | "equal" | "equals" => Code::Equal,
+        "`" | "backquote" | "backtick" | "grave" => Code::Backquote,
+        // Arrow keys
+        "up" | "arrowup" | "uparrow" => Code::ArrowUp,
+        "down" | "arrowdown" | "downarrow" => Code::ArrowDown,
+        "left" | "arrowleft" | "leftarrow" => Code::ArrowLeft,
+        "right" | "arrowright" | "rightarrow" => Code::ArrowRight,
+        // Home/End/PageUp/PageDown
+        "home" => Code::Home,
+        "end" => Code::End,
+        "pageup" | "pgup" => Code::PageUp,
+        "pagedown" | "pgdn" | "pgdown" => Code::PageDown,
+        _ => {
+            logging::log(
+                "SHORTCUT",
+                &format!("Unknown key in shortcut '{}': '{}'", shortcut, key),
+            );
+            return None;
+        }
+    };
+
+    Some((modifiers, code))
+}
+
 static HOTKEY_TRIGGER_COUNT: AtomicU64 = AtomicU64::new(0);
 static WINDOW_VISIBLE: AtomicBool = AtomicBool::new(false); // Track window visibility for toggle (starts hidden)
 static NEEDS_RESET: AtomicBool = AtomicBool::new(false); // Track if window needs reset to script list on next show
@@ -1071,6 +1225,7 @@ enum PromptMessage {
         id: String,
         content: Option<String>,
         language: Option<String>,
+        template: Option<String>,
     },
     /// Path picker prompt for file/folder selection
     ShowPath {
@@ -1346,6 +1501,45 @@ impl HotkeyPoller {
     }
 }
 
+/// A model that listens for script hotkey triggers via async_channel
+struct ScriptHotkeyPoller {
+    window: WindowHandle<ScriptListApp>,
+}
+
+impl ScriptHotkeyPoller {
+    fn new(window: WindowHandle<ScriptListApp>) -> Self {
+        Self { window }
+    }
+
+    fn start_listening(&self, cx: &mut Context<Self>) {
+        let window = self.window;
+        cx.spawn(async move |_this, cx: &mut gpui::AsyncApp| {
+            logging::log("HOTKEY", "Script hotkey listener started");
+
+            while let Ok(script_path) = script_hotkey_channel().1.recv().await {
+                logging::log(
+                    "HOTKEY",
+                    &format!("Script shortcut received: {}", script_path),
+                );
+
+                let path_clone = script_path.clone();
+                let _ = cx.update(move |cx: &mut App| {
+                    let _ = window.update(
+                        cx,
+                        |view: &mut ScriptListApp, _win: &mut Window, ctx: &mut Context<ScriptListApp>| {
+                            // Find and execute the script by path
+                            view.execute_script_by_path(&path_clone, ctx);
+                        },
+                    );
+                });
+            }
+
+            logging::log("HOTKEY", "Script hotkey listener exiting");
+        })
+        .detach();
+    }
+}
+
 /// Error notification to display to the user
 #[derive(Debug, Clone)]
 struct ErrorNotification {
@@ -1356,21 +1550,6 @@ struct ErrorNotification {
     /// Timestamp when the notification was created (for auto-dismiss)
     #[allow(dead_code)]
     created_at: std::time::Instant,
-}
-
-/// HUD (Heads-Up Display) state for showing brief overlay messages
-/// Position: Bottom-center (80% down screen)
-/// Duration: 2000ms default
-/// Shape: Pill (40px tall, 120-400px wide)
-/// Style: Dark translucent background
-#[derive(Debug, Clone)]
-struct HudState {
-    /// The text to display
-    text: String,
-    /// When the HUD was shown (for auto-dismiss)
-    show_time: std::time::Instant,
-    /// Duration in milliseconds
-    duration_ms: u64,
 }
 
 struct ScriptListApp {
@@ -1459,8 +1638,6 @@ struct ScriptListApp {
     // Pending path action result - when set, execute this action on the stored path
     // Tuple of (action_id, path_info) to handle the action
     pending_path_action_result: Arc<Mutex<Option<(String, PathInfo)>>>,
-    /// HUD overlay state - brief message displayed at bottom-center
-    hud_state: Option<HudState>,
     /// Alias registry: lowercase_alias -> script_path (for O(1) lookup)
     /// Conflict rule: first-registered wins
     alias_registry: std::collections::HashMap<String, String>,
@@ -1675,8 +1852,6 @@ impl ScriptListApp {
             path_actions_search_text: Arc::new(Mutex::new(String::new())),
             // Pending path action result - action_id + path_info to execute
             pending_path_action_result: Arc::new(Mutex::new(None)),
-            // HUD overlay state - starts as None (no HUD shown)
-            hud_state: None,
             // Alias/shortcut registries - populated below
             alias_registry: std::collections::HashMap::new(),
             shortcut_registry: std::collections::HashMap::new(),
@@ -3837,11 +4012,13 @@ impl ScriptListApp {
                                         id,
                                         content,
                                         language,
+                                        template,
                                         ..
                                     } => Some(PromptMessage::ShowEditor {
                                         id,
                                         content,
                                         language,
+                                        template,
                                     }),
                                     // New prompt types (scaffolding)
                                     Message::Path {
@@ -4219,6 +4396,63 @@ impl ScriptListApp {
         }
     }
 
+    /// Execute a script or scriptlet by its file path
+    /// Used by global shortcuts to directly invoke scripts
+    fn execute_script_by_path(&mut self, path: &str, cx: &mut Context<Self>) {
+        logging::log("EXEC", &format!("Executing script by path: {}", path));
+
+        // Check if it's a scriptlet (contains #)
+        if path.contains('#') {
+            // It's a scriptlet path like "/path/to/file.md#command"
+            if let Some(scriptlet) = self.scriptlets.iter().find(|s| {
+                s.file_path.as_ref().map(|p| p == path).unwrap_or(false)
+            }) {
+                let scriptlet_clone = scriptlet.clone();
+                self.execute_scriptlet(&scriptlet_clone, cx);
+                return;
+            }
+            logging::log("ERROR", &format!("Scriptlet not found: {}", path));
+            return;
+        }
+
+        // It's a regular script - find by path
+        if let Some(script) = self.scripts.iter().find(|s| {
+            s.path.to_string_lossy() == path
+        }) {
+            let script_clone = script.clone();
+            self.execute_interactive(&script_clone, cx);
+            return;
+        }
+
+        // Not found in loaded scripts - try to execute directly as a file
+        let script_path = std::path::PathBuf::from(path);
+        if script_path.exists() {
+            let name = script_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("script")
+                .to_string();
+
+            let script = scripts::Script {
+                name,
+                path: script_path.clone(),
+                extension: script_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("ts")
+                    .to_string(),
+                description: None,
+                icon: None,
+                alias: None,
+                shortcut: None,
+            };
+
+            self.execute_interactive(&script, cx);
+        } else {
+            logging::log("ERROR", &format!("Script file not found: {}", path));
+        }
+    }
+
     /// Execute a built-in feature
     fn execute_builtin(&mut self, entry: &builtins::BuiltInEntry, cx: &mut Context<Self>) {
         logging::log(
@@ -4489,10 +4723,16 @@ impl ScriptListApp {
                 id,
                 content,
                 language,
+                template,
             } => {
                 logging::log(
                     "UI",
-                    &format!("Showing editor prompt: {} (language: {:?})", id, language),
+                    &format!(
+                        "Showing editor prompt: {} (language: {:?}, template: {})",
+                        id,
+                        language,
+                        template.is_some()
+                    ),
                 );
 
                 // Create submit callback for editor
@@ -4519,17 +4759,30 @@ impl ScriptListApp {
                 // Get the target height for editor view
                 let editor_height = window_resize::layout::MAX_HEIGHT;
 
-                // Create editor with explicit height - GPUI entities don't inherit parent flex sizing
-                let editor_prompt = EditorPrompt::with_height(
-                    id.clone(),
-                    content.unwrap_or_default(),
-                    language.unwrap_or_else(|| "markdown".to_string()),
-                    editor_focus_handle.clone(),
-                    submit_callback,
-                    std::sync::Arc::new(self.theme.clone()),
-                    std::sync::Arc::new(self.config.clone()),
-                    Some(editor_height),
-                );
+                // Create editor: use with_template if template provided, otherwise with_height
+                let editor_prompt = if let Some(template_str) = template {
+                    EditorPrompt::with_template(
+                        id.clone(),
+                        template_str,
+                        language.unwrap_or_else(|| "plaintext".to_string()),
+                        editor_focus_handle.clone(),
+                        submit_callback,
+                        std::sync::Arc::new(self.theme.clone()),
+                        std::sync::Arc::new(self.config.clone()),
+                        Some(editor_height),
+                    )
+                } else {
+                    EditorPrompt::with_height(
+                        id.clone(),
+                        content.unwrap_or_default(),
+                        language.unwrap_or_else(|| "markdown".to_string()),
+                        editor_focus_handle.clone(),
+                        submit_callback,
+                        std::sync::Arc::new(self.theme.clone()),
+                        std::sync::Arc::new(self.config.clone()),
+                        Some(editor_height),
+                    )
+                };
 
                 let entity = cx.new(|_| editor_prompt);
                 self.current_view = AppView::EditorPrompt {
@@ -5429,95 +5682,18 @@ impl ScriptListApp {
     }
 
     /// Show a HUD (heads-up display) overlay message
-    /// Position: Bottom-center (80% down screen)
+    /// 
+    /// This creates a separate floating window positioned at bottom-center of the
+    /// screen containing the mouse cursor. The HUD is independent of the main
+    /// Script Kit window and will remain visible even when the main window is hidden.
+    ///
+    /// Position: Bottom-center (85% down screen)
     /// Duration: 2000ms default, configurable
     /// Shape: Pill (40px tall, variable width)
     fn show_hud(&mut self, text: String, duration_ms: Option<u64>, cx: &mut Context<Self>) {
-        let duration = duration_ms.unwrap_or(2000);
-        logging::log("UI", &format!("Showing HUD: '{}' for {}ms", text, duration));
-
-        self.hud_state = Some(HudState {
-            text,
-            show_time: std::time::Instant::now(),
-            duration_ms: duration,
-        });
-
-        // Spawn auto-dismiss timer
-        let duration_duration = std::time::Duration::from_millis(duration);
-        cx.spawn(async move |this, cx| {
-            Timer::after(duration_duration).await;
-            let _ = cx.update(|cx| {
-                this.update(cx, |app, cx| {
-                    // Only dismiss if the HUD is still showing the same message
-                    // (prevents race conditions with rapid HUD calls)
-                    if let Some(ref hud) = app.hud_state {
-                        if hud.show_time.elapsed() >= duration_duration {
-                            logging::log("UI", "HUD auto-dismiss");
-                            app.hud_state = None;
-                            cx.notify();
-                        }
-                    }
-                })
-            });
-        })
-        .detach();
-
-        cx.notify();
-    }
-
-    /// Render HUD overlay if active
-    /// Returns an overlay element positioned at bottom-center
-    fn render_hud(&self, _cx: &App) -> Option<impl IntoElement> {
-        let hud = self.hud_state.as_ref()?;
-        let colors = &self.theme.colors;
-
-        // Check if HUD has expired (belt-and-suspenders with timer)
-        if hud.show_time.elapsed().as_millis() as u64 > hud.duration_ms {
-            return None;
-        }
-
-        let text = hud.text.clone();
-
-        // HUD pill styling: dark translucent background, rounded, centered text
-        Some(
-            div()
-                .id("hud-overlay")
-                // Position at bottom-center using absolute positioning
-                .absolute()
-                .bottom(px(80.)) // 80px from bottom
-                .left_0()
-                .right_0()
-                .flex()
-                .justify_center()
-                // The pill itself
-                .child(
-                    div()
-                        .id("hud-pill")
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .px(px(24.))
-                        .py(px(10.))
-                        .min_w(px(120.))
-                        .max_w(px(400.))
-                        .h(px(40.))
-                        // Dark translucent background (75% opacity = 0xBF)
-                        .bg(rgba(0x000000BF))
-                        .rounded(px(20.)) // Pill shape
-                        // Optional subtle border (30% opacity = 0x4D)
-                        .border_1()
-                        .border_color(rgba((colors.ui.border << 8) | 0x4D))
-                        // Text styling
-                        .child(
-                            div()
-                                .text_size(px(14.))
-                                .text_color(rgb(0xFFFFFF))
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .child(text),
-                        ),
-                ),
-        )
+        // Delegate to the HUD manager which creates a separate floating window
+        // This ensures the HUD is visible even when the main app window is hidden
+        hud_manager::show_hud(text, duration_ms, cx);
     }
 
     /// Rebuild alias and shortcut registries from current scripts/scriptlets.
@@ -5944,8 +6120,11 @@ impl Render for ScriptListApp {
         // The clone is unavoidable due to borrow checker: we need &mut self for render methods
         // but also need to match on self.current_view. Future optimization: refactor render
         // methods to take &str/&[T] references instead of owned values.
+        // 
+        // HUD is now handled by hud_manager as a separate floating window
+        // No need to render it as part of this view
         let current_view = self.current_view.clone();
-        let view_content = match current_view {
+        match current_view {
             AppView::ScriptList => self.render_script_list(cx),
             AppView::ActionsDialog => self.render_actions_dialog(cx),
             AppView::ArgPrompt {
@@ -5983,18 +6162,7 @@ impl Render for ScriptListApp {
                 filter,
                 selected_index,
             } => self.render_design_gallery(filter, selected_index, cx),
-        };
-
-        // Wrap view content in container for HUD overlay
-        // HUD is shown at bottom-center across all views
-        let mut container = div().relative().w_full().h_full().child(view_content);
-
-        // Add HUD overlay if active (bottom-center)
-        if let Some(hud) = self.render_hud(cx) {
-            container = container.child(hud);
         }
-
-        container
     }
 }
 
@@ -11430,7 +11598,7 @@ fn start_hotkey_listener(config: config::Config) {
         }
 
         let hotkey = HotKey::new(Some(modifiers), code);
-        let hotkey_id = hotkey.id();
+        let main_hotkey_id = hotkey.id();
 
         let hotkey_display = format!(
             "{}{}",
@@ -11454,7 +11622,102 @@ fn start_hotkey_listener(config: config::Config) {
             "HOTKEY",
             &format!(
                 "Registered global hotkey {} (id: {})",
-                hotkey_display, hotkey_id
+                hotkey_display, main_hotkey_id
+            ),
+        );
+
+        // Register script shortcuts
+        // Map from hotkey ID to script path
+        let mut script_hotkey_map: std::collections::HashMap<u32, String> =
+            std::collections::HashMap::new();
+
+        // Load scripts with shortcuts
+        let all_scripts = scripts::read_scripts();
+        for script in &all_scripts {
+            if let Some(ref shortcut) = script.shortcut {
+                if let Some((mods, key_code)) = parse_shortcut(shortcut) {
+                    let script_hotkey = HotKey::new(Some(mods), key_code);
+                    let script_hotkey_id = script_hotkey.id();
+
+                    match manager.register(script_hotkey) {
+                        Ok(()) => {
+                            script_hotkey_map
+                                .insert(script_hotkey_id, script.path.to_string_lossy().to_string());
+                            logging::log(
+                                "HOTKEY",
+                                &format!(
+                                    "Registered script shortcut '{}' for {} (id: {})",
+                                    shortcut, script.name, script_hotkey_id
+                                ),
+                            );
+                        }
+                        Err(e) => {
+                            logging::log(
+                                "HOTKEY",
+                                &format!(
+                                    "Failed to register shortcut '{}' for {}: {}",
+                                    shortcut, script.name, e
+                                ),
+                            );
+                        }
+                    }
+                } else {
+                    logging::log(
+                        "HOTKEY",
+                        &format!(
+                            "Failed to parse shortcut '{}' for script {}",
+                            shortcut, script.name
+                        ),
+                    );
+                }
+            }
+        }
+
+        // Load scriptlets with shortcuts
+        let all_scriptlets = scripts::load_scriptlets();
+        for scriptlet in &all_scriptlets {
+            if let Some(ref shortcut) = scriptlet.shortcut {
+                if let Some((mods, key_code)) = parse_shortcut(shortcut) {
+                    let scriptlet_hotkey = HotKey::new(Some(mods), key_code);
+                    let scriptlet_hotkey_id = scriptlet_hotkey.id();
+
+                    // Use file_path as the identifier (already includes #command)
+                    let scriptlet_path = scriptlet
+                        .file_path
+                        .clone()
+                        .unwrap_or_else(|| scriptlet.name.clone());
+
+                    match manager.register(scriptlet_hotkey) {
+                        Ok(()) => {
+                            script_hotkey_map
+                                .insert(scriptlet_hotkey_id, scriptlet_path.clone());
+                            logging::log(
+                                "HOTKEY",
+                                &format!(
+                                    "Registered scriptlet shortcut '{}' for {} (id: {})",
+                                    shortcut, scriptlet.name, scriptlet_hotkey_id
+                                ),
+                            );
+                        }
+                        Err(e) => {
+                            logging::log(
+                                "HOTKEY",
+                                &format!(
+                                    "Failed to register shortcut '{}' for {}: {}",
+                                    shortcut, scriptlet.name, e
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        logging::log(
+            "HOTKEY",
+            &format!(
+                "Registered {} script/scriptlet shortcuts",
+                script_hotkey_map.len()
             ),
         );
 
@@ -11463,10 +11726,14 @@ fn start_hotkey_listener(config: config::Config) {
         loop {
             if let Ok(event) = receiver.recv() {
                 // Only respond to key PRESS, not release
-                // This prevents double-triggering on a single key press
-                if event.id == hotkey_id && event.state == HotKeyState::Pressed {
+                if event.state != HotKeyState::Pressed {
+                    continue;
+                }
+
+                // Check if it's the main app hotkey
+                if event.id == main_hotkey_id {
                     let count = HOTKEY_TRIGGER_COUNT.fetch_add(1, Ordering::SeqCst);
-                    // Send via async_channel for immediate event-driven handling (replaces AtomicBool polling)
+                    // Send via async_channel for immediate event-driven handling
                     if hotkey_channel().0.send_blocking(()).is_err() {
                         logging::log("HOTKEY", "Hotkey channel closed, cannot send");
                     }
@@ -11474,9 +11741,21 @@ fn start_hotkey_listener(config: config::Config) {
                         "HOTKEY",
                         &format!("{} pressed (trigger #{})", hotkey_display, count + 1),
                     );
-                } else if event.id == hotkey_id && event.state == HotKeyState::Released {
-                    // Ignore key release events - just log for debugging
-                    logging::log("HOTKEY", &format!("{} released (ignored)", hotkey_display));
+                }
+                // Check if it's a script shortcut
+                else if let Some(script_path) = script_hotkey_map.get(&event.id) {
+                    logging::log(
+                        "HOTKEY",
+                        &format!("Script shortcut triggered: {}", script_path),
+                    );
+                    // Send the script path to be executed
+                    if script_hotkey_channel()
+                        .0
+                        .send_blocking(script_path.clone())
+                        .is_err()
+                    {
+                        logging::log("HOTKEY", "Script hotkey channel closed, cannot send");
+                    }
                 }
             }
         }
@@ -11563,8 +11842,15 @@ fn configure_as_floating_panel() {
 fn configure_as_floating_panel() {}
 
 fn start_hotkey_event_handler(cx: &mut App, window: WindowHandle<ScriptListApp>) {
+    // Start main hotkey listener (for app show/hide toggle)
     let handler = cx.new(|_| HotkeyPoller::new(window));
     handler.update(cx, |p, cx| {
+        p.start_listening(cx);
+    });
+
+    // Start script hotkey listener (for direct script execution via shortcuts)
+    let script_handler = cx.new(|_| ScriptHotkeyPoller::new(window));
+    script_handler.update(cx, |p, cx| {
         p.start_listening(cx);
     });
 }
