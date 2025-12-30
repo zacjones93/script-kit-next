@@ -74,6 +74,12 @@ pub struct TermPrompt {
     is_selecting: bool,
     /// Start position of mouse selection (in terminal grid coordinates: col, row)
     selection_start: Option<(usize, usize)>,
+    /// Time of last mouse click for multi-click detection
+    last_click_time: Option<Instant>,
+    /// Position of last mouse click (col, row)
+    last_click_position: Option<(usize, usize)>,
+    /// Count of rapid clicks at same position (1=single, 2=double, 3=triple)
+    click_count: u8,
 }
 
 impl TermPrompt {
@@ -135,6 +141,9 @@ impl TermPrompt {
             title: None,
             is_selecting: false,
             selection_start: None,
+            last_click_time: None,
+            last_click_position: None,
+            click_count: 0,
         })
     }
 
@@ -294,14 +303,26 @@ impl TermPrompt {
                             }
 
                             // Process terminal output - 2 iterations catches bursts without excessive overhead
+                            // Auto-scroll: Track if we're at the bottom before processing
+                            let was_at_bottom = term_prompt.terminal.display_offset() == 0;
+                            let mut had_output = false;
+
                             for _ in 0..2 {
                                 let events = term_prompt.terminal.process();
+                                if !events.is_empty() {
+                                    had_output = true;
+                                }
                                 for event in events {
                                     if let TerminalEvent::Exit(code) = event {
                                         term_prompt.handle_exit(code);
                                         return true;
                                     }
                                 }
+                            }
+
+                            // Auto-scroll: If we were at bottom and got new output, stay at bottom
+                            if was_at_bottom && had_output {
+                                term_prompt.terminal.scroll_to_bottom();
                             }
 
                             cx.notify(); // Trigger re-render
@@ -384,8 +405,7 @@ impl TermPrompt {
         let cell_width = self.cell_width();
 
         // Build HashSet for O(1) selection lookup
-        let selected: HashSet<(usize, usize)> =
-            content.selected_cells.iter().cloned().collect();
+        let selected: HashSet<(usize, usize)> = content.selected_cells.iter().cloned().collect();
 
         let mut lines_container = div()
             .flex()
@@ -464,13 +484,22 @@ impl TermPrompt {
                     (rgb(bg_u32), cursor_bg)
                 } else if is_selected_start {
                     // Selection uses selection background with original foreground
-                    (if fg_u32 == 0 { default_fg } else { rgb(fg_u32) }, selection_bg)
+                    (
+                        if fg_u32 == 0 { default_fg } else { rgb(fg_u32) },
+                        selection_bg,
+                    )
                 } else if bg_u32 != 0x000000 {
                     // Custom background
-                    (if fg_u32 == 0 { default_fg } else { rgb(fg_u32) }, rgb(bg_u32))
+                    (
+                        if fg_u32 == 0 { default_fg } else { rgb(fg_u32) },
+                        rgb(bg_u32),
+                    )
                 } else {
                     // Default
-                    (if fg_u32 == 0 { default_fg } else { rgb(fg_u32) }, default_bg)
+                    (
+                        if fg_u32 == 0 { default_fg } else { rgb(fg_u32) },
+                        default_bg,
+                    )
                 };
 
                 let mut span = div()
@@ -519,9 +548,16 @@ impl Render for TermPrompt {
 
         // Process terminal events - minimal polling since timer handles most updates
         // 2 iterations catches any output that arrived since last timer tick
+        // Auto-scroll: Track if we're at the bottom before processing
         if !self.exited {
+            let was_at_bottom = self.terminal.display_offset() == 0;
+            let mut had_output = false;
+
             for _ in 0..2 {
                 let events = self.terminal.process();
+                if !events.is_empty() {
+                    had_output = true;
+                }
                 for event in events {
                     match event {
                         TerminalEvent::Exit(code) => {
@@ -544,6 +580,11 @@ impl Render for TermPrompt {
                 if self.exited {
                     break;
                 }
+            }
+
+            // Auto-scroll: If we were at bottom and got new output, stay at bottom
+            if was_at_bottom && had_output {
+                self.terminal.scroll_to_bottom();
             }
         }
 
@@ -615,7 +656,7 @@ impl Render for TermPrompt {
                                 debug!(text_len = text.len(), "Pasting clipboard text to terminal");
                                 text
                             };
-                            
+
                             if let Err(e) = this.terminal.input(paste_data.as_bytes()) {
                                 if !this.exited {
                                     warn!(error = %e, "Failed to paste clipboard to terminal");
@@ -634,7 +675,10 @@ impl Render for TermPrompt {
                             use arboard::Clipboard;
                             if let Ok(mut clipboard) = Clipboard::new() {
                                 if clipboard.set_text(&selected_text).is_ok() {
-                                    debug!(text_len = selected_text.len(), "Copied selection to clipboard");
+                                    debug!(
+                                        text_len = selected_text.len(),
+                                        "Copied selection to clipboard"
+                                    );
                                 }
                             }
                             // Clear selection after copy (common terminal behavior)
@@ -753,10 +797,46 @@ impl Render for TermPrompt {
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
                     let (col, row) = this.pixel_to_cell(event.position);
-                    debug!(col, row, "Mouse down at cell - starting selection");
+                    let now = Instant::now();
+                    let multi_click_threshold = Duration::from_millis(500);
+
+                    // Check if this is a multi-click (same position, within time window)
+                    let is_same_position = this.last_click_position == Some((col, row));
+                    let is_quick_click = this
+                        .last_click_time
+                        .map(|t| now.duration_since(t) < multi_click_threshold)
+                        .unwrap_or(false);
+
+                    if is_same_position && is_quick_click {
+                        this.click_count = (this.click_count + 1).min(3);
+                    } else {
+                        this.click_count = 1;
+                    }
+
+                    this.last_click_time = Some(now);
+                    this.last_click_position = Some((col, row));
                     this.is_selecting = true;
                     this.selection_start = Some((col, row));
-                    this.terminal.start_selection(col, row);
+
+                    // Start selection based on click count
+                    match this.click_count {
+                        1 => {
+                            // Simple click-drag selection
+                            debug!(col, row, "Mouse down at cell - starting simple selection");
+                            this.terminal.start_selection(col, row);
+                        }
+                        2 => {
+                            // Double-click: word selection
+                            debug!(col, row, "Double-click at cell - starting word selection");
+                            this.terminal.start_semantic_selection(col, row);
+                        }
+                        3 => {
+                            // Triple-click: line selection
+                            debug!(col, row, "Triple-click at cell - starting line selection");
+                            this.terminal.start_line_selection(col, row);
+                        }
+                        _ => {}
+                    }
                 }),
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, _cx| {
@@ -773,13 +853,29 @@ impl Render for TermPrompt {
                         debug!(col, row, "Mouse up at cell - finalizing selection");
                         this.terminal.update_selection(col, row);
                         this.is_selecting = false;
-                        
+
+                        // Clear selection if single-click without drag (clicked and released at same position)
+                        // For double/triple click, we keep the word/line selection
+                        if this.click_count == 1 {
+                            if let Some((start_col, start_row)) = this.selection_start {
+                                if start_col == col && start_row == row {
+                                    // Single click at same position = clear any previous selection
+                                    debug!(
+                                        col,
+                                        row, "Single click without drag - clearing selection"
+                                    );
+                                    this.terminal.clear_selection();
+                                    return;
+                                }
+                            }
+                        }
+
                         // Log the selected text if any
                         if let Some(text) = this.terminal.selection_to_string() {
-                            let preview = if text.len() > 50 { 
-                                format!("{}...", &text[..50]) 
-                            } else { 
-                                text.clone() 
+                            let preview = if text.len() > 50 {
+                                format!("{}...", &text[..50])
+                            } else {
+                                text.clone()
                             };
                             debug!(text_len = text.len(), "Selection complete: {:?}", preview);
                         }
@@ -798,12 +894,12 @@ impl Render for TermPrompt {
                         point.y / cell_height
                     }
                 };
-                
+
                 // Convert to integer lines (positive = scroll down, negative = scroll up)
                 // In terminal scrollback: negative delta scrolls up into history
                 // We invert because terminal scroll() uses positive = scroll up (into history)
                 let scroll_lines = -lines.round() as i32;
-                
+
                 if scroll_lines != 0 {
                     this.terminal.scroll(scroll_lines);
                     trace!(delta = scroll_lines, "Mouse wheel scroll");
@@ -829,7 +925,33 @@ impl Render for TermPrompt {
             container.h_full().min_h(px(0.))
         };
 
-        container.child(terminal_content)
+        // Check if scrolled up from bottom - if so, show indicator
+        let scroll_offset = self.terminal.display_offset();
+
+        if scroll_offset > 0 {
+            // Create scroll position indicator overlay
+            let indicator = div()
+                .absolute()
+                .bottom_2()
+                .right_2()
+                .px_2()
+                .py_1()
+                .bg(rgb(colors.background.title_bar))
+                .text_color(rgb(colors.text.secondary))
+                .text_xs()
+                .rounded_sm()
+                .child(format!("↑{}", scroll_offset));
+
+            // Wrap container in a relative positioned div to enable absolute positioning
+            div()
+                .relative()
+                .w_full()
+                .h_full()
+                .child(container.child(terminal_content))
+                .child(indicator)
+        } else {
+            container.child(terminal_content)
+        }
     }
 }
 

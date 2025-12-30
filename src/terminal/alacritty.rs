@@ -822,8 +822,46 @@ impl TerminalHandle {
     pub fn start_selection(&mut self, col: usize, row: usize) {
         let mut state = self.state.lock().unwrap();
         let point = AlacPoint::new(Line(row as i32), Column(col));
-        state.term.selection = Some(Selection::new(SelectionType::Simple, point, Direction::Left));
+        state.term.selection = Some(Selection::new(
+            SelectionType::Simple,
+            point,
+            Direction::Left,
+        ));
         debug!(col, row, "Selection started");
+    }
+
+    /// Start a semantic (word) selection at the given grid position.
+    ///
+    /// Double-click triggers word selection - selects the word at the clicked position.
+    ///
+    /// # Arguments
+    ///
+    /// * `col` - Column index (0-indexed from left)
+    /// * `row` - Row index (0-indexed from top of visible area)
+    pub fn start_semantic_selection(&mut self, col: usize, row: usize) {
+        let mut state = self.state.lock().unwrap();
+        let point = AlacPoint::new(Line(row as i32), Column(col));
+        state.term.selection = Some(Selection::new(
+            SelectionType::Semantic,
+            point,
+            Direction::Left,
+        ));
+        debug!(col, row, "Semantic (word) selection started");
+    }
+
+    /// Start a line selection at the given grid position.
+    ///
+    /// Triple-click triggers line selection - selects the entire line at the clicked position.
+    ///
+    /// # Arguments
+    ///
+    /// * `col` - Column index (0-indexed from left)
+    /// * `row` - Row index (0-indexed from top of visible area)
+    pub fn start_line_selection(&mut self, col: usize, row: usize) {
+        let mut state = self.state.lock().unwrap();
+        let point = AlacPoint::new(Line(row as i32), Column(col));
+        state.term.selection = Some(Selection::new(SelectionType::Lines, point, Direction::Left));
+        debug!(col, row, "Line selection started");
     }
 
     /// Update the current selection to extend to the given position.

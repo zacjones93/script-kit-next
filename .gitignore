@@ -21,6 +21,7 @@ node_modules/
 *.local.md
 .swarmmail.db
 .test-screenshots/
+.mocks/
 
 # OpenCode / Agent tooling
 .opencode/

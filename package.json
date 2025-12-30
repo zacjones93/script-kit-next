@@ -8,6 +8,10 @@
     "#kit": "./scripts/kit-sdk.ts"
   },
   "scripts": {
-    "postinstall": "mkdir -p node_modules/@johnlindquist/kit && ln -sf ../../../scripts/kit-sdk.ts node_modules/@johnlindquist/kit/index.ts && echo '{\"name\":\"@johnlindquist/kit\",\"version\":\"999.0.0-local\",\"main\":\"./index.ts\",\"types\":\"./index.ts\"}' > node_modules/@johnlindquist/kit/package.json"
+    "postinstall": "mkdir -p node_modules/@johnlindquist/kit && ln -sf ../../../scripts/kit-sdk.ts node_modules/@johnlindquist/kit/index.ts && echo '{\"name\":\"@johnlindquist/kit\",\"version\":\"999.0.0-local\",\"main\":\"./index.ts\",\"types\":\"./index.ts\"}' > node_modules/@johnlindquist/kit/package.json",
+    "storybook:capture": "cargo build && echo '{\"type\":\"run\",\"path\":\"'\"$(pwd)\"'/tests/smoke/design-gallery.ts\"}' | ./target/debug/script-kit-gpui",
+    "storybook:components": "cargo build && echo '{\"type\":\"run\",\"path\":\"'\"$(pwd)\"'/tests/smoke/component-showcase.ts\"}' | ./target/debug/script-kit-gpui",
+    "storybook:all": "npm run storybook:capture && npm run storybook:components",
+    "storybook:dev": "echo Tier 2: Run cargo run --bin storybook"
   }
 }

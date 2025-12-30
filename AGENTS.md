@@ -274,6 +274,40 @@ echo '{"type": "run", "path": "'$(pwd)'/tests/smoke/test-editor-height-visual.ts
 # The screenshot shows actual rendered state for visual verification
 ```
 
+### CRITICAL: Screenshot Capture
+
+**NEVER use system screenshot tools.** The following are BLOCKED:
+- `screencapture` (macOS)
+- `scrot`, `gnome-screenshot`, `flameshot`, `maim` (Linux)
+- ImageMagick `import` commands
+
+**ALWAYS use the SDK's `captureScreenshot()` function:**
+
+```typescript
+import '../../scripts/kit-sdk';
+import { writeFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
+
+// Display something in the app first
+await div(`<div class="p-4">Content to capture</div>`);
+await new Promise(r => setTimeout(r, 500)); // Wait for render
+
+// Capture ONLY the app window (not desktop!)
+const screenshot = await captureScreenshot();
+console.error(`Captured: ${screenshot.width}x${screenshot.height}`);
+
+// Save to file
+const dir = join(process.cwd(), '.mocks');
+mkdirSync(dir, { recursive: true });
+writeFileSync(join(dir, 'screenshot.png'), Buffer.from(screenshot.data, 'base64'));
+```
+
+**Why this matters:**
+- `captureScreenshot()` captures ONLY the Script Kit window
+- System tools capture the entire desktop (privacy/security issue)
+- Cross-platform: works on macOS, Windows, and Linux
+- No temp files: data returned directly as base64 PNG
+
 ### Anti-Patterns
 
 | Wrong | Right |

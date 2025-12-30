@@ -1,0 +1,41 @@
+//! Story Definitions for Script Kit Components
+//!
+//! This module contains all the story definitions for the storybook.
+//! Stories are manually registered in get_all_stories().
+
+mod button_stories;
+mod design_token_stories;
+mod form_field_stories;
+mod list_item_stories;
+mod scrollbar_stories;
+mod toast_stories;
+
+use crate::storybook::StoryEntry;
+use std::sync::OnceLock;
+
+// Re-export story types
+pub use button_stories::ButtonStory;
+pub use design_token_stories::DesignTokenStory;
+pub use form_field_stories::FormFieldStory;
+pub use list_item_stories::ListItemStory;
+pub use scrollbar_stories::ScrollbarStory;
+pub use toast_stories::ToastStory;
+
+/// Static storage for all stories
+static ALL_STORIES: OnceLock<Vec<StoryEntry>> = OnceLock::new();
+
+/// Get all registered stories
+pub fn get_all_stories() -> &'static Vec<StoryEntry> {
+    ALL_STORIES.get_or_init(|| {
+        vec![
+            // Foundation
+            StoryEntry::new(Box::new(DesignTokenStory)),
+            // Components
+            StoryEntry::new(Box::new(ButtonStory)),
+            StoryEntry::new(Box::new(ToastStory)),
+            StoryEntry::new(Box::new(FormFieldStory)),
+            StoryEntry::new(Box::new(ListItemStory)),
+            StoryEntry::new(Box::new(ScrollbarStory)),
+        ]
+    })
+}

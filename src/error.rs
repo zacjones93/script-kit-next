@@ -102,3 +102,140 @@ impl<T, E: std::fmt::Debug> NotifyResultExt<T> for std::result::Result<T, E> {
         }
     }
 }
+
+/// Extension trait for silent error logging with caller location tracking.
+/// Use when the operation is recoverable and user doesn't need to know.
+///
+/// This is an enhanced version that includes file/line information using
+/// `#[track_caller]` for better debugging. Follows the Zed error handling pattern.
+///
+/// # Examples
+///
+/// ```ignore
+/// use script_kit_gpui::error::ResultExt;
+///
+/// // Silently log and continue if theme fails to load
+/// let theme = load_theme().log_err();
+///
+/// // Log as warning for expected failures
+/// let cached = read_cache().warn_on_err();
+/// ```
+#[allow(dead_code)]
+pub trait ResultExt<T> {
+    /// Log error with caller location and return None. Use for recoverable failures.
+    fn log_err(self) -> Option<T>;
+    /// Log as warning with caller location and return None. Use for expected failures.
+    fn warn_on_err(self) -> Option<T>;
+}
+
+impl<T, E: std::fmt::Debug> ResultExt<T> for std::result::Result<T, E> {
+    #[track_caller]
+    fn log_err(self) -> Option<T> {
+        match self {
+            Ok(value) => Some(value),
+            Err(error) => {
+                let caller = std::panic::Location::caller();
+                error!(
+                    error = ?error,
+                    file = caller.file(),
+                    line = caller.line(),
+                    "Operation failed"
+                );
+                None
+            }
+        }
+    }
+
+    #[track_caller]
+    fn warn_on_err(self) -> Option<T> {
+        match self {
+            Ok(value) => Some(value),
+            Err(error) => {
+                let caller = std::panic::Location::caller();
+                warn!(
+                    error = ?error,
+                    file = caller.file(),
+                    line = caller.line(),
+                    "Operation had warning"
+                );
+                None
+            }
+        }
+    }
+}
+
+/// Log an error from an async operation. Use for fire-and-forget patterns.
+///
+/// This is a simpler alternative to a full TryFutureExt trait that works
+/// well with GPUI's async model. Use this for background tasks where you
+/// want to log failures without propagating them.
+///
+/// # Examples
+///
+/// ```ignore
+/// use script_kit_gpui::log_async_err;
+///
+/// // In a spawned task
+/// let result = async_operation().await;
+/// log_async_err(result, "async operation name");
+///
+/// // With chaining
+/// if let Some(data) = log_async_err(fetch_data().await, "fetch data") {
+///     process_data(data);
+/// }
+/// ```
+#[allow(dead_code)]
+pub fn log_async_err<T, E: std::fmt::Debug>(
+    result: std::result::Result<T, E>,
+    operation: &str,
+) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(err) => {
+            error!(
+                error = ?err,
+                operation = operation,
+                "Async operation failed"
+            );
+            None
+        }
+    }
+}
+
+/// Panic in debug mode, log error in release mode.
+///
+/// Use for "impossible" states that should crash during development
+/// but gracefully degrade in production. This follows the Zed pattern
+/// for handling invariant violations.
+///
+/// # Examples
+///
+/// ```ignore
+/// use script_kit_gpui::debug_panic;
+///
+/// // Basic usage - will panic in debug, log error in release
+/// debug_panic!("Unexpected state: value was None");
+///
+/// // With format arguments
+/// let id = 42;
+/// debug_panic!("Invalid index {} for collection of size {}", id, 10);
+///
+/// // In a match arm with graceful fallback
+/// let value = match some_option {
+///     Some(v) => v,
+///     None => {
+///         debug_panic!("Expected value to exist but got None");
+///         return Default::default(); // graceful fallback in release
+///     }
+/// };
+/// ```
+#[macro_export]
+macro_rules! debug_panic {
+    ( $($fmt_arg:tt)* ) => {
+        if cfg!(debug_assertions) {
+            panic!( $($fmt_arg)* );
+        } else {
+            tracing::error!("IMPOSSIBLE STATE: {}", format_args!($($fmt_arg)*));
+        }
+    };
+}

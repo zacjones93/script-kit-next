@@ -996,10 +996,23 @@ declare global {
   
   /**
    * Tab-through template editor like VSCode snippets
-   * @param template - Template string with variables ($1, $2, ${1:default})
+   * 
+   * @param template - Template string with VSCode snippet syntax:
+   *   - $1, $2, $3 - Simple tabstops (Tab to navigate)
+   *   - ${1:default} - Tabstop with placeholder
+   *   - ${1|a,b,c|} - Choice tabstop
+   *   - $0 - Final cursor position
+   *   - $$ - Escaped dollar sign
+   *   - $SELECTION - Currently selected text
+   *   - $CLIPBOARD - Clipboard contents
+   *   - $HOME - User's home directory
+   * @param options - Editor options (language for syntax highlighting)
    * @returns The filled-in template string
    */
-  function template(template: string): Promise<string>;
+  function template(
+    template: string,
+    options?: { language?: string }
+  ): Promise<string>;
   
   /**
    * Get/set environment variable
@@ -1639,20 +1652,74 @@ globalThis.div = async function div(html: string, tailwind?: string): Promise<vo
 globalThis.md = function md(markdown: string): string {
   let html = markdown;
 
-  // Headings
+  // 1. Fenced code blocks (must be before inline code)
+  // Handle ```lang\ncode\n``` -> <pre><code class="lang">code</code></pre>
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    const langClass = lang ? ` class="${lang}"` : '';
+    return `<pre><code${langClass}>${code.trim()}</code></pre>`;
+  });
+
+  // 2. Blockquotes (handle nested > as well)
+  // Process line by line to handle multiple > for nesting
+  html = html.replace(/^((?:>\s?)+)(.*)$/gm, (_, arrows, content) => {
+    const depth = (arrows.match(/>/g) || []).length;
+    let result = content.trim();
+    for (let i = 0; i < depth; i++) {
+      result = `<blockquote>${result}</blockquote>`;
+    }
+    return result;
+  });
+
+  // 3. Headings (h1-h6, process larger numbers first to avoid conflicts)
+  html = html.replace(/^###### (.+)$/gm, '<h6>$1</h6>');
+  html = html.replace(/^##### (.+)$/gm, '<h5>$1</h5>');
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
   html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
   html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
   html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
 
-  // Bold
+  // 4. Horizontal rules
+  html = html.replace(/^---$/gm, '<hr>');
+  html = html.replace(/^\*\*\*$/gm, '<hr>');
+
+  // 5. Images (before links, both use [] syntax)
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">');
+
+  // 6. Links
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+
+  // 7. Ordered lists - use ol-li marker to distinguish from unordered
+  html = html.replace(/^\d+\. (.+)$/gm, '<ol-li>$1</ol-li>');
+
+  // 8. Unordered lists (existing) - use ul-li marker
+  html = html.replace(/^- (.+)$/gm, '<ul-li>$1</ul-li>');
+
+  // Wrap consecutive ol-li in <ol>
+  html = html.replace(/(<ol-li>.*?<\/ol-li>\n?)+/g, (match) => {
+    const items = match.replace(/<ol-li>/g, '<li>').replace(/<\/ol-li>/g, '</li>');
+    return `<ol>${items}</ol>`;
+  });
+
+  // Wrap consecutive ul-li in <ul>
+  html = html.replace(/(<ul-li>.*?<\/ul-li>\n?)+/g, (match) => {
+    const items = match.replace(/<ul-li>/g, '<li>').replace(/<\/ul-li>/g, '</li>');
+    return `<ul>${items}</ul>`;
+  });
+
+  // 9. Bold (existing)
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
 
-  // Italic
+  // 10. Italic (existing)
   html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
 
-  // Lists
-  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
-  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+  // 11. Strikethrough
+  html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
+
+  // 12. Inline code (after fenced blocks)
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // 13. Line breaks (double space at end of line)
+  html = html.replace(/  $/gm, '<br>');
 
   return html;
 };
@@ -1967,27 +2034,54 @@ globalThis.drop = async function drop(): Promise<FileInfo[]> {
   });
 };
 
+/**
+ * Template prompt with VSCode snippet tabstops
+ * 
+ * @param templateStr - Template string with VSCode snippet syntax:
+ *   - $1, $2, $3 - Simple tabstops (Tab to navigate)
+ *   - ${1:default} - Tabstop with placeholder
+ *   - ${1|a,b,c|} - Choice tabstop
+ *   - $0 - Final cursor position
+ *   - $$ - Escaped dollar sign
+ *   - $SELECTION - Currently selected text (calls getSelectedText())
+ *   - $CLIPBOARD - Clipboard contents
+ *   - $HOME - User's home directory
+ * @param options - Editor options (language, etc.)
+ * @returns Promise<string> - Final edited content
+ */
 globalThis.template = async function template(
-  templateStr: string
+  templateStr: string,
+  options: { language?: string } = {}
 ): Promise<string> {
+  let processed = templateStr;
+  
+  // Preprocess special variables
+  if (processed.includes('$SELECTION')) {
+    const selection = await getSelectedText();
+    processed = processed.replaceAll('$SELECTION', selection || '');
+  }
+  if (processed.includes('$CLIPBOARD')) {
+    const clip = await globalThis.clipboard.readText();
+    processed = processed.replaceAll('$CLIPBOARD', clip || '');
+  }
+  if (processed.includes('$HOME')) {
+    processed = processed.replaceAll('$HOME', process.env.HOME || '');
+  }
+  
   const id = nextId();
-
   return new Promise((resolve) => {
     pending.set(id, (msg: SubmitMessage) => {
-      // If user pressed Escape (value is null), exit the script
       if (msg.value === null) {
-        process.exit(0);
+        process.exit(0);  // Escape pressed
       }
       resolve(msg.value ?? '');
     });
-
-    const message: TemplateMessage = {
-      type: 'template',
+    send({
+      type: 'editor',
       id,
-      template: templateStr,
-    };
-
-    send(message);
+      template: processed,
+      language: options.language || 'plaintext',
+    });
   });
 };
 

@@ -716,14 +716,21 @@ pub fn icon_from_png(png_data: &[u8]) -> Option<IconKind> {
 /// Visual design for section headers:
 /// - Standard casing (not uppercase)
 /// - Small font (~10-11px via text_xs)
-/// - Bold font weight for visibility
+/// - Semi-bold weight (SEMIBOLD for subtlety)
 /// - Dimmed color (subtle but readable)
-/// - Bottom-aligned within the row (text sits at the bottom edge)
+/// - Compact vertical footprint within the 48px uniform_list row
+/// - Large top padding to create visual compression (appears ~24px tall)
 /// - Left-aligned with list item padding
 /// - No background, no border
 ///
-/// NOTE: The container height is set by the parent (usually LIST_ITEM_HEIGHT for uniform_list).
-/// This function returns a full-height flex container that positions text at the bottom.
+/// ## Technical Note: uniform_list Height Constraint
+/// GPUI's `uniform_list` requires fixed heights for O(1) scroll calculation.
+/// We cannot use actual variable heights. Instead, we use a visual trick:
+/// - Actual height: 48px (LIST_ITEM_HEIGHT, for uniform_list)
+/// - Visual height: ~24px (via top padding compression)
+/// - Content is pushed to the bottom 24px of the container
+///
+/// This gives the appearance of 50% height while maintaining uniform_list compatibility.
 ///
 /// # Arguments
 /// * `label` - The section label (displayed as-is, standard casing)
@@ -735,21 +742,24 @@ pub fn icon_from_png(png_data: &[u8]) -> Option<IconKind> {
 /// render_section_header("Recent", colors)
 /// ```
 pub fn render_section_header(label: &str, colors: ListItemColors) -> impl IntoElement {
-    // Full-height container that positions content at the bottom
-    // The parent sets h(px(LIST_ITEM_HEIGHT)), so we use h_full() to fill it
-    // and justify_end() to push content to the bottom
+    // Full-height container that creates visual compression
+    // The parent sets h(px(LIST_ITEM_HEIGHT=48px)), so we use h_full() to fill it
+    // Large top padding (24px) compresses visible content to bottom ~24px
+    // This creates the visual illusion of a 50% height header while maintaining
+    // uniform_list's fixed-height requirement
     div()
         .w_full()
-        .h_full() // Fill parent's height (LIST_ITEM_HEIGHT)
+        .h_full() // Fill parent's height (LIST_ITEM_HEIGHT = 48px)
         .px(px(16.))
+        .pt(px(24.)) // Large top padding: 48px - 24px = 24px visible content area
         .pb(px(4.)) // Small bottom padding so text doesn't touch next item
         .flex()
         .flex_col()
-        .justify_end() // Push content to bottom
+        .justify_end() // Push content to bottom of remaining space
         .child(
             div()
-                .text_xs()
-                .font_weight(FontWeight::BOLD) // Bold for visibility
+                .text_xs() // 10-11px font
+                .font_weight(FontWeight::SEMIBOLD) // Slightly lighter than BOLD
                 .text_color(rgb(colors.text_dimmed))
                 .child(label.to_string()), // Standard casing (not uppercased)
         )

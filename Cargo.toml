@@ -16,6 +16,10 @@ path = "src/main.rs"
 name = "smoke-test"
 path = "src/bin/smoke-test.rs"
 
+[[bin]]
+name = "storybook"
+path = "src/bin/storybook.rs"
+
 [dependencies]
 gpui = { git = "https://github.com/zed-industries/zed" }
 global-hotkey = "0.7"
@@ -70,6 +74,9 @@ lru = "0.12"  # LRU cache for clipboard image eviction
 # Image decoding for app icons
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+# Cross-platform window screenshot capture
+xcap = "0.8"
+
 # File modification time handling for icon cache
 filetime = "0.2"
 glob = "0.3.3"
@@ -80,6 +87,13 @@ keyring = "3"
 
 # Process monitoring for orphan detection and cleanup
 sysinfo = "0.33"
+
+# Non-poisoning mutex (doesn't require .unwrap() on lock)
+parking_lot = "0.12"
+
+# Storybook infrastructure (compile-time story registration + CLI)
+inventory = "0.3"  # Compile-time story registration (same pattern as Zed)
+clap = { version = "4", features = ["derive"] }  # CLI argument parsing
 
 # Core Foundation for CFRunLoop (keyboard monitoring)
 core-foundation = "0.10"

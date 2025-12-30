@@ -1,25 +1,30 @@
 //! DivPrompt - HTML content display
 //!
 //! Features:
-//! - Display HTML content (text extraction for prototype)
-//! - Optional Tailwind styling
+//! - Parse and render HTML elements as native GPUI components
+//! - Support for headers, paragraphs, bold, italic, code, lists, blockquotes
+//! - Theme-aware styling
 //! - Simple keyboard: Enter or Escape to submit
 
-use gpui::{div, prelude::*, px, rgb, Context, FocusHandle, Focusable, Render, Window};
+use gpui::{
+    div, prelude::*, px, rgb, rgba, Context, Div, FocusHandle, Focusable, FontWeight, Render,
+    Window,
+};
 use std::sync::Arc;
 
 use crate::designs::{get_tokens, DesignVariant};
 use crate::logging;
 use crate::theme;
-use crate::utils::strip_html_tags;
+use crate::utils::{parse_html, HtmlElement};
 
 use super::SubmitCallback;
 
 /// DivPrompt - HTML content display
 ///
 /// Features:
-/// - Display HTML content (text extraction for prototype)
-/// - Optional Tailwind styling
+/// - Parse and render HTML elements as native GPUI components
+/// - Support for headers, paragraphs, bold, italic, code, lists, blockquotes
+/// - Theme-aware styling
 /// - Simple keyboard: Enter or Escape to submit
 pub struct DivPrompt {
     pub id: String,
@@ -85,6 +90,361 @@ impl DivPrompt {
     }
 }
 
+/// Style context for rendering HTML elements
+#[derive(Clone, Copy)]
+struct RenderContext {
+    /// Primary text color
+    text_primary: u32,
+    /// Secondary text color (for muted content)
+    text_secondary: u32,
+    /// Tertiary text color
+    text_tertiary: u32,
+    /// Accent/link color
+    accent_color: u32,
+    /// Code background color
+    code_bg: u32,
+    /// Blockquote border color
+    quote_border: u32,
+    /// HR color
+    hr_color: u32,
+}
+
+impl RenderContext {
+    fn from_theme(colors: &theme::ColorScheme) -> Self {
+        Self {
+            text_primary: colors.text.primary,
+            text_secondary: colors.text.secondary,
+            text_tertiary: colors.text.tertiary,
+            accent_color: colors.accent.selected,
+            code_bg: colors.background.search_box,
+            quote_border: colors.ui.border,
+            hr_color: colors.ui.border,
+        }
+    }
+}
+
+/// Render a vector of HtmlElements as a GPUI Div
+fn render_elements(elements: &[HtmlElement], ctx: RenderContext) -> Div {
+    let mut container = div().flex().flex_col().gap_2().w_full();
+
+    for element in elements {
+        container = container.child(render_element(element, ctx));
+    }
+
+    container
+}
+
+/// Render a single HtmlElement as a GPUI element
+fn render_element(element: &HtmlElement, ctx: RenderContext) -> Div {
+    match element {
+        HtmlElement::Text(text) => {
+            // Text is a block with the text content
+            div()
+                .w_full()
+                .text_color(rgb(ctx.text_secondary))
+                .child(text.clone())
+        }
+
+        HtmlElement::Header { level, children } => {
+            let font_size = match level {
+                1 => 28.0,
+                2 => 24.0,
+                3 => 20.0,
+                4 => 18.0,
+                5 => 16.0,
+                _ => 14.0,
+            };
+
+            // Collect all text content from children
+            let text_content = collect_text(children);
+
+            div()
+                .w_full()
+                .text_size(px(font_size))
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(ctx.text_primary))
+                .mb(px(8.0))
+                .child(text_content)
+        }
+
+        HtmlElement::Paragraph(children) => {
+            // Collect all text content from children
+            let text_content = collect_text(children);
+
+            div()
+                .w_full()
+                .text_size(px(14.0))
+                .text_color(rgb(ctx.text_secondary))
+                .mb(px(8.0))
+                .child(text_content)
+        }
+
+        HtmlElement::Bold(children) => {
+            let text_content = collect_text(children);
+            div().font_weight(FontWeight::BOLD).child(text_content)
+        }
+
+        HtmlElement::Italic(children) => {
+            // GPUI doesn't have native italic support, so we use a slightly different color
+            let text_content = collect_text(children);
+            div().text_color(rgb(ctx.text_tertiary)).child(text_content)
+        }
+
+        HtmlElement::InlineCode(code) => div()
+            .px(px(6.0))
+            .py(px(2.0))
+            .bg(rgba((ctx.code_bg << 8) | 0x80))
+            .rounded(px(4.0))
+            .font_family("Menlo")
+            .text_size(px(13.0))
+            .text_color(rgb(ctx.accent_color))
+            .child(code.clone()),
+
+        HtmlElement::CodeBlock { code, .. } => div()
+            .w_full()
+            .p(px(12.0))
+            .mb(px(8.0))
+            .bg(rgba((ctx.code_bg << 8) | 0xC0))
+            .rounded(px(6.0))
+            .font_family("Menlo")
+            .text_size(px(13.0))
+            .text_color(rgb(ctx.text_primary))
+            .child(code.clone()),
+
+        HtmlElement::UnorderedList(items) => {
+            let mut list = div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .mb(px(8.0))
+                .pl(px(16.0))
+                .w_full();
+
+            for item in items {
+                if let HtmlElement::ListItem(children) = item {
+                    let text_content = collect_text(children);
+                    list = list.child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap_2()
+                            .w_full()
+                            .child(
+                                div().text_color(rgb(ctx.text_tertiary)).child("\u{2022}"), // Bullet point
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_color(rgb(ctx.text_secondary))
+                                    .child(text_content),
+                            ),
+                    );
+                }
+            }
+
+            list
+        }
+
+        HtmlElement::OrderedList(items) => {
+            let mut list = div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .mb(px(8.0))
+                .pl(px(16.0))
+                .w_full();
+
+            for (index, item) in items.iter().enumerate() {
+                if let HtmlElement::ListItem(children) = item {
+                    let text_content = collect_text(children);
+                    list = list.child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap_2()
+                            .w_full()
+                            .child(
+                                div()
+                                    .text_color(rgb(ctx.text_tertiary))
+                                    .min_w(px(20.0))
+                                    .child(format!("{}.", index + 1)),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_color(rgb(ctx.text_secondary))
+                                    .child(text_content),
+                            ),
+                    );
+                }
+            }
+
+            list
+        }
+
+        HtmlElement::ListItem(children) => {
+            // Standalone list item (shouldn't normally happen, but handle gracefully)
+            let text_content = collect_text(children);
+            div()
+                .w_full()
+                .text_color(rgb(ctx.text_secondary))
+                .child(text_content)
+        }
+
+        HtmlElement::Blockquote(children) => {
+            let text_content = collect_text(children);
+            div()
+                .w_full()
+                .pl(px(16.0))
+                .py(px(8.0))
+                .mb(px(8.0))
+                .border_l_4()
+                .border_color(rgb(ctx.quote_border))
+                .text_color(rgb(ctx.text_tertiary))
+                .child(text_content)
+        }
+
+        HtmlElement::HorizontalRule => div().w_full().h(px(1.0)).my(px(12.0)).bg(rgb(ctx.hr_color)),
+
+        HtmlElement::Link { children, .. } => {
+            // Links are styled but not clickable (as per requirements)
+            let text_content = collect_text(children);
+            div().text_color(rgb(ctx.accent_color)).child(text_content)
+        }
+
+        HtmlElement::LineBreak => {
+            div().h(px(8.0)) // Line break spacing
+        }
+
+        HtmlElement::Div(children) | HtmlElement::Span(children) => render_elements(children, ctx),
+    }
+}
+
+/// Collect all text content from HTML elements into a single string
+fn collect_text(elements: &[HtmlElement]) -> String {
+    let mut result = String::new();
+
+    for element in elements {
+        match element {
+            HtmlElement::Text(text) => result.push_str(text),
+            HtmlElement::Bold(children) => result.push_str(&collect_text(children)),
+            HtmlElement::Italic(children) => result.push_str(&collect_text(children)),
+            HtmlElement::InlineCode(code) => {
+                result.push('`');
+                result.push_str(code);
+                result.push('`');
+            }
+            HtmlElement::Link { children, .. } => result.push_str(&collect_text(children)),
+            HtmlElement::LineBreak => result.push('\n'),
+            HtmlElement::Header { children, .. }
+            | HtmlElement::Paragraph(children)
+            | HtmlElement::ListItem(children)
+            | HtmlElement::Blockquote(children)
+            | HtmlElement::Div(children)
+            | HtmlElement::Span(children) => {
+                result.push_str(&collect_text(children));
+            }
+            HtmlElement::UnorderedList(items) | HtmlElement::OrderedList(items) => {
+                for item in items {
+                    result.push_str(&collect_text(std::slice::from_ref(item)));
+                    result.push(' ');
+                }
+            }
+            HtmlElement::CodeBlock { code, .. } => {
+                result.push_str(code);
+            }
+            HtmlElement::HorizontalRule => {
+                result.push_str("---");
+            }
+        }
+    }
+
+    result
+}
+
+/// Render an inline element (text, bold, italic, code, link)
+fn render_inline(element: &HtmlElement, ctx: RenderContext) -> Div {
+    match element {
+        HtmlElement::Text(text) => div().child(text.clone()),
+
+        HtmlElement::Bold(children) => div()
+            .flex()
+            .flex_row()
+            .items_baseline()
+            .font_weight(FontWeight::BOLD)
+            .children(children.iter().map(|c| render_inline(c, ctx))),
+
+        HtmlElement::Italic(children) => div()
+            .flex()
+            .flex_row()
+            .items_baseline()
+            .text_color(rgb(ctx.text_tertiary))
+            .children(children.iter().map(|c| render_inline(c, ctx))),
+
+        HtmlElement::InlineCode(code) => div()
+            .px(px(4.0))
+            .py(px(1.0))
+            .bg(rgba((ctx.code_bg << 8) | 0x80))
+            .rounded(px(3.0))
+            .font_family("Menlo")
+            .text_size(px(12.0))
+            .text_color(rgb(ctx.accent_color))
+            .child(code.clone()),
+
+        HtmlElement::Link { children, .. } => div()
+            .flex()
+            .flex_row()
+            .items_baseline()
+            .text_color(rgb(ctx.accent_color))
+            .children(children.iter().map(|c| render_inline(c, ctx))),
+
+        HtmlElement::LineBreak => div().h(px(14.0)),
+
+        // Block elements appearing inline - just render their content
+        HtmlElement::Header { children, .. }
+        | HtmlElement::Paragraph(children)
+        | HtmlElement::ListItem(children)
+        | HtmlElement::Blockquote(children)
+        | HtmlElement::Div(children)
+        | HtmlElement::Span(children) => div()
+            .flex()
+            .flex_row()
+            .items_baseline()
+            .children(children.iter().map(|c| render_inline(c, ctx))),
+
+        HtmlElement::UnorderedList(items) | HtmlElement::OrderedList(items) => {
+            // Flatten list items inline
+            div()
+                .flex()
+                .flex_row()
+                .items_baseline()
+                .children(items.iter().filter_map(|item| {
+                    if let HtmlElement::ListItem(children) = item {
+                        Some(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .children(children.iter().map(|c| render_inline(c, ctx))),
+                        )
+                    } else {
+                        None
+                    }
+                }))
+        }
+
+        HtmlElement::CodeBlock { code, .. } => div()
+            .px(px(4.0))
+            .py(px(1.0))
+            .bg(rgba((ctx.code_bg << 8) | 0x80))
+            .rounded(px(3.0))
+            .font_family("Menlo")
+            .text_size(px(12.0))
+            .child(code.clone()),
+
+        HtmlElement::HorizontalRule => div().w(px(20.0)).h(px(1.0)).bg(rgb(ctx.hr_color)),
+    }
+}
+
 impl Focusable for DivPrompt {
     fn focus_handle(&self, _cx: &gpui::App) -> FocusHandle {
         self.focus_handle.clone()
@@ -112,17 +472,29 @@ impl Render for DivPrompt {
             },
         );
 
-        // Extract and render text content using shared utility
-        let display_text = strip_html_tags(&self.html);
+        // Parse HTML into elements
+        let elements = parse_html(&self.html);
+
+        // Create render context from theme
+        let render_ctx = if self.design_variant == DesignVariant::Default {
+            RenderContext::from_theme(&self.theme.colors)
+        } else {
+            RenderContext {
+                text_primary: colors.text_primary,
+                text_secondary: colors.text_secondary,
+                text_tertiary: colors.text_muted, // Use text_muted for tertiary
+                accent_color: colors.accent,
+                code_bg: colors.background_tertiary, // Use background_tertiary for code bg
+                quote_border: colors.border,
+                hr_color: colors.border,
+            }
+        };
 
         // Use design tokens for colors (with theme fallback for Default variant)
-        let (main_bg, text_color) = if self.design_variant == DesignVariant::Default {
-            (
-                rgb(self.theme.colors.background.main),
-                rgb(self.theme.colors.text.secondary),
-            )
+        let main_bg = if self.design_variant == DesignVariant::Default {
+            rgb(self.theme.colors.background.main)
         } else {
-            (rgb(colors.background), rgb(colors.text_secondary))
+            rgb(colors.background)
         };
 
         // Generate semantic IDs for div prompt elements
@@ -138,7 +510,6 @@ impl Render for DivPrompt {
             .h_full() // Fill container height completely
             .min_h(px(0.)) // Allow proper flex behavior
             .bg(main_bg)
-            .text_color(text_color)
             .p(px(spacing.padding_lg))
             .key_context("div_prompt")
             .track_focus(&self.focus_handle)
@@ -150,8 +521,75 @@ impl Render for DivPrompt {
                     .min_h(px(0.)) // Allow shrinking
                     .w_full()
                     .overflow_y_hidden() // Clip content at container boundary
-                    .child(display_text),
+                    .child(render_elements(&elements, render_ctx)),
             )
         // Footer removed - content now extends to bottom of container
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_render_context_from_theme() {
+        let colors = theme::ColorScheme::dark_default();
+        let ctx = RenderContext::from_theme(&colors);
+
+        assert_eq!(ctx.text_primary, colors.text.primary);
+        assert_eq!(ctx.text_secondary, colors.text.secondary);
+        assert_eq!(ctx.accent_color, colors.accent.selected);
+    }
+
+    #[test]
+    fn test_render_simple_text() {
+        let elements = parse_html("Hello World");
+        let ctx = RenderContext::from_theme(&theme::ColorScheme::dark_default());
+
+        // Should not panic
+        let _ = render_elements(&elements, ctx);
+    }
+
+    #[test]
+    fn test_render_complex_html() {
+        let html = r#"
+            <h1>Title</h1>
+            <p>A paragraph with <strong>bold</strong> and <em>italic</em> text.</p>
+            <ul>
+                <li>Item 1</li>
+                <li>Item 2</li>
+            </ul>
+            <blockquote>A quote</blockquote>
+            <pre><code>let x = 1;</code></pre>
+            <hr>
+            <a href="https://example.com">Link</a>
+        "#;
+        let elements = parse_html(html);
+        let ctx = RenderContext::from_theme(&theme::ColorScheme::dark_default());
+
+        // Should not panic
+        let _ = render_elements(&elements, ctx);
+    }
+
+    #[test]
+    fn test_render_headers_different_sizes() {
+        for level in 1..=6 {
+            let html = format!("<h{}>Header {}</h{}>", level, level, level);
+            let elements = parse_html(&html);
+            let ctx = RenderContext::from_theme(&theme::ColorScheme::dark_default());
+
+            // Should not panic
+            let _ = render_elements(&elements, ctx);
+        }
+    }
+
+    #[test]
+    fn test_render_nested_formatting() {
+        let html = "<p><strong><em>Bold and italic</em></strong></p>";
+        let elements = parse_html(html);
+        let ctx = RenderContext::from_theme(&theme::ColorScheme::dark_default());
+
+        // Should not panic
+        let _ = render_elements(&elements, ctx);
     }
 }

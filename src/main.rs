@@ -105,7 +105,6 @@ use components::{
     FormTextField, Scrollbar, ScrollbarColors,
 };
 use designs::{get_tokens, render_design_item, DesignVariant};
-use error::ErrorSeverity;
 use frecency::FrecencyStore;
 use list_item::{
     render_section_header, GroupedListItem, ListItem, ListItemColors, LIST_ITEM_HEIGHT,
@@ -115,6 +114,7 @@ use utils::strip_html_tags;
 
 use actions::{ActionsDialog, ScriptInfo};
 use panel::{CURSOR_HEIGHT_LG, CURSOR_MARGIN_Y, DEFAULT_PLACEHOLDER};
+use parking_lot::Mutex as ParkingMutex;
 use protocol::{Choice, Message};
 use std::sync::{mpsc, Arc, Mutex};
 use syntax::highlight_code_lines;
@@ -310,97 +310,61 @@ fn move_first_window_to_bounds(bounds: &Bounds<Pixels>) {
     move_first_window_to(x, y, width, height);
 }
 
-/// Capture a screenshot of the app window using macOS screencapture command.
+/// Capture a screenshot of the app window using xcap for cross-platform support.
 ///
 /// Returns a tuple of (png_data, width, height) on success.
 /// The function:
-/// 1. Gets the window ID using AppleScript
-/// 2. Runs screencapture with the window ID to capture just the app window
-/// 3. Reads the PNG file and extracts dimensions from the header
-/// 4. Cleans up the temp file
-#[cfg(target_os = "macos")]
+/// 1. Uses xcap::Window::all() to enumerate windows
+/// 2. Finds the Script Kit window by app name or title
+/// 3. Captures the window directly to an image buffer
+/// 4. Encodes to PNG in memory (no temp files)
 fn capture_app_screenshot() -> Result<(Vec<u8>, u32, u32), Box<dyn std::error::Error + Send + Sync>>
 {
-    use std::fs;
-    use std::process::Command;
+    use image::codecs::png::PngEncoder;
+    use image::ImageEncoder;
+    use xcap::Window;
 
-    // Create temp file path with timestamp
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_millis();
-    let screenshot_path = format!("/tmp/script-kit-screenshot-{}.png", timestamp);
+    let windows = Window::all()?;
 
-    // Try to get window ID via AppleScript
-    // This looks for the first window of any process whose name contains "script-kit-gpui"
-    let window_id_output = Command::new("osascript")
-        .args(["-e", "tell application \"System Events\" to get id of first window of (first process whose name contains \"script-kit-gpui\")"])
-        .output()?;
+    for window in windows {
+        let title = window.title().unwrap_or_else(|_| String::new());
+        let app_name = window.app_name().unwrap_or_else(|_| String::new());
 
-    let window_id = String::from_utf8_lossy(&window_id_output.stdout)
-        .trim()
-        .to_string();
+        // Match our app window by name
+        let is_our_window = app_name.contains("script-kit-gpui")
+            || app_name == "Script Kit"
+            || title.contains("Script Kit");
 
-    tracing::debug!(window_id = %window_id, "Got window ID for screenshot");
+        let is_minimized = window.is_minimized().unwrap_or(true);
 
-    // Capture screenshot
-    let capture_result = if !window_id.is_empty() && window_id.parse::<i64>().is_ok() {
-        // Use -l flag to capture specific window by ID
-        // -x: no sound
-        // -o: in window capture mode, do not capture the shadow
-        Command::new("screencapture")
-            .args([&format!("-l{}", window_id), "-x", "-o", &screenshot_path])
-            .output()
-    } else {
-        tracing::warn!("Could not get window ID, falling back to main display capture");
-        // Fallback to main display capture
-        // -m: capture main display only
-        Command::new("screencapture")
-            .args(["-m", "-x", &screenshot_path])
-            .output()
-    };
+        if is_our_window && !is_minimized {
+            tracing::debug!(
+                app_name = %app_name,
+                title = %title,
+                "Found Script Kit window for screenshot"
+            );
 
-    capture_result?;
+            let image = window.capture_image()?;
+            let width = image.width();
+            let height = image.height();
 
-    // Read the PNG file
-    let png_data =
-        fs::read(&screenshot_path).map_err(|e| format!("Failed to read screenshot file: {}", e))?;
+            // Encode to PNG in memory (no temp files needed)
+            let mut png_data = Vec::new();
+            let encoder = PngEncoder::new(&mut png_data);
+            encoder.write_image(&image, width, height, image::ExtendedColorType::Rgba8)?;
 
-    // Verify PNG signature and extract dimensions from IHDR chunk
-    // PNG structure: 8-byte signature + chunks
-    // IHDR chunk: 4 bytes length + "IHDR" + 4 bytes width + 4 bytes height + ...
-    if png_data.len() < 24 {
-        let _ = fs::remove_file(&screenshot_path);
-        return Err("Screenshot file too small to be valid PNG".into());
+            tracing::debug!(
+                width = width,
+                height = height,
+                file_size = png_data.len(),
+                "Screenshot captured with xcap"
+            );
+
+            return Ok((png_data, width, height));
+        }
     }
 
-    // Check PNG signature (first 8 bytes)
-    let png_signature: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-    if png_data[0..8] != png_signature {
-        let _ = fs::remove_file(&screenshot_path);
-        return Err("Invalid PNG signature".into());
-    }
-
-    // Width is at bytes 16-19, height at bytes 20-23 (big-endian)
-    let width = u32::from_be_bytes([png_data[16], png_data[17], png_data[18], png_data[19]]);
-    let height = u32::from_be_bytes([png_data[20], png_data[21], png_data[22], png_data[23]]);
-
-    tracing::debug!(
-        width = width,
-        height = height,
-        file_size = png_data.len(),
-        "Screenshot captured"
-    );
-
-    // Clean up temp file
-    let _ = fs::remove_file(&screenshot_path);
-
-    Ok((png_data, width, height))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn capture_app_screenshot() -> Result<(Vec<u8>, u32, u32), Box<dyn std::error::Error + Send + Sync>>
-{
-    Err("Screenshot capture is only supported on macOS".into())
+    Err("Script Kit window not found".into())
 }
 
 /// Render a path string with highlighted matched characters.
@@ -601,8 +565,10 @@ static SCRIPT_HOTKEY_CHANNEL: OnceLock<(
 )> = OnceLock::new();
 
 /// Get the script hotkey channel, initializing it on first access
-fn script_hotkey_channel() -> &'static (async_channel::Sender<String>, async_channel::Receiver<String>)
-{
+fn script_hotkey_channel() -> &'static (
+    async_channel::Sender<String>,
+    async_channel::Receiver<String>,
+) {
     SCRIPT_HOTKEY_CHANNEL.get_or_init(|| async_channel::bounded(10))
 }
 
@@ -622,7 +588,7 @@ fn parse_shortcut(shortcut: &str) -> Option<(Modifiers, Code)> {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    
+
     let parts: Vec<&str> = normalized.split_whitespace().collect();
     if parts.is_empty() {
         return None;
@@ -1185,7 +1151,8 @@ enum AppView {
 }
 
 /// Wrapper to hold a script session that can be shared across async boundaries
-type SharedSession = Arc<Mutex<Option<executor::ScriptSession>>>;
+/// Uses parking_lot::Mutex which doesn't poison on panic, avoiding .unwrap() calls
+type SharedSession = Arc<ParkingMutex<Option<executor::ScriptSession>>>;
 
 /// Tracks which input field currently has focus for cursor display
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1526,7 +1493,9 @@ impl ScriptHotkeyPoller {
                 let _ = cx.update(move |cx: &mut App| {
                     let _ = window.update(
                         cx,
-                        |view: &mut ScriptListApp, _win: &mut Window, ctx: &mut Context<ScriptListApp>| {
+                        |view: &mut ScriptListApp,
+                         _win: &mut Window,
+                         ctx: &mut Context<ScriptListApp>| {
                             // Find and execute the script by path
                             view.execute_script_by_path(&path_clone, ctx);
                         },
@@ -1538,18 +1507,6 @@ impl ScriptHotkeyPoller {
         })
         .detach();
     }
-}
-
-/// Error notification to display to the user
-#[derive(Debug, Clone)]
-struct ErrorNotification {
-    /// The error message to display
-    message: String,
-    /// Severity level (affects styling)
-    severity: ErrorSeverity,
-    /// Timestamp when the notification was created (for auto-dismiss)
-    #[allow(dead_code)]
-    created_at: std::time::Instant,
 }
 
 struct ScriptListApp {
@@ -1609,8 +1566,6 @@ struct ScriptListApp {
     // Preview cache: avoid re-reading file and re-highlighting on every render
     preview_cache_path: Option<String>,
     preview_cache_lines: Vec<syntax::HighlightedLine>,
-    // Error notification for user-friendly error feedback
-    error_notification: Option<ErrorNotification>,
     // Current design variant for hot-swappable UI designs
     current_design: DesignVariant,
     // Toast manager for notification queue
@@ -1805,7 +1760,7 @@ impl ScriptListApp {
             is_scrolling: false,
             last_scroll_time: None,
             current_view: AppView::ScriptList,
-            script_session: Arc::new(Mutex::new(None)),
+            script_session: Arc::new(ParkingMutex::new(None)),
             arg_input_text: String::new(),
             arg_selected_index: 0,
             prompt_receiver: None,
@@ -1828,8 +1783,6 @@ impl ScriptListApp {
             // Preview cache: start empty, will populate on first render
             preview_cache_path: None,
             preview_cache_lines: Vec::new(),
-            // Error notification: start with none
-            error_notification: None,
             // Design system: start with default design
             current_design: DesignVariant::default(),
             // Toast manager: initialize for error notifications
@@ -1915,49 +1868,6 @@ impl ScriptListApp {
             &format!("self.current_design is now: {:?}", self.current_design),
         );
         cx.notify();
-    }
-
-    /// Show an error notification to the user
-    ///
-    /// The notification will auto-dismiss after 5 seconds.
-    /// Call this when an operation fails and you want to inform the user.
-    #[allow(dead_code)]
-    fn show_error(&mut self, message: String, severity: ErrorSeverity, cx: &mut Context<Self>) {
-        logging::log(
-            "ERROR",
-            &format!(
-                "Showing error notification: {} (severity: {:?})",
-                message, severity
-            ),
-        );
-
-        self.error_notification = Some(ErrorNotification {
-            message,
-            severity,
-            created_at: std::time::Instant::now(),
-        });
-
-        cx.notify();
-
-        // Set up auto-dismiss timer (5 seconds)
-        cx.spawn(async move |this, cx| {
-            Timer::after(std::time::Duration::from_secs(5)).await;
-            let _ = cx.update(|cx| {
-                this.update(cx, |app, cx| {
-                    app.clear_error(cx);
-                })
-            });
-        })
-        .detach();
-    }
-
-    /// Clear the current error notification
-    fn clear_error(&mut self, cx: &mut Context<Self>) {
-        if self.error_notification.is_some() {
-            logging::log("ERROR", "Clearing error notification");
-            self.error_notification = None;
-            cx.notify();
-        }
     }
 
     fn update_theme(&mut self, cx: &mut Context<Self>) {
@@ -2093,6 +2003,32 @@ impl ScriptListApp {
     fn invalidate_filter_cache(&mut self) {
         logging::log_debug("CACHE", "Filter cache INVALIDATED");
         self.filter_cache_key = String::from("\0_INVALIDATED_\0");
+    }
+
+    /// Get the currently selected search result, correctly mapping from grouped index.
+    ///
+    /// This function handles the mapping from `selected_index` (which is the visual
+    /// position in the grouped list including section headers) to the actual
+    /// `SearchResult` in the flat results array.
+    ///
+    /// Returns `None` if:
+    /// - The selected index points to a section header (headers aren't selectable)
+    /// - The selected index is out of bounds
+    /// - No results exist
+    fn get_selected_result(&self) -> Option<scripts::SearchResult> {
+        let (grouped_items, flat_results) = get_grouped_results(
+            &self.scripts,
+            &self.scriptlets,
+            &self.builtin_entries,
+            &self.apps,
+            &self.frecency_store,
+            &self.filter_text,
+        );
+
+        match grouped_items.get(self.selected_index) {
+            Some(GroupedListItem::Item(idx)) => flat_results.get(*idx).cloned(),
+            _ => None,
+        }
     }
 
     /// Get or update the preview cache for syntax-highlighted code lines.
@@ -2620,8 +2556,7 @@ impl ScriptListApp {
             }
             "reveal_in_finder" => {
                 logging::log("UI", "Reveal in Finder action");
-                let filtered = self.filtered_results();
-                if let Some(result) = filtered.get(self.selected_index) {
+                if let Some(result) = self.get_selected_result() {
                     match result {
                         scripts::SearchResult::Script(script_match) => {
                             let path_str = script_match.script.path.to_string_lossy().to_string();
@@ -2676,8 +2611,7 @@ impl ScriptListApp {
             }
             "copy_path" => {
                 logging::log("UI", "Copy path action");
-                let filtered = self.filtered_results();
-                if let Some(result) = filtered.get(self.selected_index) {
+                if let Some(result) = self.get_selected_result() {
                     let path_opt = match result {
                         scripts::SearchResult::Script(script_match) => {
                             Some(script_match.script.path.to_string_lossy().to_string())
@@ -2784,8 +2718,7 @@ impl ScriptListApp {
             }
             "edit_script" => {
                 logging::log("UI", "Edit script action");
-                let filtered = self.filtered_results();
-                if let Some(result) = filtered.get(self.selected_index) {
+                if let Some(result) = self.get_selected_result() {
                     match result {
                         scripts::SearchResult::Script(script_match) => {
                             self.edit_script(&script_match.script.path);
@@ -3144,7 +3077,7 @@ impl ScriptListApp {
                 self.current_script_pid = Some(pid);
                 logging::log("EXEC", &format!("Stored script PID {} for cleanup", pid));
 
-                *self.script_session.lock().unwrap() = Some(session);
+                *self.script_session.lock() = Some(session);
 
                 // Create async_channel for script thread to send prompt messages to UI (event-driven)
                 // P1-6: Use bounded channel to prevent unbounded memory growth from slow UI
@@ -3175,7 +3108,7 @@ impl ScriptListApp {
                 // The read thread blocks on receive_message(), so we can't check for responses in the same loop
 
                 // Take ownership of the session and split it
-                let session = self.script_session.lock().unwrap().take().unwrap();
+                let session = self.script_session.lock().take().unwrap();
                 let split = session.split();
 
                 let mut stdin = split.stdin;
@@ -4404,9 +4337,11 @@ impl ScriptListApp {
         // Check if it's a scriptlet (contains #)
         if path.contains('#') {
             // It's a scriptlet path like "/path/to/file.md#command"
-            if let Some(scriptlet) = self.scriptlets.iter().find(|s| {
-                s.file_path.as_ref().map(|p| p == path).unwrap_or(false)
-            }) {
+            if let Some(scriptlet) = self
+                .scriptlets
+                .iter()
+                .find(|s| s.file_path.as_ref().map(|p| p == path).unwrap_or(false))
+            {
                 let scriptlet_clone = scriptlet.clone();
                 self.execute_scriptlet(&scriptlet_clone, cx);
                 return;
@@ -4416,9 +4351,11 @@ impl ScriptListApp {
         }
 
         // It's a regular script - find by path
-        if let Some(script) = self.scripts.iter().find(|s| {
-            s.path.to_string_lossy() == path
-        }) {
+        if let Some(script) = self
+            .scripts
+            .iter()
+            .find(|s| s.path.to_string_lossy() == path)
+        {
             let script_clone = script.clone();
             self.execute_interactive(&script_clone, cx);
             return;
@@ -5670,7 +5607,8 @@ impl ScriptListApp {
         }
 
         // Abort script session if it exists
-        if let Ok(mut session_guard) = self.script_session.lock() {
+        {
+            let mut session_guard = self.script_session.lock();
             if let Some(_session) = session_guard.take() {
                 logging::log("EXEC", "Cleared script session");
             }
@@ -5682,7 +5620,7 @@ impl ScriptListApp {
     }
 
     /// Show a HUD (heads-up display) overlay message
-    /// 
+    ///
     /// This creates a separate floating window positioned at bottom-center of the
     /// screen containing the mouse cursor. The HUD is independent of the main
     /// Script Kit window and will remain visible even when the main window is hidden.
@@ -5888,10 +5826,8 @@ impl ScriptListApp {
         self.prompt_receiver = None;
         self.response_sender = None;
 
-        // Clear script session
-        if let Ok(mut session_guard) = self.script_session.lock() {
-            *session_guard = None;
-        }
+        // Clear script session (parking_lot mutex never poisons)
+        *self.script_session.lock() = None;
 
         // Clear actions popup state (prevents stale actions dialog from persisting)
         self.show_actions_popup = false;
@@ -6120,7 +6056,7 @@ impl Render for ScriptListApp {
         // The clone is unavoidable due to borrow checker: we need &mut self for render methods
         // but also need to match on self.current_view. Future optimization: refactor render
         // methods to take &str/&[T] references instead of owned values.
-        // 
+        //
         // HUD is now handled by hud_manager as a separate floating window
         // No need to render it as part of this view
         let current_view = self.current_view.clone();
@@ -6247,65 +6183,6 @@ impl ScriptListApp {
         }
 
         Some(toast_container)
-    }
-
-    /// Render the error notification if one exists
-    ///
-    /// Returns None if no notification is present.
-    /// Uses theme colors (colors.ui.error, colors.ui.warning, colors.ui.info)
-    /// styled with bg, rounded corners, padding.
-    fn render_error_notification(&self) -> Option<impl IntoElement> {
-        let notification = self.error_notification.as_ref()?;
-
-        // Use design tokens for consistent spacing
-        let tokens = get_tokens(self.current_design);
-        let spacing = tokens.spacing();
-        let visual = tokens.visual();
-        let typography = tokens.typography();
-
-        // Get the appropriate color based on severity
-        let bg_color = match notification.severity {
-            ErrorSeverity::Error | ErrorSeverity::Critical => self.theme.colors.ui.error,
-            ErrorSeverity::Warning => self.theme.colors.ui.warning,
-            ErrorSeverity::Info => self.theme.colors.ui.info,
-        };
-
-        // Use contrasting text color (white for all severities works well)
-        let text_color = 0xffffff;
-
-        // Icon based on severity
-        let icon = match notification.severity {
-            ErrorSeverity::Critical => "⛔",
-            ErrorSeverity::Error => "✕",
-            ErrorSeverity::Warning => "⚠",
-            ErrorSeverity::Info => "ℹ",
-        };
-
-        Some(
-            div()
-                .w_full()
-                .mx(px(spacing.padding_lg))
-                .mt(px(spacing.padding_sm))
-                .px(px(spacing.padding_md))
-                .py(px(spacing.padding_sm))
-                .rounded(px(visual.radius_md))
-                .bg(rgb(bg_color))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .font_family(typography.font_family)
-                // Icon
-                .child(div().text_color(rgb(text_color)).text_sm().child(icon))
-                // Message text
-                .child(
-                    div()
-                        .flex_1()
-                        .text_color(rgb(text_color))
-                        .text_sm()
-                        .child(notification.message.clone()),
-                ),
-        )
     }
 
     /// Render the preview panel showing details of the selected script/scriptlet
@@ -7821,11 +7698,6 @@ impl ScriptListApp {
                     .h(px(border_width))
                     .bg(rgba((border_color << 8) | 0x60))
             });
-
-        // Add error notification if present (at the top of the content area)
-        if let Some(notification) = self.render_error_notification() {
-            main_div = main_div.child(notification);
-        }
 
         // Main content area - 50/50 split: List on left, Preview on right
         main_div = main_div
@@ -11641,8 +11513,10 @@ fn start_hotkey_listener(config: config::Config) {
 
                     match manager.register(script_hotkey) {
                         Ok(()) => {
-                            script_hotkey_map
-                                .insert(script_hotkey_id, script.path.to_string_lossy().to_string());
+                            script_hotkey_map.insert(
+                                script_hotkey_id,
+                                script.path.to_string_lossy().to_string(),
+                            );
                             logging::log(
                                 "HOTKEY",
                                 &format!(
@@ -11689,8 +11563,7 @@ fn start_hotkey_listener(config: config::Config) {
 
                     match manager.register(scriptlet_hotkey) {
                         Ok(()) => {
-                            script_hotkey_map
-                                .insert(scriptlet_hotkey_id, scriptlet_path.clone());
+                            script_hotkey_map.insert(scriptlet_hotkey_id, scriptlet_path.clone());
                             logging::log(
                                 "HOTKEY",
                                 &format!(

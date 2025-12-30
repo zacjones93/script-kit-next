@@ -1,0 +1,416 @@
+//! StoryBrowser - Main UI for browsing and previewing stories
+//!
+//! Features:
+//! - Left sidebar with searchable story list grouped by category
+//! - Right panel showing selected story preview
+//! - Theme and design variant controls in toolbar
+//! - Keyboard navigation support
+
+use gpui::*;
+
+use crate::designs::DesignVariant;
+use crate::storybook::{all_categories, all_stories, StoryEntry};
+use crate::theme::Theme;
+
+/// Main browser view for the storybook
+pub struct StoryBrowser {
+    stories: Vec<&'static StoryEntry>,
+    selected_index: usize,
+    filter: String,
+    #[allow(dead_code)]
+    current_theme: Theme,
+    theme_name: String,
+    design_variant: DesignVariant,
+    focus_handle: FocusHandle,
+}
+
+impl StoryBrowser {
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        let stories: Vec<_> = all_stories().collect();
+        Self {
+            stories,
+            selected_index: 0,
+            filter: String::new(),
+            current_theme: Theme::default(),
+            theme_name: "Default".to_string(),
+            design_variant: DesignVariant::Default,
+            focus_handle: cx.focus_handle(),
+        }
+    }
+
+    pub fn load_theme(&mut self, theme_name: &str) {
+        // TODO: Implement theme loading from theme registry
+        // For now, just update the name
+        self.theme_name = theme_name.to_string();
+    }
+
+    pub fn select_story(&mut self, story_id: &str) {
+        if let Some(pos) = self.stories.iter().position(|s| s.story.id() == story_id) {
+            self.selected_index = pos;
+        }
+    }
+
+    pub fn set_design_variant(&mut self, variant: DesignVariant) {
+        self.design_variant = variant;
+    }
+
+    fn filtered_stories(&self) -> Vec<&'static StoryEntry> {
+        if self.filter.is_empty() {
+            self.stories.clone()
+        } else {
+            let filter_lower = self.filter.to_lowercase();
+            self.stories
+                .iter()
+                .filter(|s| {
+                    s.story.name().to_lowercase().contains(&filter_lower)
+                        || s.story.category().to_lowercase().contains(&filter_lower)
+                })
+                .copied()
+                .collect()
+        }
+    }
+
+    fn render_search_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let filter = self.filter.clone();
+        div()
+            .p_2()
+            .border_b_1()
+            .border_color(rgb(0x3d3d3d))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .bg(rgb(0x2d2d2d))
+                    .rounded_md()
+                    .child(
+                        // Search icon
+                        div().text_color(rgb(0x666666)).child("🔍"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_sm()
+                            .text_color(if filter.is_empty() {
+                                rgb(0x666666)
+                            } else {
+                                rgb(0xcccccc)
+                            })
+                            .child(if filter.is_empty() {
+                                "Search stories...".to_string()
+                            } else {
+                                filter
+                            }),
+                    ),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_this, _event, _window, _cx| {
+                    // TODO: Focus search input and enable text input
+                }),
+            )
+    }
+
+    fn render_story_list(
+        &self,
+        filtered: &[&'static StoryEntry],
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let categories = all_categories();
+
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .overflow_hidden()
+            .children(categories.into_iter().map(|category| {
+                let category_stories: Vec<_> = filtered
+                    .iter()
+                    .filter(|s| s.story.category() == category)
+                    .copied()
+                    .collect();
+
+                if category_stories.is_empty() {
+                    return div().into_any_element();
+                }
+
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        // Category header
+                        div()
+                            .px_3()
+                            .py_2()
+                            .text_xs()
+                            .text_color(rgb(0x888888))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(category.to_uppercase()),
+                    )
+                    .children(category_stories.into_iter().map(|story| {
+                        let is_selected = self
+                            .stories
+                            .iter()
+                            .position(|s| s.story.id() == story.story.id())
+                            == Some(self.selected_index);
+
+                        let story_id = story.story.id();
+
+                        let base = div()
+                            .id(ElementId::Name(story_id.into()))
+                            .px_3()
+                            .py_1()
+                            .cursor_pointer()
+                            .text_sm()
+                            .rounded_sm()
+                            .child(story.story.name())
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                if let Some(pos) =
+                                    this.stories.iter().position(|s| s.story.id() == story_id)
+                                {
+                                    this.selected_index = pos;
+                                    cx.notify();
+                                }
+                            }));
+
+                        if is_selected {
+                            base.bg(rgb(0x4a90d9)).text_color(rgb(0xffffff))
+                        } else {
+                            base.text_color(rgb(0xcccccc))
+                                .hover(|s| s.bg(rgb(0x3d3d3d)))
+                        }
+                    }))
+                    .into_any_element()
+            }))
+    }
+
+    fn render_toolbar(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .px_4()
+            .py_2()
+            .border_b_1()
+            .border_color(rgb(0x3d3d3d))
+            .bg(rgb(0x252525))
+            .child(
+                // Left: Story info
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_base()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(0xffffff))
+                            .child(
+                                self.stories
+                                    .get(self.selected_index)
+                                    .map(|s| s.story.name())
+                                    .unwrap_or("No story selected"),
+                            ),
+                    )
+                    .child(
+                        div().text_xs().text_color(rgb(0x666666)).child(
+                            self.stories
+                                .get(self.selected_index)
+                                .map(|s| format!("({})", s.story.category()))
+                                .unwrap_or_default(),
+                        ),
+                    ),
+            )
+            .child(
+                // Right: Theme & Design controls
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_1()
+                            .child(div().text_xs().text_color(rgb(0x888888)).child("Theme:"))
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .text_xs()
+                                    .text_color(rgb(0xcccccc))
+                                    .bg(rgb(0x2d2d2d))
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .child(self.theme_name.clone()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_1()
+                            .child(div().text_xs().text_color(rgb(0x888888)).child("Design:"))
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .text_xs()
+                                    .text_color(rgb(0xcccccc))
+                                    .bg(rgb(0x2d2d2d))
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .child(format!("{:?}", self.design_variant)),
+                            ),
+                    ),
+            )
+    }
+
+    fn render_preview(&self) -> AnyElement {
+        if let Some(story) = self.stories.get(self.selected_index) {
+            story.story.render()
+        } else {
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size_full()
+                .text_color(rgb(0x666666))
+                .child("No story selected")
+                .into_any_element()
+        }
+    }
+
+    fn move_selection_up(&mut self, cx: &mut Context<Self>) {
+        let filtered = self.filtered_stories();
+        if filtered.is_empty() {
+            return;
+        }
+
+        // Find current story in filtered list
+        if let Some(current) = self.stories.get(self.selected_index) {
+            if let Some(pos) = filtered
+                .iter()
+                .position(|s| s.story.id() == current.story.id())
+            {
+                if pos > 0 {
+                    // Move to previous in filtered list
+                    let prev_story = filtered[pos - 1];
+                    if let Some(main_pos) = self
+                        .stories
+                        .iter()
+                        .position(|s| s.story.id() == prev_story.story.id())
+                    {
+                        self.selected_index = main_pos;
+                        cx.notify();
+                    }
+                }
+            }
+        }
+    }
+
+    fn move_selection_down(&mut self, cx: &mut Context<Self>) {
+        let filtered = self.filtered_stories();
+        if filtered.is_empty() {
+            return;
+        }
+
+        // Find current story in filtered list
+        if let Some(current) = self.stories.get(self.selected_index) {
+            if let Some(pos) = filtered
+                .iter()
+                .position(|s| s.story.id() == current.story.id())
+            {
+                if pos < filtered.len() - 1 {
+                    // Move to next in filtered list
+                    let next_story = filtered[pos + 1];
+                    if let Some(main_pos) = self
+                        .stories
+                        .iter()
+                        .position(|s| s.story.id() == next_story.story.id())
+                    {
+                        self.selected_index = main_pos;
+                        cx.notify();
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Render for StoryBrowser {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let filtered = self.filtered_stories();
+
+        // Render the story preview - stories are stateless so no App context needed
+        let preview = self.render_preview();
+
+        div()
+            .id("story-browser")
+            .key_context("StoryBrowser")
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                let key = event.keystroke.key.as_str();
+                match key {
+                    "up" | "arrowup" => this.move_selection_up(cx),
+                    "down" | "arrowdown" => this.move_selection_down(cx),
+                    _ => {}
+                }
+            }))
+            .flex()
+            .flex_row()
+            .size_full()
+            .bg(rgb(0x1e1e1e))
+            .text_color(rgb(0xcccccc))
+            // Left sidebar: story list
+            .child(
+                div()
+                    .w(px(280.))
+                    .border_r_1()
+                    .border_color(rgb(0x3d3d3d))
+                    .flex()
+                    .flex_col()
+                    .bg(rgb(0x252525))
+                    .child(
+                        // Header
+                        div()
+                            .px_3()
+                            .py_2()
+                            .border_b_1()
+                            .border_color(rgb(0x3d3d3d))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(0xffffff))
+                                    .child("Script Kit Storybook"),
+                            ),
+                    )
+                    .child(self.render_search_bar(cx))
+                    .child(self.render_story_list(&filtered, cx)),
+            )
+            // Right panel: story preview
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .child(self.render_toolbar(cx))
+                    .child(preview),
+            )
+    }
+}
+
+impl Focusable for StoryBrowser {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}

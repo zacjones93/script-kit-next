@@ -91,7 +91,10 @@ impl ParsedSnippet {
                         let placeholder_text = tabstop
                             .placeholder
                             .as_deref()
-                            .or(tabstop.choices.as_ref().and_then(|c| c.first().map(|s| s.as_str())))
+                            .or(tabstop
+                                .choices
+                                .as_ref()
+                                .and_then(|c| c.first().map(|s| s.as_str())))
                             .unwrap_or("");
 
                         text.push_str(placeholder_text);

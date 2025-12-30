@@ -299,10 +299,16 @@ impl EditorPrompt {
                 let end_pos = Self::byte_to_cursor_static(&rope, end);
                 (end_pos, Selection::new(start_pos, end_pos))
             } else {
-                (CursorPosition::start(), Selection::caret(CursorPosition::start()))
+                (
+                    CursorPosition::start(),
+                    Selection::caret(CursorPosition::start()),
+                )
             }
         } else {
-            (CursorPosition::start(), Selection::caret(CursorPosition::start()))
+            (
+                CursorPosition::start(),
+                Selection::caret(CursorPosition::start()),
+            )
         };
 
         let snippet_state = if snippet.tabstops.is_empty() {
@@ -838,7 +844,7 @@ impl EditorPrompt {
             // We've visited all tabstops - exit snippet mode
             state.completed = true;
             logging::log("EDITOR", "Snippet mode complete - all tabstops visited");
-            
+
             // Clear snippet state and position cursor at end of last tabstop
             self.snippet_state = None;
             self.selection = Selection::caret(self.cursor);
@@ -876,16 +882,16 @@ impl EditorPrompt {
         }
 
         let tabstop = &tabstops[state.current_tabstop_idx];
-        
+
         // For now, select only the first range (primary)
         // Linked editing support will be added in a future PR
         if let Some(&(start, end)) = tabstop.ranges.first() {
             let start_pos = Self::byte_to_cursor_static(&self.rope, start);
             let end_pos = Self::byte_to_cursor_static(&self.rope, end);
-            
+
             self.cursor = end_pos;
             self.selection = Selection::new(start_pos, end_pos);
-            
+
             logging::log(
                 "EDITOR",
                 &format!(
@@ -906,7 +912,9 @@ impl EditorPrompt {
     #[allow(dead_code)]
     pub fn current_tabstop_index(&self) -> Option<usize> {
         self.snippet_state.as_ref().map(|s| {
-            s.snippet.tabstops.get(s.current_tabstop_idx)
+            s.snippet
+                .tabstops
+                .get(s.current_tabstop_idx)
                 .map(|t| t.index)
                 .unwrap_or(0)
         })
@@ -963,7 +971,7 @@ impl EditorPrompt {
             ("backspace", _, _, _) => self.backspace(),
             ("delete", _, _, _) => self.delete(),
             ("enter", false, _, _) => self.insert_newline(),
-            
+
             // Tab handling - snippet mode or regular indent
             ("tab", false, false, false) => {
                 if self.snippet_state.is_some() {
@@ -1595,22 +1603,22 @@ mod tests {
     #[test]
     fn test_byte_to_cursor_static() {
         let rope = Rope::from_str("Hello\nWorld");
-        
+
         // "Hello" is 5 bytes, cursor at start
         let pos = EditorPrompt::byte_to_cursor_static(&rope, 0);
         assert_eq!(pos.line, 0);
         assert_eq!(pos.column, 0);
-        
+
         // After "Hello" (position 5)
         let pos = EditorPrompt::byte_to_cursor_static(&rope, 5);
         assert_eq!(pos.line, 0);
         assert_eq!(pos.column, 5);
-        
+
         // After "Hello\n" (position 6) - start of second line
         let pos = EditorPrompt::byte_to_cursor_static(&rope, 6);
         assert_eq!(pos.line, 1);
         assert_eq!(pos.column, 0);
-        
+
         // "Hello\nWor" (position 9)
         let pos = EditorPrompt::byte_to_cursor_static(&rope, 9);
         assert_eq!(pos.line, 1);
@@ -1620,7 +1628,7 @@ mod tests {
     #[test]
     fn test_byte_to_cursor_static_clamps_to_end() {
         let rope = Rope::from_str("Hello");
-        
+
         // Beyond end should clamp
         let pos = EditorPrompt::byte_to_cursor_static(&rope, 100);
         assert_eq!(pos.line, 0);

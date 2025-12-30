@@ -693,6 +693,9 @@ pub enum Message {
         content: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         language: Option<String>,
+        /// VSCode-style snippet template with tabstops (e.g., "Hello ${1:name}!")
+        #[serde(skip_serializing_if = "Option::is_none")]
+        template: Option<String>,
         #[serde(rename = "onInit", skip_serializing_if = "Option::is_none")]
         on_init: Option<String>,
         #[serde(rename = "onSubmit", skip_serializing_if = "Option::is_none")]
@@ -1478,6 +1481,7 @@ impl Message {
             id,
             content: None,
             language: None,
+            template: None,
             on_init: None,
             on_submit: None,
         }
@@ -1489,6 +1493,19 @@ impl Message {
             id,
             content: Some(content),
             language,
+            template: None,
+            on_init: None,
+            on_submit: None,
+        }
+    }
+
+    /// Create an editor with a VSCode-style snippet template
+    pub fn editor_with_template(id: String, template: String, language: Option<String>) -> Self {
+        Message::Editor {
+            id,
+            content: None,
+            language,
+            template: Some(template),
             on_init: None,
             on_submit: None,
         }
@@ -2620,11 +2637,77 @@ mod tests {
                 id,
                 content,
                 language,
+                template,
                 ..
             } => {
                 assert_eq!(id, "1");
                 assert_eq!(content, Some("hello".to_string()));
                 assert_eq!(language, Some("javascript".to_string()));
+                assert_eq!(template, None); // Backward compatible - no template
+            }
+            _ => panic!("Expected Editor message"),
+        }
+    }
+
+    #[test]
+    fn test_parse_editor_message_with_template() {
+        let json =
+            r#"{"type":"editor","id":"1","template":"Hello ${1:name}!","language":"typescript"}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::Editor {
+                id,
+                content,
+                language,
+                template,
+                ..
+            } => {
+                assert_eq!(id, "1");
+                assert_eq!(content, None);
+                assert_eq!(language, Some("typescript".to_string()));
+                assert_eq!(template, Some("Hello ${1:name}!".to_string()));
+            }
+            _ => panic!("Expected Editor message"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_editor_with_template() {
+        let msg = Message::editor_with_template(
+            "1".to_string(),
+            "function ${1:name}(${2:params}) {\n  ${0}\n}".to_string(),
+            Some("typescript".to_string()),
+        );
+        let json = serialize_message(&msg).unwrap();
+        assert!(json.contains("\"type\":\"editor\""));
+        assert!(json.contains("\"id\":\"1\""));
+        assert!(json.contains("\"template\":"));
+        assert!(json.contains("${1:name}"));
+        assert!(json.contains("\"language\":\"typescript\""));
+        // content should be omitted when None
+        assert!(!json.contains("\"content\""));
+    }
+
+    #[test]
+    fn test_editor_template_backward_compatible() {
+        // Ensure parsing editor without template field still works (backward compatible)
+        let json = r#"{"type":"editor","id":"1"}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::Editor {
+                id,
+                content,
+                language,
+                template,
+                on_init,
+                on_submit,
+            } => {
+                assert_eq!(id, "1");
+                assert_eq!(content, None);
+                assert_eq!(language, None);
+                assert_eq!(template, None);
+                assert_eq!(on_init, None);
+                assert_eq!(on_submit, None);
             }
             _ => panic!("Expected Editor message"),
         }
