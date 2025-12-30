@@ -51,6 +51,8 @@ use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event as AlacrittyEvent, EventListener};
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::{Column, Direction, Line, Point as AlacPoint};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags as AlacrittyFlags;
 use alacritty_terminal::term::{Config as TermConfig, Term};
 use anyhow::{Context, Result};
@@ -674,6 +676,16 @@ impl TerminalHandle {
         let mut lines = Vec::with_capacity(state.term.screen_lines());
         let mut styled_lines = Vec::with_capacity(state.term.screen_lines());
 
+        // Get selection range for highlighting
+        let selection_range = state
+            .term
+            .selection
+            .as_ref()
+            .and_then(|sel| sel.to_range(&state.term));
+
+        // Collect selected cells as (col, line) pairs
+        let mut selected_cells = Vec::new();
+
         // Iterate over visible lines
         for line_idx in 0..state.term.screen_lines() {
             let row = &grid[alacritty_terminal::index::Line(line_idx as i32)];
@@ -695,6 +707,14 @@ impl TerminalHandle {
                     bg,
                     attrs,
                 });
+
+                // Check if this cell is in the selection
+                if let Some(ref range) = selection_range {
+                    let point = AlacPoint::new(Line(line_idx as i32), Column(col_idx));
+                    if range.contains(point) {
+                        selected_cells.push((col_idx, line_idx));
+                    }
+                }
             }
 
             // Trim trailing spaces for cleaner plain text output
@@ -711,6 +731,7 @@ impl TerminalHandle {
             styled_lines,
             cursor_line: cursor.line.0 as usize,
             cursor_col: cursor.column.0,
+            selected_cells,
         }
     }
 
@@ -721,7 +742,7 @@ impl TerminalHandle {
         state.term.history_size()
     }
 
-    /// Scrolls the terminal display.
+    /// Scrolls the terminal display by a number of lines.
     ///
     /// # Arguments
     ///
@@ -731,6 +752,48 @@ impl TerminalHandle {
         let scroll = alacritty_terminal::grid::Scroll::Delta(delta);
         state.term.scroll_display(scroll);
         debug!(delta, "Scrolled terminal display");
+    }
+
+    /// Scrolls the terminal display by one page up.
+    pub fn scroll_page_up(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        state
+            .term
+            .scroll_display(alacritty_terminal::grid::Scroll::PageUp);
+        debug!("Scrolled terminal page up");
+    }
+
+    /// Scrolls the terminal display by one page down.
+    pub fn scroll_page_down(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        state
+            .term
+            .scroll_display(alacritty_terminal::grid::Scroll::PageDown);
+        debug!("Scrolled terminal page down");
+    }
+
+    /// Scrolls the terminal display to the top of scrollback.
+    pub fn scroll_to_top(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        state
+            .term
+            .scroll_display(alacritty_terminal::grid::Scroll::Top);
+        debug!("Scrolled terminal to top");
+    }
+
+    /// Scrolls the terminal display to the bottom (latest output).
+    pub fn scroll_to_bottom(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        state
+            .term
+            .scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+        debug!("Scrolled terminal to bottom");
+    }
+
+    /// Gets the current scroll offset (0 = at bottom).
+    pub fn display_offset(&self) -> usize {
+        let state = self.state.lock().unwrap();
+        state.term.grid().display_offset()
     }
 
     /// Gets the current selection as a string, if any.
@@ -748,6 +811,40 @@ impl TerminalHandle {
         let mut state = self.state.lock().unwrap();
         state.term.selection = None;
         debug!("Selection cleared");
+    }
+
+    /// Start a new selection at the given grid position.
+    ///
+    /// # Arguments
+    ///
+    /// * `col` - Column index (0-indexed from left)
+    /// * `row` - Row index (0-indexed from top of visible area)
+    pub fn start_selection(&mut self, col: usize, row: usize) {
+        let mut state = self.state.lock().unwrap();
+        let point = AlacPoint::new(Line(row as i32), Column(col));
+        state.term.selection = Some(Selection::new(SelectionType::Simple, point, Direction::Left));
+        debug!(col, row, "Selection started");
+    }
+
+    /// Update the current selection to extend to the given position.
+    ///
+    /// # Arguments
+    ///
+    /// * `col` - Column index (0-indexed from left)
+    /// * `row` - Row index (0-indexed from top of visible area)
+    pub fn update_selection(&mut self, col: usize, row: usize) {
+        let mut state = self.state.lock().unwrap();
+        if let Some(ref mut selection) = state.term.selection {
+            let point = AlacPoint::new(Line(row as i32), Column(col));
+            selection.update(point, Direction::Right);
+            trace!(col, row, "Selection updated");
+        }
+    }
+
+    /// Check if there is an active selection.
+    pub fn has_selection(&self) -> bool {
+        let state = self.state.lock().unwrap();
+        state.term.selection.is_some()
     }
 
     /// Updates the theme adapter for focus state.
@@ -905,6 +1002,9 @@ pub struct TerminalContent {
     pub cursor_line: usize,
     /// Cursor column position (0-indexed from left).
     pub cursor_col: usize,
+    /// Selected cells as (column, line) pairs for highlighting.
+    /// Empty if no selection is active.
+    pub selected_cells: Vec<(usize, usize)>,
 }
 
 impl TerminalContent {
@@ -1033,6 +1133,7 @@ mod tests {
             ]],
             cursor_line: 0,
             cursor_col: 5,
+            selected_cells: vec![],
         };
         assert_eq!(content.styled_lines.len(), 1);
         assert_eq!(content.styled_lines[0].len(), 5);
@@ -1046,6 +1147,7 @@ mod tests {
             styled_lines: vec![],
             cursor_line: 0,
             cursor_col: 0,
+            selected_cells: vec![],
         };
         let plain = content.lines_plain();
         assert_eq!(plain.len(), 2);
@@ -1220,6 +1322,7 @@ mod tests {
             styled_lines: vec![],
             cursor_line: 0,
             cursor_col: 0,
+            selected_cells: vec![],
         };
         assert!(empty_content.is_empty());
 
@@ -1228,6 +1331,7 @@ mod tests {
             styled_lines: vec![],
             cursor_line: 0,
             cursor_col: 0,
+            selected_cells: vec![],
         };
         assert!(whitespace_content.is_empty());
 
@@ -1236,6 +1340,7 @@ mod tests {
             styled_lines: vec![],
             cursor_line: 0,
             cursor_col: 5,
+            selected_cells: vec![],
         };
         assert!(!content_with_text.is_empty());
     }
@@ -1247,6 +1352,7 @@ mod tests {
             styled_lines: vec![],
             cursor_line: 0,
             cursor_col: 0,
+            selected_cells: vec![],
         };
         assert_eq!(content.line_count(), 2);
     }
@@ -1258,6 +1364,7 @@ mod tests {
             styled_lines: vec![],
             cursor_line: 0,
             cursor_col: 6,
+            selected_cells: vec![],
         };
         let cursor: CursorPosition = (&content).into();
         assert_eq!(cursor.line, 0);

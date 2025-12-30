@@ -4,9 +4,10 @@
 //! cursor rendering, per-cell colors, and control character handling.
 
 use gpui::{
-    div, prelude::*, px, rgb, Context, FocusHandle, Focusable, Pixels, Render, SharedString, Timer,
-    Window,
+    div, prelude::*, px, rgb, Context, FocusHandle, Focusable, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Render, SharedString, Timer, Window,
 };
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, trace, warn};
@@ -45,6 +46,9 @@ const REFRESH_INTERVAL_MS: u64 = 33; // ~30fps, reduces CPU load significantly
 const MIN_COLS: u16 = 20;
 const MIN_ROWS: u16 = 5;
 
+/// Duration for bell visual flash
+const BELL_FLASH_DURATION_MS: u64 = 150;
+
 /// Terminal prompt GPUI component
 pub struct TermPrompt {
     pub id: String,
@@ -61,6 +65,14 @@ pub struct TermPrompt {
     last_size: (u16, u16),
     /// Explicit content height - GPUI entities don't inherit parent flex sizing
     content_height: Option<Pixels>,
+    /// Time until which the bell flash should be visible
+    bell_flash_until: Option<Instant>,
+    /// Terminal title from OSC escape sequences
+    title: Option<String>,
+    /// Whether mouse is currently dragging for selection
+    is_selecting: bool,
+    /// Start position of mouse selection (in terminal grid coordinates: col, row)
+    selection_start: Option<(usize, usize)>,
 }
 
 impl TermPrompt {
@@ -118,6 +130,10 @@ impl TermPrompt {
             refresh_timer_active: false,
             last_size: (initial_cols, initial_rows),
             content_height,
+            bell_flash_until: None,
+            title: None,
+            is_selecting: false,
+            selection_start: None,
         })
     }
 
@@ -140,6 +156,20 @@ impl TermPrompt {
     /// Get cell height scaled to configured font size
     fn cell_height(&self) -> f32 {
         self.font_size() * LINE_HEIGHT_MULTIPLIER
+    }
+
+    /// Convert pixel position to terminal grid cell (col, row)
+    fn pixel_to_cell(&self, position: gpui::Point<Pixels>) -> (usize, usize) {
+        let padding = self.config.get_padding();
+        let pos_x: f32 = position.x.into();
+        let pos_y: f32 = position.y.into();
+        let x = (pos_x - padding.left).max(0.0);
+        let y = (pos_y - padding.top).max(0.0);
+
+        let col = (x / self.cell_width()) as usize;
+        let row = (y / self.cell_height()) as usize;
+
+        (col, row)
     }
 
     /// Calculate terminal dimensions from pixel size with padding (uses default cell dimensions)
@@ -344,12 +374,17 @@ impl TermPrompt {
         // Use main background color to match window - no visible seam
         let default_bg = rgb(colors.background.main);
         let cursor_bg = rgb(colors.accent.selected);
+        let selection_bg = rgb(colors.accent.selected_subtle);
         let default_fg = rgb(colors.text.primary);
 
         // Get dynamic font sizing
         let font_size = self.font_size();
         let cell_height = self.cell_height();
         let cell_width = self.cell_width();
+
+        // Build HashSet for O(1) selection lookup
+        let selected: HashSet<(usize, usize)> =
+            content.selected_cells.iter().cloned().collect();
 
         let mut lines_container = div()
             .flex()
@@ -374,6 +409,7 @@ impl TermPrompt {
             while batch_start < cells.len() {
                 let first_cell = &cells[batch_start];
                 let is_cursor_start = is_cursor_line && batch_start == content.cursor_col;
+                let is_selected_start = selected.contains(&(batch_start, line_idx));
 
                 // Get styling for this batch
                 let fg_u32 = (first_cell.fg.r as u32) << 16
@@ -384,7 +420,8 @@ impl TermPrompt {
                     | (first_cell.bg.b as u32);
                 let attrs = first_cell.attrs;
 
-                // Find how many consecutive cells have the same styling (excluding cursor position)
+                // Find how many consecutive cells have the same styling
+                // (excluding cursor position and selection boundaries)
                 let mut batch_end = batch_start + 1;
 
                 // If this is the cursor cell, it's always its own batch
@@ -392,9 +429,10 @@ impl TermPrompt {
                     while batch_end < cells.len() {
                         let cell = &cells[batch_end];
                         let is_cursor_here = is_cursor_line && batch_end == content.cursor_col;
+                        let is_selected_here = selected.contains(&(batch_end, line_idx));
 
-                        // Stop if cursor or different styling
-                        if is_cursor_here {
+                        // Stop if cursor, selection boundary change, or different styling
+                        if is_cursor_here || is_selected_here != is_selected_start {
                             break;
                         }
 
@@ -419,23 +457,19 @@ impl TermPrompt {
 
                 let batch_width = (batch_end - batch_start) as f32 * cell_width;
 
-                // Determine colors
-                let fg_color = if is_cursor_start {
-                    rgb(bg_u32) // Invert for cursor
-                } else {
-                    rgb(fg_u32)
-                };
-
-                // Determine background color:
-                // - Cursor gets cursor_bg
-                // - Cells with custom background (non-black) get their explicit color
-                // - All other cells get default_bg to prevent content bleed-through
-                let bg_color = if is_cursor_start {
-                    cursor_bg
+                // Determine colors - priority: cursor > selection > custom bg > default
+                let (fg_color, bg_color) = if is_cursor_start {
+                    // Cursor inverts colors
+                    (rgb(bg_u32), cursor_bg)
+                } else if is_selected_start {
+                    // Selection uses selection background with original foreground
+                    (if fg_u32 == 0 { default_fg } else { rgb(fg_u32) }, selection_bg)
                 } else if bg_u32 != 0x000000 {
-                    rgb(bg_u32)
+                    // Custom background
+                    (if fg_u32 == 0 { default_fg } else { rgb(fg_u32) }, rgb(bg_u32))
                 } else {
-                    default_bg
+                    // Default
+                    (if fg_u32 == 0 { default_fg } else { rgb(fg_u32) }, default_bg)
                 };
 
                 let mut span = div()
@@ -443,7 +477,7 @@ impl TermPrompt {
                     .h(px(cell_height))
                     .flex_shrink_0()
                     .bg(bg_color) // Always apply background to prevent bleed-through
-                    .text_color(if fg_u32 == 0 { default_fg } else { fg_color })
+                    .text_color(fg_color)
                     .child(SharedString::from(batch_text));
 
                 // Apply text attributes
@@ -493,8 +527,16 @@ impl Render for TermPrompt {
                             self.handle_exit(code);
                             break;
                         }
-                        TerminalEvent::Bell => { /* could flash screen */ }
-                        TerminalEvent::Title(_) => { /* could update title */ }
+                        TerminalEvent::Bell => {
+                            self.bell_flash_until = Some(
+                                Instant::now() + Duration::from_millis(BELL_FLASH_DURATION_MS),
+                            );
+                            debug!("Terminal bell triggered, flashing border");
+                        }
+                        TerminalEvent::Title(title) => {
+                            self.title = if title.is_empty() { None } else { Some(title) };
+                            debug!(title = ?self.title, "Terminal title updated");
+                        }
                         TerminalEvent::Output(_) => { /* handled by content() */ }
                     }
                 }
@@ -515,6 +557,8 @@ impl Render for TermPrompt {
                   _cx: &mut Context<Self>| {
                 let key_str = event.keystroke.key.to_lowercase();
                 let has_ctrl = event.keystroke.modifiers.control;
+                let has_meta = event.keystroke.modifiers.platform;
+                let has_shift = event.keystroke.modifiers.shift;
 
                 // Escape always cancels
                 if key_str == "escape" {
@@ -522,10 +566,73 @@ impl Render for TermPrompt {
                     return;
                 }
 
+                // Handle Shift+PageUp/PageDown/Home/End for scrollback navigation
+                // These work even after terminal exits to review output
+                if has_shift {
+                    match key_str.as_str() {
+                        "pageup" => {
+                            this.terminal.scroll_page_up();
+                            debug!("Shift+PageUp: scrolling terminal page up");
+                            return;
+                        }
+                        "pagedown" => {
+                            this.terminal.scroll_page_down();
+                            debug!("Shift+PageDown: scrolling terminal page down");
+                            return;
+                        }
+                        "home" => {
+                            this.terminal.scroll_to_top();
+                            debug!("Shift+Home: scrolling terminal to top");
+                            return;
+                        }
+                        "end" => {
+                            this.terminal.scroll_to_bottom();
+                            debug!("Shift+End: scrolling terminal to bottom");
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+
                 // Check if terminal is still running before sending input
                 if this.exited || !this.terminal.is_running() {
                     trace!(key = %key_str, "Terminal exited, ignoring key input");
                     return;
+                }
+
+                // Handle Cmd+V paste (macOS: platform modifier = Command key)
+                if has_meta && key_str == "v" {
+                    use arboard::Clipboard;
+                    if let Ok(mut clipboard) = Clipboard::new() {
+                        if let Ok(text) = clipboard.get_text() {
+                            debug!(text_len = text.len(), "Pasting clipboard text to terminal");
+                            if let Err(e) = this.terminal.input(text.as_bytes()) {
+                                if !this.exited {
+                                    warn!(error = %e, "Failed to paste clipboard to terminal");
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                // Handle Cmd+C copy (when there's a selection)
+                // If no selection exists, fall through to send Ctrl+C (SIGINT) to the terminal
+                if has_meta && key_str == "c" {
+                    if let Some(selected_text) = this.terminal.selection_to_string() {
+                        if !selected_text.is_empty() {
+                            use arboard::Clipboard;
+                            if let Ok(mut clipboard) = Clipboard::new() {
+                                if clipboard.set_text(&selected_text).is_ok() {
+                                    debug!(text_len = selected_text.len(), "Copied selection to clipboard");
+                                }
+                            }
+                            // Clear selection after copy (common terminal behavior)
+                            this.terminal.clear_selection();
+                            return;
+                        }
+                    }
+                    // No selection - fall through to let Ctrl+C logic handle SIGINT
                 }
 
                 // Handle Ctrl+key combinations first
@@ -601,6 +708,12 @@ impl Render for TermPrompt {
         // Get padding from config
         let padding = self.config.get_padding();
 
+        // Check if bell is flashing
+        let is_bell_flashing = self
+            .bell_flash_until
+            .map(|until| Instant::now() < until)
+            .unwrap_or(false);
+
         // Log slow renders
         let elapsed = start.elapsed().as_millis();
         if elapsed > SLOW_RENDER_THRESHOLD_MS {
@@ -626,7 +739,53 @@ impl Render for TermPrompt {
             .overflow_hidden() // Clip any overflow
             .key_context("term_prompt")
             .track_focus(&self.focus_handle)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
+                    let (col, row) = this.pixel_to_cell(event.position);
+                    debug!(col, row, "Mouse down at cell - starting selection");
+                    this.is_selecting = true;
+                    this.selection_start = Some((col, row));
+                    this.terminal.start_selection(col, row);
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, _cx| {
+                if this.is_selecting {
+                    let (col, row) = this.pixel_to_cell(event.position);
+                    this.terminal.update_selection(col, row);
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, _window, _cx| {
+                    if this.is_selecting {
+                        let (col, row) = this.pixel_to_cell(event.position);
+                        debug!(col, row, "Mouse up at cell - finalizing selection");
+                        this.terminal.update_selection(col, row);
+                        this.is_selecting = false;
+                        
+                        // Log the selected text if any
+                        if let Some(text) = this.terminal.selection_to_string() {
+                            let preview = if text.len() > 50 { 
+                                format!("{}...", &text[..50]) 
+                            } else { 
+                                text.clone() 
+                            };
+                            debug!(text_len = text.len(), "Selection complete: {:?}", preview);
+                        }
+                    }
+                }),
+            )
             .on_key_down(handle_key);
+
+        // Apply bell flash border if active
+        let container = if is_bell_flashing {
+            container
+                .border_2()
+                .border_color(rgb(colors.accent.selected))
+        } else {
+            container
+        };
 
         // Apply height - use explicit if set, otherwise use h_full (may not work in all contexts)
         let container = if let Some(h) = self.content_height {
