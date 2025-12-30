@@ -31,13 +31,93 @@ jobs:
       - name: Create bundle
         run: cargo bundle --release
       
-      - name: Ad-hoc sign
-        run: codesign --force --deep --sign - "target/release/bundle/osx/Script Kit.app"
+      - name: Create temporary keychain
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          # Create variables
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          
+          # Decode certificate
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+          
+          # Create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          
+          # Import certificate
+          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          
+          # Store keychain path for later steps
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
       
-      - name: Create zip
+      - name: Sign with Developer ID
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          APP_PATH="target/release/bundle/osx/Script Kit.app"
+          
+          # Find the Developer ID Application identity
+          IDENTITY="Developer ID Application: John Lindquist ($APPLE_TEAM_ID)"
+          
+          # Sign all nested components first (frameworks, helpers, etc.)
+          find "$APP_PATH" -type f \( -name "*.dylib" -o -name "*.framework" \) -exec codesign --force --options runtime --sign "$IDENTITY" {} \;
+          
+          # Sign the main executable
+          codesign --force --options runtime --entitlements entitlements.plist --sign "$IDENTITY" "$APP_PATH/Contents/MacOS/script-kit-gpui"
+          
+          # Sign the entire app bundle
+          codesign --force --options runtime --entitlements entitlements.plist --sign "$IDENTITY" "$APP_PATH"
+          
+          # Verify signature
+          codesign --verify --verbose=4 "$APP_PATH"
+          spctl --assess --verbose=4 --type execute "$APP_PATH" || echo "Note: spctl may fail until notarized"
+      
+      - name: Create zip for notarization
         run: |
           cd target/release/bundle/osx
-          zip -r Script-Kit-macos.zip "Script Kit.app"
+          /usr/bin/ditto -c -k --keepParent "Script Kit.app" "Script-Kit-macos.zip"
+      
+      - name: Notarize app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          cd target/release/bundle/osx
+          
+          # Submit for notarization
+          xcrun notarytool submit "Script-Kit-macos.zip" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+      
+      - name: Staple notarization ticket
+        run: |
+          xcrun stapler staple "target/release/bundle/osx/Script Kit.app"
+          
+          # Verify stapling
+          xcrun stapler validate "target/release/bundle/osx/Script Kit.app"
+      
+      - name: Create final release zip
+        run: |
+          cd target/release/bundle/osx
+          rm -f Script-Kit-macos.zip
+          /usr/bin/ditto -c -k --keepParent "Script Kit.app" "Script-Kit-macos.zip"
+      
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          if [ -n "$KEYCHAIN_PATH" ] && [ -f "$KEYCHAIN_PATH" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4

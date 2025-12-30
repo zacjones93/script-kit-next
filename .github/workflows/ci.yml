@@ -48,3 +48,40 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --check
+
+  build-artifact:
+    name: Build macOS Artifact
+    runs-on: macos-latest
+    # Only run on push to main, not on PRs
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [check, clippy, test, fmt]
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: dtolnay/rust-toolchain@stable
+      
+      - uses: Swatinem/rust-cache@v2
+      
+      - name: Build release
+        run: cargo build --release
+      
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle --git https://github.com/zed-industries/cargo-bundle.git --branch zed-deploy
+      
+      - name: Create bundle
+        run: cargo bundle --release
+      
+      - name: Ad-hoc sign for artifact
+        run: codesign --force --deep --sign - "target/release/bundle/osx/Script Kit.app"
+      
+      - name: Create zip
+        run: |
+          cd target/release/bundle/osx
+          zip -r Script-Kit-macos-dev.zip "Script Kit.app"
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: script-kit-macos-${{ github.sha }}
+          path: target/release/bundle/osx/Script-Kit-macos-dev.zip
+          retention-days: 14
