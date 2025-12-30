@@ -11,9 +11,11 @@ use crate::app_launcher::AppInfo;
 pub use crate::builtins::BuiltInEntry;
 use crate::frecency::FrecencyStore;
 use crate::list_item::GroupedListItem;
+use crate::metadata_parser::{extract_typed_metadata, TypedMetadata};
+use crate::schema_parser::{extract_schema, Schema};
 use crate::scriptlets as scriptlet_parser;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Script {
     pub name: String,
     pub path: PathBuf,
@@ -26,6 +28,10 @@ pub struct Script {
     pub alias: Option<String>,
     /// Keyboard shortcut for direct invocation (e.g., "opt i", "cmd shift k")
     pub shortcut: Option<String>,
+    /// Typed metadata from `metadata = { ... }` declaration in script
+    pub typed_metadata: Option<TypedMetadata>,
+    /// Schema definition from `schema = { ... }` declaration in script
+    pub schema: Option<Schema>,
 }
 
 /// Represents a scriptlet parsed from a markdown file
@@ -102,6 +108,7 @@ pub struct WindowMatch {
 
 /// Unified search result that can be a Script, Scriptlet, BuiltIn, App, or Window
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum SearchResult {
     Script(ScriptMatch),
     Scriptlet(ScriptletMatch),
@@ -258,6 +265,46 @@ pub fn extract_script_metadata(content: &str) -> ScriptMetadata {
     metadata
 }
 
+/// Extract full metadata from script content including typed metadata and schema
+///
+/// Priority order for metadata extraction:
+/// 1. Try typed `metadata = {...}` first (new format)
+/// 2. Fall back to `// Name:` comments (legacy format)
+///
+/// For fields present in typed metadata, those values take precedence.
+/// For fields NOT in typed metadata but present in comments, comment values are used.
+///
+/// Returns (ScriptMetadata, Option<TypedMetadata>, Option<Schema>)
+pub fn extract_full_metadata(
+    content: &str,
+) -> (ScriptMetadata, Option<TypedMetadata>, Option<Schema>) {
+    // Extract typed metadata first
+    let typed_result = extract_typed_metadata(content);
+    let typed_meta = typed_result.metadata;
+
+    // Extract schema
+    let schema_result = extract_schema(content);
+    let schema = schema_result.schema;
+
+    // Extract comment-based metadata as fallback
+    let comment_meta = extract_script_metadata(content);
+
+    // Build final ScriptMetadata, preferring typed values when available
+    let script_meta = if let Some(ref typed) = typed_meta {
+        ScriptMetadata {
+            name: typed.name.clone().or(comment_meta.name),
+            description: typed.description.clone().or(comment_meta.description),
+            icon: typed.icon.clone().or(comment_meta.icon),
+            alias: typed.alias.clone().or(comment_meta.alias),
+            shortcut: typed.shortcut.clone().or(comment_meta.shortcut),
+        }
+    } else {
+        comment_meta
+    };
+
+    (script_meta, typed_meta, schema)
+}
+
 /// Extract metadata from script file comments
 /// Looks for lines starting with "// Name:" and "// Description:" with lenient matching
 fn extract_metadata(path: &PathBuf) -> ScriptMetadata {
@@ -270,6 +317,24 @@ fn extract_metadata(path: &PathBuf) -> ScriptMetadata {
                 "Could not read script file for metadata extraction"
             );
             ScriptMetadata::default()
+        }
+    }
+}
+
+/// Extract full metadata from a script file path
+/// Returns (ScriptMetadata, Option<TypedMetadata>, Option<Schema>)
+fn extract_metadata_full(
+    path: &PathBuf,
+) -> (ScriptMetadata, Option<TypedMetadata>, Option<Schema>) {
+    match fs::read_to_string(path) {
+        Ok(content) => extract_full_metadata(&content),
+        Err(e) => {
+            debug!(
+                error = %e,
+                path = %path.display(),
+                "Could not read script file for full metadata extraction"
+            );
+            (ScriptMetadata::default(), None, None)
         }
     }
 }
@@ -707,7 +772,9 @@ pub fn read_scripts() -> Vec<Script> {
                                     // Get filename without extension as fallback
                                     if let Some(file_name) = path.file_stem() {
                                         if let Some(filename_str) = file_name.to_str() {
-                                            let script_metadata = extract_metadata(&path);
+                                            // Extract full metadata including typed and schema
+                                            let (script_metadata, typed_metadata, schema) =
+                                                extract_metadata_full(&path);
 
                                             // Use metadata name if available, otherwise filename
                                             let name = script_metadata
@@ -722,6 +789,8 @@ pub fn read_scripts() -> Vec<Script> {
                                                 icon: script_metadata.icon,
                                                 alias: script_metadata.alias,
                                                 shortcut: script_metadata.shortcut,
+                                                typed_metadata,
+                                                schema,
                                             });
                                         }
                                     }
@@ -1849,6 +1918,7 @@ mod tests {
             description: None,
             alias: None,
             shortcut: None,
+            ..Default::default()
         };
         assert_eq!(script.name, "test");
         assert_eq!(script.extension, "ts");
@@ -1865,6 +1935,7 @@ mod tests {
                 description: Some("Open a file dialog".to_string()),
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "savefile".to_string(),
@@ -1874,6 +1945,7 @@ mod tests {
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -1893,6 +1965,7 @@ mod tests {
             description: None,
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let results = fuzzy_search_scripts(&scripts, "");
@@ -1911,6 +1984,7 @@ mod tests {
                 description: Some("Open a file dialog".to_string()),
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "open".to_string(),
@@ -1920,6 +1994,7 @@ mod tests {
                 description: Some("Basic open function".to_string()),
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "reopen".to_string(),
@@ -1929,6 +2004,7 @@ mod tests {
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -1966,6 +2042,7 @@ mod tests {
             description: Some("Open a file".to_string()),
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let scriptlets = vec![test_scriptlet_with_desc(
@@ -2002,6 +2079,7 @@ mod tests {
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             score: 100,
             filename: "test.ts".to_string(),
@@ -2171,6 +2249,7 @@ mod tests {
             description: None,
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let results = fuzzy_search_scripts(&scripts, "nonexistent");
@@ -2188,6 +2267,7 @@ mod tests {
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "test2".to_string(),
@@ -2197,6 +2277,7 @@ mod tests {
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -2215,6 +2296,7 @@ mod tests {
                 description: Some("database connection helper".to_string()),
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "bar".to_string(),
@@ -2224,6 +2306,7 @@ mod tests {
                 description: Some("ui component".to_string()),
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -2243,6 +2326,7 @@ mod tests {
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "bar".to_string(),
@@ -2252,6 +2336,7 @@ mod tests {
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -2271,6 +2356,7 @@ mod tests {
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "other".to_string(),
@@ -2280,6 +2366,7 @@ mod tests {
                 description: Some("exactmatch in description".to_string()),
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -2324,6 +2411,7 @@ mod tests {
             description: None,
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let scriptlets = vec![test_scriptlet("Snippet1", "ts", "code")];
@@ -2342,6 +2430,7 @@ mod tests {
             description: Some("test script".to_string()),
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let scriptlets = vec![test_scriptlet_with_desc(
@@ -2373,6 +2462,7 @@ mod tests {
                 description: Some("A test script".to_string()),
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             score: 100,
             filename: "test.ts".to_string(),
@@ -2441,6 +2531,7 @@ mod tests {
             description: None, // Would be extracted from file if existed
             alias: None,
             shortcut: None,
+            ..Default::default()
         };
         assert_eq!(script.name, "test");
     }
@@ -2913,6 +3004,7 @@ const x = 1;
             description: Some("My custom script".to_string()),
             alias: None,
             shortcut: None,
+            ..Default::default()
         };
 
         assert_eq!(script.name, "myScript");
@@ -2931,6 +3023,7 @@ const x = 1;
             description: Some("desc".to_string()),
             alias: None,
             shortcut: None,
+            ..Default::default()
         };
 
         let cloned = original.clone();
@@ -2979,6 +3072,7 @@ const x = 1;
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "saveFile".to_string(),
@@ -2988,6 +3082,7 @@ const x = 1;
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -3008,6 +3103,7 @@ const x = 1;
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             score: 50,
             filename: "test.ts".to_string(),
@@ -3072,6 +3168,7 @@ third()
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "beta".to_string(),
@@ -3081,6 +3178,7 @@ third()
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "gamma".to_string(),
@@ -3090,6 +3188,7 @@ third()
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -3141,6 +3240,7 @@ third()
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "apple".to_string(),
@@ -3150,6 +3250,7 @@ third()
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "monkey".to_string(),
@@ -3159,6 +3260,7 @@ third()
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -3199,6 +3301,7 @@ third()
                 description: Some(format!("Script number {}", i)),
                 alias: None,
                 shortcut: None,
+                ..Default::default()
             });
         }
 
@@ -3218,6 +3321,7 @@ third()
             description: Some("Opens a file".to_string()),
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let results = fuzzy_search_scripts(&scripts, "open");
@@ -3276,6 +3380,7 @@ open("https://example.com");
             description: None,
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let result1 = fuzzy_search_scripts(&scripts, "test");
@@ -3297,6 +3402,7 @@ open("https://example.com");
             description: None,
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let results = fuzzy_search_scripts(&scripts, "test");
@@ -3338,6 +3444,7 @@ const obj = { key: "value" };
             description: None,
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         // Should be able to search for the ASCII version
@@ -3356,6 +3463,7 @@ const obj = { key: "value" };
             description: None,
             alias: None,
             shortcut: None,
+            ..Default::default()
         };
 
         assert_eq!(script.extension, "ts");
@@ -3368,6 +3476,7 @@ const obj = { key: "value" };
             icon: None,
             alias: None,
             shortcut: None,
+            ..Default::default()
         };
 
         assert_eq!(script_js.extension, "js");
@@ -3430,6 +3539,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             score: 0,
             filename: "test.ts".to_string(),
@@ -3482,6 +3592,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "reopen".to_string(),
@@ -3491,6 +3602,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -3512,6 +3624,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "other".to_string(),
@@ -3521,6 +3634,7 @@ code here
                 description: Some("test description".to_string()),
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -3540,6 +3654,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "other".to_string(),
@@ -3549,6 +3664,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -3595,6 +3711,7 @@ code here
                 description: Some("Open a file".to_string()),
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "openfile".to_string(),
@@ -3604,6 +3721,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -3624,6 +3742,7 @@ code here
             description: None,
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let results = fuzzy_search_scripts(&scripts, "OPEN");
@@ -3642,6 +3761,7 @@ code here
                 description: Some("test".to_string()),
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "bbb".to_string(),
@@ -3651,6 +3771,7 @@ code here
                 description: Some("test".to_string()),
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -3683,6 +3804,7 @@ code here
             description: Some("Test script".to_string()),
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let scriptlets = vec![test_scriptlet_with_desc(
@@ -3714,6 +3836,7 @@ code here
             description: None,
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let results = fuzzy_search_scripts(&scripts, "es");
@@ -3733,6 +3856,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "save".to_string(),
@@ -3742,6 +3866,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -3761,6 +3886,7 @@ code here
             description: Some("database connection".to_string()),
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let results = fuzzy_search_scripts(&scripts, "database");
@@ -3780,6 +3906,7 @@ code here
                 description: Some("Opens a file dialog".to_string()),
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "someScript".to_string(),
@@ -3789,6 +3916,7 @@ code here
                 description: Some("Does something".to_string()),
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "saveData".to_string(),
@@ -3798,6 +3926,7 @@ code here
                 description: Some("Saves data to file".to_string()),
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -3820,6 +3949,7 @@ code here
                 description: Some("Search files with grep".to_string()),
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "find".to_string(),
@@ -3829,6 +3959,7 @@ code here
                 description: Some("Find files".to_string()),
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "search".to_string(),
@@ -3838,6 +3969,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -3859,6 +3991,7 @@ code here
             description: Some("Copy to clipboard".to_string()),
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let mut quick_copy =
@@ -4040,6 +4173,7 @@ code here
             description: Some("My clipboard script".to_string()),
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let scriptlets = vec![test_scriptlet_with_desc(
@@ -4081,6 +4215,7 @@ code here
             description: None,
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let builtins = create_test_builtins();
@@ -4111,6 +4246,7 @@ code here
             description: None,
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let scriptlets = vec![test_scriptlet("Test Snippet", "ts", "test()")];
@@ -4217,6 +4353,7 @@ code here
             description: None,
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
         let scriptlets: Vec<Scriptlet> = vec![];
         let builtins: Vec<BuiltInEntry> = vec![];
@@ -4251,6 +4388,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "save".to_string(),
@@ -4260,6 +4398,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -4296,6 +4435,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "beta".to_string(),
@@ -4305,6 +4445,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -4337,6 +4478,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "beta".to_string(),
@@ -4346,6 +4488,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "gamma".to_string(),
@@ -4355,6 +4498,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -4405,6 +4549,7 @@ code here
                 description: Some("A frequently used script".to_string()),
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "another-script".to_string(),
@@ -4414,6 +4559,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -4513,6 +4659,7 @@ code here
             description: Some("User's frequently used script".to_string()),
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
         let scriptlets: Vec<Scriptlet> = vec![];
         let builtins = create_test_builtins(); // Clipboard History, App Launcher
@@ -4586,6 +4733,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "zebra-script".to_string(),
@@ -4595,6 +4743,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -4677,6 +4826,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "zebra-script".to_string(),
@@ -4686,6 +4836,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -4761,6 +4912,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "second".to_string(),
@@ -4770,6 +4922,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
         let scriptlets: Vec<Scriptlet> = vec![];
@@ -4809,6 +4962,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "Other Script".to_string(),
@@ -4818,6 +4972,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -4840,6 +4995,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "Save Data".to_string(),
@@ -4849,6 +5005,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -4869,6 +5026,7 @@ code here
             description: None,
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let results = fuzzy_search_scripts(&scripts, "test");
@@ -4891,6 +5049,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
             Script {
                 name: "bar".to_string(),                           // Name doesn't match
@@ -4900,6 +5059,7 @@ code here
                 description: None,
                 alias: None,
                 shortcut: None,
+            ..Default::default()
             },
         ];
 
@@ -4923,6 +5083,7 @@ code here
             description: None,
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let results = fuzzy_search_scripts(&scripts, "opf");
@@ -4945,6 +5106,7 @@ code here
             description: None,
             alias: None,
             shortcut: None,
+            ..Default::default()
         }];
 
         let results = fuzzy_search_scripts(&scripts, "mts");
@@ -5135,14 +5297,285 @@ code here
             name: "Test".to_string(),
             path: PathBuf::from("/path/my-script.ts"),
             extension: "ts".to_string(),
-            icon: None,
-            description: None,
-            alias: None,
-            shortcut: None,
+            ..Default::default()
         }];
 
         let results = fuzzy_search_scripts(&scripts, "");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].filename, "my-script.ts");
+    }
+
+    // ============================================
+    // TYPED METADATA & SCHEMA INTEGRATION TESTS
+    // ============================================
+
+    #[test]
+    fn test_script_struct_has_typed_fields() {
+        // Test that Script struct includes typed_metadata and schema fields
+        use crate::metadata_parser::TypedMetadata;
+        use crate::schema_parser::{FieldDef, FieldType, Schema};
+        use std::collections::HashMap;
+
+        let typed_meta = TypedMetadata {
+            name: Some("My Typed Script".to_string()),
+            description: Some("A script with typed metadata".to_string()),
+            alias: Some("mts".to_string()),
+            icon: Some("Star".to_string()),
+            ..Default::default()
+        };
+
+        let mut input_fields = HashMap::new();
+        input_fields.insert(
+            "title".to_string(),
+            FieldDef {
+                field_type: FieldType::String,
+                required: true,
+                description: Some("The title".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let schema = Schema {
+            input: input_fields,
+            output: HashMap::new(),
+        };
+
+        let script = Script {
+            name: "test".to_string(),
+            path: PathBuf::from("/test.ts"),
+            extension: "ts".to_string(),
+            typed_metadata: Some(typed_meta.clone()),
+            schema: Some(schema.clone()),
+            ..Default::default()
+        };
+
+        // Verify typed_metadata is accessible
+        assert!(script.typed_metadata.is_some());
+        let meta = script.typed_metadata.as_ref().unwrap();
+        assert_eq!(meta.name, Some("My Typed Script".to_string()));
+        assert_eq!(meta.alias, Some("mts".to_string()));
+        assert_eq!(meta.icon, Some("Star".to_string()));
+
+        // Verify schema is accessible
+        assert!(script.schema.is_some());
+        let sch = script.schema.as_ref().unwrap();
+        assert_eq!(sch.input.len(), 1);
+        assert!(sch.input.contains_key("title"));
+    }
+
+    #[test]
+    fn test_extract_typed_metadata_from_script() {
+        // Test that extract_full_metadata correctly parses typed metadata
+        let content = r#"
+metadata = {
+    name: "Create Note",
+    description: "Creates a new note in the notes directory",
+    author: "John Lindquist",
+    alias: "note",
+    icon: "File",
+    shortcut: "cmd n"
+}
+
+const title = await arg("Enter title");
+"#;
+
+        let (script_meta, typed_meta, _schema) = extract_full_metadata(content);
+
+        // Typed metadata should be parsed
+        assert!(typed_meta.is_some());
+        let meta = typed_meta.unwrap();
+        assert_eq!(meta.name, Some("Create Note".to_string()));
+        assert_eq!(
+            meta.description,
+            Some("Creates a new note in the notes directory".to_string())
+        );
+        assert_eq!(meta.alias, Some("note".to_string()));
+        assert_eq!(meta.icon, Some("File".to_string()));
+        assert_eq!(meta.shortcut, Some("cmd n".to_string()));
+
+        // Script metadata should also be populated from typed
+        assert_eq!(script_meta.name, Some("Create Note".to_string()));
+        assert_eq!(script_meta.alias, Some("note".to_string()));
+    }
+
+    #[test]
+    fn test_extract_schema_from_script() {
+        // Test that extract_full_metadata correctly parses schema
+        let content = r#"
+schema = {
+    input: {
+        title: { type: "string", required: true, description: "Note title" },
+        tags: { type: "array", items: "string" }
+    },
+    output: {
+        path: { type: "string", description: "Path to created file" }
+    }
+}
+
+const { title, tags } = await input();
+"#;
+
+        let (_script_meta, _typed_meta, schema) = extract_full_metadata(content);
+
+        // Schema should be parsed
+        assert!(schema.is_some());
+        let sch = schema.unwrap();
+
+        // Check input fields
+        assert_eq!(sch.input.len(), 2);
+        let title_field = sch.input.get("title").unwrap();
+        assert!(title_field.required);
+        assert_eq!(title_field.description, Some("Note title".to_string()));
+
+        let tags_field = sch.input.get("tags").unwrap();
+        assert_eq!(tags_field.items, Some("string".to_string()));
+
+        // Check output fields
+        assert_eq!(sch.output.len(), 1);
+        assert!(sch.output.contains_key("path"));
+    }
+
+    #[test]
+    fn test_fallback_to_comment_metadata() {
+        // Test that when no typed metadata exists, we fall back to comment-based metadata
+        let content = r#"// Name: My Script
+// Description: A script without typed metadata
+// Icon: Terminal
+// Alias: ms
+// Shortcut: opt m
+
+const x = await arg("Pick one");
+"#;
+
+        let (script_meta, typed_meta, schema) = extract_full_metadata(content);
+
+        // No typed metadata in this script
+        assert!(typed_meta.is_none());
+        assert!(schema.is_none());
+
+        // But script metadata should be extracted from comments
+        assert_eq!(script_meta.name, Some("My Script".to_string()));
+        assert_eq!(
+            script_meta.description,
+            Some("A script without typed metadata".to_string())
+        );
+        assert_eq!(script_meta.icon, Some("Terminal".to_string()));
+        assert_eq!(script_meta.alias, Some("ms".to_string()));
+        assert_eq!(script_meta.shortcut, Some("opt m".to_string()));
+    }
+
+    #[test]
+    fn test_both_typed_and_comment_prefers_typed() {
+        // Test that when both typed metadata AND comment metadata exist,
+        // the typed metadata takes precedence
+        let content = r#"// Name: Comment Name
+// Description: Comment Description
+// Alias: cn
+
+metadata = {
+    name: "Typed Name",
+    description: "Typed Description",
+    alias: "tn"
+}
+
+const x = await arg("Pick");
+"#;
+
+        let (script_meta, typed_meta, _schema) = extract_full_metadata(content);
+
+        // Typed metadata should be present
+        assert!(typed_meta.is_some());
+        let meta = typed_meta.unwrap();
+        assert_eq!(meta.name, Some("Typed Name".to_string()));
+        assert_eq!(meta.description, Some("Typed Description".to_string()));
+        assert_eq!(meta.alias, Some("tn".to_string()));
+
+        // Script metadata should use typed values (typed takes precedence)
+        assert_eq!(script_meta.name, Some("Typed Name".to_string()));
+        assert_eq!(
+            script_meta.description,
+            Some("Typed Description".to_string())
+        );
+        assert_eq!(script_meta.alias, Some("tn".to_string()));
+    }
+
+    #[test]
+    fn test_typed_metadata_partial_with_comment_fallback() {
+        // Test that typed metadata can be partial and comment metadata fills gaps
+        let content = r#"// Name: Comment Name
+// Description: Full description
+// Icon: Terminal
+// Shortcut: opt x
+
+metadata = {
+    name: "Typed Name",
+    alias: "tn"
+}
+
+const x = await arg("Pick");
+"#;
+
+        let (script_meta, typed_meta, _schema) = extract_full_metadata(content);
+
+        // Typed metadata is present but partial
+        assert!(typed_meta.is_some());
+        let meta = typed_meta.unwrap();
+        assert_eq!(meta.name, Some("Typed Name".to_string()));
+        assert_eq!(meta.alias, Some("tn".to_string()));
+        assert!(meta.description.is_none()); // Not in typed
+        assert!(meta.icon.is_none()); // Not in typed
+        assert!(meta.shortcut.is_none()); // Not in typed
+
+        // Script metadata should use typed for what's available, comments for rest
+        assert_eq!(script_meta.name, Some("Typed Name".to_string())); // From typed
+        assert_eq!(script_meta.alias, Some("tn".to_string())); // From typed
+        assert_eq!(
+            script_meta.description,
+            Some("Full description".to_string())
+        ); // From comment
+        assert_eq!(script_meta.icon, Some("Terminal".to_string())); // From comment
+        assert_eq!(script_meta.shortcut, Some("opt x".to_string())); // From comment
+    }
+
+    #[test]
+    fn test_both_metadata_and_schema() {
+        // Test extracting both metadata and schema from a single script
+        let content = r#"
+metadata = {
+    name: "Full Featured Script",
+    description: "Has both metadata and schema",
+    alias: "ffs"
+}
+
+schema = {
+    input: {
+        query: { type: "string", required: true }
+    },
+    output: {
+        result: { type: "string" }
+    }
+}
+
+const { query } = await input();
+"#;
+
+        let (script_meta, typed_meta, schema) = extract_full_metadata(content);
+
+        // Both should be present
+        assert!(typed_meta.is_some());
+        assert!(schema.is_some());
+
+        // Verify metadata
+        let meta = typed_meta.unwrap();
+        assert_eq!(meta.name, Some("Full Featured Script".to_string()));
+        assert_eq!(meta.alias, Some("ffs".to_string()));
+
+        // Verify schema
+        let sch = schema.unwrap();
+        assert_eq!(sch.input.len(), 1);
+        assert_eq!(sch.output.len(), 1);
+
+        // Script metadata populated
+        assert_eq!(script_meta.name, Some("Full Featured Script".to_string()));
     }
 }

@@ -14,6 +14,9 @@
 //! - Handle nested code fences (``` inside ~~~ and vice versa)
 //! - Variable substitution with named inputs, positional args, and conditionals
 
+use crate::metadata_parser::TypedMetadata;
+use crate::schema_parser::Schema;
+use crate::scriptlet_metadata::parse_codefence_metadata;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::debug;
@@ -96,8 +99,12 @@ pub struct Scriptlet {
     pub group: String,
     /// HTML preview content (if any)
     pub preview: Option<String>,
-    /// Parsed metadata from HTML comments
+    /// Parsed metadata from HTML comments (legacy format)
     pub metadata: ScriptletMetadata,
+    /// Typed metadata from codefence ```metadata block (new format)
+    pub typed_metadata: Option<TypedMetadata>,
+    /// Schema definition from codefence ```schema block
+    pub schema: Option<Schema>,
     /// The kenv this scriptlet belongs to
     pub kenv: Option<String>,
     /// Source file path
@@ -120,6 +127,8 @@ impl Scriptlet {
             group: String::new(),
             preview: None,
             metadata: ScriptletMetadata::default(),
+            typed_metadata: None,
+            schema: None,
             kenv: None,
             source_path: None,
         }
@@ -372,21 +381,32 @@ pub fn parse_markdown_as_scriptlets(content: &str, source_path: Option<&str>) ->
                 continue;
             }
 
-            // Parse metadata from HTML comments
+            // Try codefence metadata first (new format)
+            let codefence_result = parse_codefence_metadata(section_text);
+            let typed_metadata = codefence_result.metadata;
+            let schema = codefence_result.schema;
+
+            // Also parse HTML comment metadata (legacy format, for backward compatibility)
             let metadata = parse_html_comment_metadata(section_text);
 
-            // Extract code block
-            if let Some((tool, mut code)) = extract_code_block_nested(section_text) {
+            // Extract code block - prefer codefence result if available, else use legacy extraction
+            let code_block = if let Some(ref code_block) = codefence_result.code {
+                Some((code_block.language.clone(), code_block.content.clone()))
+            } else {
+                extract_code_block_nested(section_text)
+            };
+
+            if let Some((tool_str, mut code)) = code_block {
                 // Prepend global code if exists and tool matches
                 if !global_prepend.is_empty() {
                     code = format!("{}\n{}", global_prepend, code);
                 }
 
                 // Validate tool type
-                let tool = if tool.is_empty() {
+                let tool: String = if tool_str.is_empty() {
                     "ts".to_string()
                 } else {
-                    tool
+                    tool_str
                 };
 
                 // Check if tool is valid, warn if not
@@ -406,6 +426,8 @@ pub fn parse_markdown_as_scriptlets(content: &str, source_path: Option<&str>) ->
                     group: current_group.clone(),
                     preview: None,
                     metadata,
+                    typed_metadata,
+                    schema,
                     kenv: None,
                     source_path: source_path.map(|s| s.to_string()),
                 });
@@ -2384,5 +2406,183 @@ manual-task.sh
         // Some cron parsers support seconds as the first field
         let metadata = parse_html_comment_metadata("<!-- cron: 0 30 9 * * * -->");
         assert_eq!(metadata.cron, Some("0 30 9 * * *".to_string()));
+    }
+
+    // ========================================
+    // Codefence Metadata Integration Tests
+    // ========================================
+
+    #[test]
+    fn test_scriptlet_with_codefence_metadata() {
+        // Test that scriptlets can be parsed from markdown with codefence metadata blocks
+        let markdown = r#"## Quick Todo
+
+```metadata
+{ "name": "Quick Todo", "description": "Add a todo item", "shortcut": "cmd t" }
+```
+
+```ts
+const item = await arg("Todo item");
+```
+"#;
+        let scriptlets = parse_markdown_as_scriptlets(markdown, None);
+        assert_eq!(scriptlets.len(), 1);
+        
+        let scriptlet = &scriptlets[0];
+        assert_eq!(scriptlet.name, "Quick Todo");
+        assert_eq!(scriptlet.tool, "ts");
+        
+        // Typed metadata should be populated
+        assert!(scriptlet.typed_metadata.is_some());
+        let typed = scriptlet.typed_metadata.as_ref().unwrap();
+        assert_eq!(typed.name, Some("Quick Todo".to_string()));
+        assert_eq!(typed.description, Some("Add a todo item".to_string()));
+        assert_eq!(typed.shortcut, Some("cmd t".to_string()));
+    }
+
+    #[test]
+    fn test_scriptlet_with_codefence_schema() {
+        // Test that scriptlets can parse schema blocks
+        let markdown = r#"## Input Script
+
+```schema
+{
+    "input": {
+        "title": { "type": "string", "required": true }
+    },
+    "output": {
+        "result": { "type": "string" }
+    }
+}
+```
+
+```ts
+const { title } = await input();
+output({ result: title.toUpperCase() });
+```
+"#;
+        let scriptlets = parse_markdown_as_scriptlets(markdown, None);
+        assert_eq!(scriptlets.len(), 1);
+        
+        let scriptlet = &scriptlets[0];
+        assert!(scriptlet.schema.is_some());
+        
+        let schema = scriptlet.schema.as_ref().unwrap();
+        assert_eq!(schema.input.len(), 1);
+        assert!(schema.input.contains_key("title"));
+        assert_eq!(schema.output.len(), 1);
+        assert!(schema.output.contains_key("result"));
+    }
+
+    #[test]
+    fn test_scriptlet_falls_back_to_html_comments() {
+        // When no codefence metadata exists, should fall back to HTML comments
+        let markdown = r#"## Legacy Script
+
+<!-- shortcut: cmd l -->
+<!-- description: A legacy script using HTML comments -->
+
+```bash
+echo "Hello from legacy"
+```
+"#;
+        let scriptlets = parse_markdown_as_scriptlets(markdown, None);
+        assert_eq!(scriptlets.len(), 1);
+        
+        let scriptlet = &scriptlets[0];
+        // HTML comment metadata should still work
+        assert_eq!(scriptlet.metadata.shortcut, Some("cmd l".to_string()));
+        assert_eq!(scriptlet.metadata.description, Some("A legacy script using HTML comments".to_string()));
+        
+        // Typed metadata should be None since no codefence metadata block
+        assert!(scriptlet.typed_metadata.is_none());
+        assert!(scriptlet.schema.is_none());
+    }
+
+    #[test]
+    fn test_scriptlet_struct_has_typed_fields() {
+        // Verify the Scriptlet struct has the new fields
+        let scriptlet = Scriptlet::new(
+            "Test".to_string(),
+            "ts".to_string(),
+            "console.log('test')".to_string(),
+        );
+        
+        // New fields should exist and default to None
+        assert!(scriptlet.typed_metadata.is_none());
+        assert!(scriptlet.schema.is_none());
+    }
+
+    #[test]
+    fn test_mixed_codefence_and_html_prefers_codefence() {
+        // When both codefence metadata and HTML comments exist,
+        // codefence should take precedence for typed_metadata
+        let markdown = r#"## Mixed Script
+
+<!-- shortcut: cmd x -->
+<!-- description: HTML description -->
+
+```metadata
+{ "name": "Codefence Name", "description": "Codefence description", "shortcut": "cmd y" }
+```
+
+```ts
+console.log("mixed");
+```
+"#;
+        let scriptlets = parse_markdown_as_scriptlets(markdown, None);
+        assert_eq!(scriptlets.len(), 1);
+        
+        let scriptlet = &scriptlets[0];
+        
+        // Codefence metadata should populate typed_metadata
+        assert!(scriptlet.typed_metadata.is_some());
+        let typed = scriptlet.typed_metadata.as_ref().unwrap();
+        assert_eq!(typed.name, Some("Codefence Name".to_string()));
+        assert_eq!(typed.description, Some("Codefence description".to_string()));
+        assert_eq!(typed.shortcut, Some("cmd y".to_string()));
+        
+        // HTML comments should still populate legacy metadata struct
+        // (for backward compatibility)
+        assert_eq!(scriptlet.metadata.shortcut, Some("cmd x".to_string()));
+        assert_eq!(scriptlet.metadata.description, Some("HTML description".to_string()));
+    }
+
+    #[test]
+    fn test_codefence_metadata_and_schema_together() {
+        // Test scriptlet with both metadata and schema codefence blocks
+        let markdown = r#"## Full Featured
+
+```metadata
+{ "name": "Full Featured", "description": "Has both metadata and schema" }
+```
+
+```schema
+{
+    "input": {
+        "name": { "type": "string", "required": true }
+    }
+}
+```
+
+```ts
+const { name } = await input();
+console.log(name);
+```
+"#;
+        let scriptlets = parse_markdown_as_scriptlets(markdown, None);
+        assert_eq!(scriptlets.len(), 1);
+        
+        let scriptlet = &scriptlets[0];
+        
+        // Both should be populated
+        assert!(scriptlet.typed_metadata.is_some());
+        assert!(scriptlet.schema.is_some());
+        
+        let typed = scriptlet.typed_metadata.as_ref().unwrap();
+        assert_eq!(typed.name, Some("Full Featured".to_string()));
+        
+        let schema = scriptlet.schema.as_ref().unwrap();
+        assert!(schema.input.contains_key("name"));
     }
 }

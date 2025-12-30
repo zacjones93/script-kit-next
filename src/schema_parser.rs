@@ -1,4 +1,5 @@
 //! Schema parser for Script Kit scripts
+#![allow(dead_code)]
 //!
 //! Parses the `schema = { input: {...}, output: {...} }` global from scripts.
 //! This defines the typed interface for input() and output() functions,

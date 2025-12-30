@@ -66,6 +66,15 @@ mod frecency;
 // Scriptlet parsing and variable substitution
 mod scriptlets;
 
+// Typed metadata parser for new `metadata = {}` global syntax
+mod metadata_parser;
+
+// Schema parser for `schema = { input: {}, output: {} }` definitions
+mod schema_parser;
+
+// Scriptlet codefence metadata parser for ```metadata and ```schema blocks
+mod scriptlet_metadata;
+
 // VSCode snippet syntax parser for template() SDK function
 mod snippet;
 
@@ -90,6 +99,14 @@ mod scheduler;
 
 // HUD manager - system-level overlay notifications (separate floating windows)
 mod hud_manager;
+
+// MCP Server modules for AI agent integration
+mod mcp_kit_tools;
+mod mcp_protocol;
+mod mcp_resources;
+mod mcp_script_tools;
+mod mcp_server;
+mod mcp_streaming;
 
 use crate::components::toast::{Toast, ToastAction, ToastColors};
 use crate::toast_manager::ToastManager;
@@ -1637,6 +1654,7 @@ struct ScriptListApp {
 
 /// Result of alias matching - either a Script or Scriptlet
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 enum AliasMatch {
     Script(scripts::Script),
     Scriptlet(scripts::Scriptlet),
@@ -4304,6 +4322,8 @@ impl ScriptListApp {
                 icon: None,
                 alias: None,
                 shortcut: None,
+                typed_metadata: None,
+                schema: None,
             };
 
             self.execute_interactive(&script, cx);
@@ -4331,6 +4351,8 @@ impl ScriptListApp {
                 description: scriptlet.description.clone(),
                 ..Default::default()
             },
+            typed_metadata: None,
+            schema: None,
             kenv: None,
             source_path: scriptlet.file_path.clone(),
         };
@@ -4451,6 +4473,8 @@ impl ScriptListApp {
                 icon: None,
                 alias: None,
                 shortcut: None,
+                typed_metadata: None,
+                schema: None,
             };
 
             self.execute_interactive(&script, cx);
@@ -4915,6 +4939,8 @@ impl ScriptListApp {
                     icon: None,
                     alias: None,
                     shortcut: None,
+                    typed_metadata: None,
+                    schema: None,
                 };
 
                 logging::log("EXEC", &format!("Executing script: {}", script_name));
@@ -11938,6 +11964,34 @@ fn main() {
 
     // Clone before start_hotkey_listener consumes original
     let config_for_app = loaded_config.clone();
+
+    // Start MCP server for AI agent integration
+    // Server runs on localhost:43210 with Bearer token authentication
+    // Discovery file written to ~/.kenv/server.json
+    let _mcp_handle = match mcp_server::McpServer::with_defaults() {
+        Ok(server) => {
+            match server.start() {
+                Ok(handle) => {
+                    logging::log(
+                        "MCP",
+                        &format!(
+                            "MCP server started on {} (token in ~/.kenv/agent-token)",
+                            server.url()
+                        ),
+                    );
+                    Some(handle)
+                }
+                Err(e) => {
+                    logging::log("MCP", &format!("Failed to start MCP server: {}", e));
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            logging::log("MCP", &format!("Failed to create MCP server: {}", e));
+            None
+        }
+    };
 
     start_hotkey_listener(loaded_config);
 

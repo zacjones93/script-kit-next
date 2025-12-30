@@ -852,7 +852,8 @@ impl Render for ActionsDialog {
                         let item_tokens = get_tokens(design_variant);
                         let item_colors = item_tokens.colors();
                         let item_spacing = item_tokens.spacing();
-                        let _item_visual = item_tokens.visual();
+                        // Note: Not using item_visual.radius_lg - using POPUP_CORNER_RADIUS instead
+                        // to match the container's actual corner radius
 
                         // Extract colors for list items - MATCH main list styling exactly
                         // Uses accent_selected_subtle with 0x80 alpha (same as ListItem)
@@ -926,7 +927,20 @@ impl Render for ActionsDialog {
                                     let title_str: String = action.title.clone();
                                     let shortcut_opt: Option<String> = action.shortcut.clone();
 
+                                    // Check if this is the first or last item for rounded corners
+                                    // First item needs rounded top corners, last item needs rounded bottom corners
+                                    // (when search is hidden, last item is at bottom of panel)
+                                    let is_first_item = idx == 0;
+                                    let is_last_item = idx == filtered_len - 1;
+                                    // Use the popup's actual corner radius (POPUP_CORNER_RADIUS = 12.0)
+                                    // GPUI's overflow_hidden only clips to rectangular bounds, NOT rounded corners
+                                    // So we must explicitly round children that touch the container's corners
+                                    let corner_radius = POPUP_CORNER_RADIUS;
+
                                     // Build the action item with left accent bar for selected state
+                                    // For the first item, we need to inset the content so the accent bar
+                                    // doesn't escape the rounded corners. The container has 12px radius,
+                                    // so we add top padding to push content below the curve.
                                     let mut action_item = div()
                                         .id(idx)
                                         .w_full()
@@ -955,13 +969,27 @@ impl Render for ActionsDialog {
                                         rgb(item_colors.accent)
                                     };
 
-                                    action_item = action_item.child(
-                                        div().w(px(ACCENT_BAR_WIDTH)).h_full().bg(if is_selected {
+                                    // Accent bar - for first item, add top margin to avoid the rounded corner
+                                    // The container has 12px corner radius, so we push the accent bar down
+                                    // by that amount on the first item to keep it inside the rounded area
+                                    let accent_bar = div()
+                                        .w(px(ACCENT_BAR_WIDTH))
+                                        .when(is_first_item, |d| {
+                                            // Push down from top by corner radius amount
+                                            d.h(px(ACTION_ITEM_HEIGHT - corner_radius)).mt(px(corner_radius))
+                                        })
+                                        .when(!is_first_item, |d| d.h_full())
+                                        .when(is_last_item && this.hide_search, |d| {
+                                            // For last item, reduce height from bottom
+                                            d.h(px(ACTION_ITEM_HEIGHT - corner_radius)).mb(px(corner_radius))
+                                        })
+                                        .bg(if is_selected {
                                             accent_color
                                         } else {
                                             rgba(0x00000000)
-                                        }),
-                                    );
+                                        });
+
+                                    action_item = action_item.child(accent_bar);
 
                                     // Content container with proper padding (after accent bar)
                                     let content = div()
@@ -1027,6 +1055,7 @@ impl Render for ActionsDialog {
 
             // Wrap uniform_list in a relative container with scrollbar overlay
             // NOTE: The wrapper needs flex + h_full for uniform_list to properly calculate visible range
+            // overflow_hidden clips children to parent bounds (including rounded corners)
             div()
                 .relative()
                 .flex()
@@ -1034,6 +1063,7 @@ impl Render for ActionsDialog {
                 .flex_1()
                 .w_full()
                 .h_full()
+                .overflow_hidden()
                 .child(list)
                 .child(scrollbar)
                 .into_any_element()
@@ -1053,13 +1083,14 @@ impl Render for ActionsDialog {
 
         // Main overlay popup container
         // Fixed width, dynamic height based on content, rounded corners, shadow, semi-transparent bg
+        // NOTE: Using POPUP_CORNER_RADIUS constant for consistency with child item rounding
         div()
             .flex()
             .flex_col()
             .w(px(POPUP_WIDTH))
             .h(px(total_height)) // Use calculated height instead of max_h
             .bg(main_bg)
-            .rounded(px(visual.radius_lg))
+            .rounded(px(POPUP_CORNER_RADIUS))
             .shadow(Self::create_popup_shadow())
             .border_1()
             .border_color(container_border)

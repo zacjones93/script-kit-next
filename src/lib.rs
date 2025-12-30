@@ -54,6 +54,9 @@ pub mod metadata_parser;
 // Schema parser for `schema = { input: {}, output: {} }` definitions
 pub mod schema_parser;
 
+// Scriptlet codefence metadata parser for ```metadata and ```schema blocks
+pub mod scriptlet_metadata;
+
 // VSCode snippet syntax parser for template() SDK function
 pub mod snippet;
 
@@ -92,3 +95,27 @@ pub mod storybook;
 
 // Stories - Component story definitions for the storybook
 pub mod stories;
+
+// MCP Server - HTTP server for Model Context Protocol integration
+// Provides localhost:43210 endpoint with Bearer token auth
+pub mod mcp_server;
+
+// MCP Streaming - Server-Sent Events (SSE) and audit logging
+// Provides real-time event streaming and tool call audit logs
+pub mod mcp_streaming;
+
+// MCP Protocol - JSON-RPC 2.0 protocol handler for MCP
+// Handles request parsing, method routing, and response generation
+pub mod mcp_protocol;
+
+// MCP Kit Tools - kit/* namespace tools for app control
+// Provides kit/show, kit/hide, kit/state tools
+pub mod mcp_kit_tools;
+
+// MCP Script Tools - scripts/* namespace auto-generated tools
+// Scripts with schema.input become MCP tools automatically
+pub mod mcp_script_tools;
+
+// MCP Resources - read-only data resources for MCP clients
+// Provides kit://state, scripts://, and scriptlets:// resources
+pub mod mcp_resources;
