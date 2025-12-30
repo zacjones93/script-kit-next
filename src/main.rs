@@ -7,9 +7,9 @@ use global_hotkey::{
 use gpui::{
     div, hsla, list, point, prelude::*, px, rgb, rgba, size, svg, uniform_list, AnyElement, App,
     Application, Bounds, BoxShadow, Context, ElementId, Entity, FocusHandle, Focusable,
-    ListAlignment, ListState, Pixels, Render, ScrollStrategy, SharedString, Timer,
-    UniformListScrollHandle, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
-    WindowOptions,
+    ListAlignment, ListSizingBehavior, ListState, Pixels, Render, ScrollStrategy, SharedString,
+    Timer, UniformListScrollHandle, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowOptions,
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -2181,6 +2181,19 @@ impl ScriptListApp {
             &self.filter_text,
         );
 
+        // Find the first selectable (non-header) item index
+        let first_selectable = grouped_items
+            .iter()
+            .position(|item| matches!(item, GroupedListItem::Item(_)));
+
+        // If already at or before first selectable, can't go further up
+        if let Some(first) = first_selectable {
+            if self.selected_index <= first {
+                // Already at the first selectable item, stay here
+                return;
+            }
+        }
+
         if self.selected_index > 0 {
             let mut new_index = self.selected_index - 1;
 
@@ -2218,6 +2231,20 @@ impl ScriptListApp {
         );
 
         let item_count = grouped_items.len();
+
+        // Find the last selectable (non-header) item index
+        let last_selectable = grouped_items
+            .iter()
+            .rposition(|item| matches!(item, GroupedListItem::Item(_)));
+
+        // If already at or after last selectable, can't go further down
+        if let Some(last) = last_selectable {
+            if self.selected_index >= last {
+                // Already at the last selectable item, stay here
+                return;
+            }
+        }
+
         if self.selected_index < item_count.saturating_sub(1) {
             let mut new_index = self.selected_index + 1;
 
@@ -7151,6 +7178,10 @@ impl ScriptListApp {
                     }
                 })
             })
+            // Enable proper scroll handling for mouse wheel/trackpad
+            // ListSizingBehavior::Infer sets overflow.y = Overflow::Scroll internally
+            // which is required for the list's hitbox to capture scroll wheel events
+            .with_sizing_behavior(ListSizingBehavior::Infer)
             .h_full();
 
             // Wrap list in a relative container with scrollbar overlay
