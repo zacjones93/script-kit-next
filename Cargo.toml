@@ -131,3 +131,5 @@ short_description = "Automation made simple"
 osx_minimum_system_version = "10.15"
 osx_url_schemes = ["scriptkit"]
 resources = ["assets/*"]
+# LSUIElement makes app an "agent app" - no menu bar, no Dock icon (like Raycast)
+osx_info_plist_exts = ["assets/Info.plist.ext"]

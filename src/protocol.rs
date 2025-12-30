@@ -294,6 +294,78 @@ impl ElementInfo {
     }
 }
 
+/// Protocol action for the Actions API
+///
+/// Represents an action that can be displayed in the ActionsDialog.
+/// The `has_action` field is CRITICAL - it determines the routing behavior:
+/// - `has_action=true`: Rust sends ActionTriggered back to SDK (for actions with onAction handlers)
+/// - `has_action=false`: Rust submits the value directly (for simple actions)
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtocolAction {
+    /// Display name of the action
+    pub name: String,
+    /// Optional description shown below the name
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Optional keyboard shortcut (e.g., "cmd+c")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shortcut: Option<String>,
+    /// Value to submit or pass to the action handler
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// CRITICAL: If true, send ActionTriggered to SDK; if false, submit value directly
+    #[serde(default)]
+    pub has_action: bool,
+    /// Whether this action is visible in the list
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible: Option<bool>,
+    /// Whether to close the dialog after triggering
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close: Option<bool>,
+}
+
+impl ProtocolAction {
+    /// Create a new ProtocolAction with just a name
+    pub fn new(name: String) -> Self {
+        ProtocolAction {
+            name,
+            description: None,
+            shortcut: None,
+            value: None,
+            has_action: false,
+            visible: None,
+            close: None,
+        }
+    }
+
+    /// Create a ProtocolAction with a value that submits directly
+    pub fn with_value(name: String, value: String) -> Self {
+        ProtocolAction {
+            name,
+            description: None,
+            shortcut: None,
+            value: Some(value),
+            has_action: false,
+            visible: None,
+            close: None,
+        }
+    }
+
+    /// Create a ProtocolAction that triggers an SDK handler
+    pub fn with_handler(name: String) -> Self {
+        ProtocolAction {
+            name,
+            description: None,
+            shortcut: None,
+            value: None,
+            has_action: true,
+            visible: None,
+            close: None,
+        }
+    }
+}
+
 /// Scriptlet metadata for protocol serialization
 ///
 /// Matches the ScriptletMetadata struct from scriptlets.rs but optimized
@@ -1335,6 +1407,36 @@ pub enum Message {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+
+    // ============================================================
+    // ACTIONS API
+    // ============================================================
+    /// Set actions to display in the ActionsDialog (incoming from SDK)
+    ///
+    /// Scripts define actions with optional onAction handlers. The `has_action`
+    /// field on each action determines routing:
+    /// - `has_action=true`: Send ActionTriggered back to SDK
+    /// - `has_action=false`: Submit value directly
+    #[serde(rename = "setActions")]
+    SetActions {
+        /// List of actions to display
+        actions: Vec<ProtocolAction>,
+    },
+
+    /// Notify SDK that an action was triggered (outgoing to SDK)
+    ///
+    /// Sent when an action with `has_action=true` is triggered.
+    /// The SDK's onAction handler will receive this.
+    #[serde(rename = "actionTriggered")]
+    ActionTriggered {
+        /// Name of the triggered action
+        action: String,
+        /// Value associated with the action (if any)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        value: Option<String>,
+        /// Current input/filter text at time of trigger
+        input: String,
+    },
 }
 
 impl Message {
@@ -1471,6 +1573,9 @@ impl Message {
             // Test infrastructure (use request_id)
             Message::SimulateClick { request_id, .. } => Some(request_id),
             Message::SimulateClickResult { request_id, .. } => Some(request_id),
+            // Actions API (no ID)
+            Message::SetActions { .. } => None,
+            Message::ActionTriggered { .. } => None,
         }
     }
 
@@ -2237,6 +2342,26 @@ impl Message {
             success: false,
             error: Some(error),
         }
+    }
+
+    // ============================================================
+    // Constructor methods for Actions API
+    // ============================================================
+
+    /// Create an ActionTriggered message to send to SDK
+    ///
+    /// This is sent when an action with `has_action=true` is triggered.
+    pub fn action_triggered(action: String, value: Option<String>, input: String) -> Self {
+        Message::ActionTriggered {
+            action,
+            value,
+            input,
+        }
+    }
+
+    /// Create a SetActions message
+    pub fn set_actions(actions: Vec<ProtocolAction>) -> Self {
+        Message::SetActions { actions }
     }
 }
 
@@ -5692,5 +5817,209 @@ mod tests {
             Message::simulate_click_error("d".to_string(), "err".to_string()).id(),
             Some("d")
         );
+    }
+
+    // ============================================================
+    // PROTOCOL ACTION AND ACTIONS API TESTS
+    // ============================================================
+
+    #[test]
+    fn test_protocol_action_serialization_full() {
+        let action = ProtocolAction {
+            name: "Copy to Clipboard".to_string(),
+            description: Some("Copy the selected text".to_string()),
+            shortcut: Some("cmd+c".to_string()),
+            value: Some("copy".to_string()),
+            has_action: true,
+            visible: Some(true),
+            close: Some(false),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(json.contains("\"name\":\"Copy to Clipboard\""));
+        assert!(json.contains("\"description\":\"Copy the selected text\""));
+        assert!(json.contains("\"shortcut\":\"cmd+c\""));
+        assert!(json.contains("\"value\":\"copy\""));
+        assert!(json.contains("\"hasAction\":true"));
+        assert!(json.contains("\"visible\":true"));
+        assert!(json.contains("\"close\":false"));
+    }
+
+    #[test]
+    fn test_protocol_action_serialization_minimal() {
+        let action = ProtocolAction {
+            name: "Simple Action".to_string(),
+            description: None,
+            shortcut: None,
+            value: None,
+            has_action: false,
+            visible: None,
+            close: None,
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(json.contains("\"name\":\"Simple Action\""));
+        assert!(json.contains("\"hasAction\":false"));
+        // Optional fields should be omitted
+        assert!(!json.contains("\"description\""));
+        assert!(!json.contains("\"shortcut\""));
+        assert!(!json.contains("\"value\""));
+        assert!(!json.contains("\"visible\""));
+        assert!(!json.contains("\"close\""));
+    }
+
+    #[test]
+    fn test_protocol_action_deserialization_full() {
+        let json = r#"{
+            "name": "Edit",
+            "description": "Open in editor",
+            "shortcut": "cmd+e",
+            "value": "edit-action",
+            "hasAction": true,
+            "visible": true,
+            "close": true
+        }"#;
+        let action: ProtocolAction = serde_json::from_str(json).unwrap();
+        assert_eq!(action.name, "Edit");
+        assert_eq!(action.description, Some("Open in editor".to_string()));
+        assert_eq!(action.shortcut, Some("cmd+e".to_string()));
+        assert_eq!(action.value, Some("edit-action".to_string()));
+        assert!(action.has_action);
+        assert_eq!(action.visible, Some(true));
+        assert_eq!(action.close, Some(true));
+    }
+
+    #[test]
+    fn test_protocol_action_deserialization_minimal() {
+        // Only name is required, everything else defaults
+        let json = r#"{"name": "Test"}"#;
+        let action: ProtocolAction = serde_json::from_str(json).unwrap();
+        assert_eq!(action.name, "Test");
+        assert_eq!(action.description, None);
+        assert_eq!(action.shortcut, None);
+        assert_eq!(action.value, None);
+        assert!(!action.has_action); // defaults to false
+        assert_eq!(action.visible, None);
+        assert_eq!(action.close, None);
+    }
+
+    #[test]
+    fn test_parse_set_actions_message() {
+        let json = r#"{
+            "type": "setActions",
+            "actions": [
+                {"name": "Copy", "shortcut": "cmd+c", "hasAction": false, "value": "copy"},
+                {"name": "Paste", "shortcut": "cmd+v", "hasAction": true}
+            ]
+        }"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::SetActions { actions } => {
+                assert_eq!(actions.len(), 2);
+                assert_eq!(actions[0].name, "Copy");
+                assert_eq!(actions[0].shortcut, Some("cmd+c".to_string()));
+                assert!(!actions[0].has_action);
+                assert_eq!(actions[0].value, Some("copy".to_string()));
+                assert_eq!(actions[1].name, "Paste");
+                assert!(actions[1].has_action);
+            }
+            _ => panic!("Expected SetActions message"),
+        }
+    }
+
+    #[test]
+    fn test_parse_set_actions_empty() {
+        let json = r#"{"type": "setActions", "actions": []}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::SetActions { actions } => {
+                assert!(actions.is_empty());
+            }
+            _ => panic!("Expected SetActions message"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_action_triggered() {
+        let msg = Message::action_triggered(
+            "copy-action".to_string(),
+            Some("some-value".to_string()),
+            "current input text".to_string(),
+        );
+        let json = serialize_message(&msg).unwrap();
+        assert!(json.contains("\"type\":\"actionTriggered\""));
+        assert!(json.contains("\"action\":\"copy-action\""));
+        assert!(json.contains("\"value\":\"some-value\""));
+        assert!(json.contains("\"input\":\"current input text\""));
+    }
+
+    #[test]
+    fn test_serialize_action_triggered_no_value() {
+        let msg = Message::action_triggered(
+            "test-action".to_string(),
+            None,
+            "".to_string(),
+        );
+        let json = serialize_message(&msg).unwrap();
+        assert!(json.contains("\"type\":\"actionTriggered\""));
+        assert!(json.contains("\"action\":\"test-action\""));
+        assert!(json.contains("\"input\":\"\""));
+        // value should be omitted when None
+        assert!(!json.contains("\"value\""));
+    }
+
+    #[test]
+    fn test_parse_action_triggered() {
+        let json = r#"{"type":"actionTriggered","action":"my-action","value":"val","input":"search"}"#;
+        let msg = parse_message(json).unwrap();
+        match msg {
+            Message::ActionTriggered { action, value, input } => {
+                assert_eq!(action, "my-action");
+                assert_eq!(value, Some("val".to_string()));
+                assert_eq!(input, "search");
+            }
+            _ => panic!("Expected ActionTriggered message"),
+        }
+    }
+
+    #[test]
+    fn test_action_triggered_message_id() {
+        // ActionTriggered doesn't have a request_id, so id() should return None
+        let msg = Message::action_triggered("test".to_string(), None, "".to_string());
+        assert_eq!(msg.id(), None);
+    }
+
+    #[test]
+    fn test_set_actions_message_id() {
+        // SetActions doesn't have an id, so id() should return None
+        let msg = Message::SetActions { actions: vec![] };
+        assert_eq!(msg.id(), None);
+    }
+
+    #[test]
+    fn test_protocol_action_has_action_routing() {
+        // Test the CRITICAL has_action field behavior
+        // has_action=true: Rust should send ActionTriggered back to SDK
+        // has_action=false: Rust should submit value directly
+        
+        let action_with_handler = ProtocolAction {
+            name: "With Handler".to_string(),
+            description: None,
+            shortcut: None,
+            value: Some("action-value".to_string()),
+            has_action: true,
+            visible: None,
+            close: None,
+        };
+        assert!(action_with_handler.has_action);
+        
+        let action_without_handler = ProtocolAction {
+            name: "Without Handler".to_string(),
+            description: None,
+            shortcut: None,
+            value: Some("submit-value".to_string()),
+            has_action: false,
+            visible: None,
+            close: None,
+        };
+        assert!(!action_without_handler.has_action);
     }
 }

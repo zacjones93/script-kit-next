@@ -1309,6 +1309,10 @@ enum PromptMessage {
         text: String,
         duration_ms: Option<u64>,
     },
+    /// Set SDK actions for the ActionsDialog
+    SetActions {
+        actions: Vec<protocol::ProtocolAction>,
+    },
 }
 
 /// External commands that can be sent to the app via stdin
@@ -7781,7 +7785,7 @@ impl ScriptListApp {
                     // Size slightly larger than text for visual presence
                     .child(
                         svg()
-                            .external_path(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/logo.svg"))
+                            .external_path(utils::get_logo_path())
                             .size(px(16.)) // Slightly larger than text_sm for visual presence
                             .text_color(rgb(accent_color)),
                     )

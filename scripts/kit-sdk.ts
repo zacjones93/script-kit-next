@@ -1213,6 +1213,56 @@ interface ClipboardHistoryActionResultMessage {
   error?: string;
 }
 
+// =============================================================================
+// Actions Types
+// =============================================================================
+
+/**
+ * Action definition for the Actions API.
+ * Scripts can define actions that appear in the actions panel.
+ */
+export interface Action {
+  /** Unique name/identifier for the action */
+  name: string;
+  /** Description shown in the UI */
+  description?: string;
+  /** Keyboard shortcut (e.g., "cmd+u", "ctrl+shift+p") */
+  shortcut?: string;
+  /** Value to submit if no onAction handler is provided */
+  value?: string;
+  /** Handler called when action is triggered. Receives current input and state. */
+  onAction?: (input: string, state: any) => void | Promise<void>;
+  /** Whether to show this action in the action bar (default: true) */
+  visible?: boolean;
+  /** Whether to close the prompt after action executes (default: true) */
+  close?: boolean;
+}
+
+/**
+ * Serializable action sent to Rust (without function handlers)
+ */
+interface SerializableAction {
+  name: string;
+  description?: string;
+  shortcut?: string;
+  value?: string;
+  hasAction: boolean;
+  visible?: boolean;
+  close?: boolean;
+}
+
+interface SetActionsMessage {
+  type: 'setActions';
+  actions: SerializableAction[];
+}
+
+interface ActionTriggeredMessage {
+  type: 'actionTriggered';
+  action: string;
+  input: string;
+  state: any;
+}
+
 // Union type for all response messages
 type ResponseMessage = 
   | SubmitMessage 
@@ -1222,7 +1272,8 @@ type ResponseMessage =
   | WindowListResultMessage
   | WindowActionResultMessage
   | ClipboardHistoryActionResultMessage
-  | ScreenshotResultMessage;
+  | ScreenshotResultMessage
+  | ActionTriggeredMessage;
 
 interface ChatMessageType {
   type: 'chat';
@@ -1407,6 +1458,38 @@ const nextId = (): string => String(++messageId);
 // Generic pending map that can handle any response type
 const pending = new Map<string, (msg: ResponseMessage) => void>();
 
+// =============================================================================
+// Actions API - Global state for action handlers
+// =============================================================================
+
+/** Global map to store action handlers for lookup when ActionTriggered is received */
+(globalThis as any).__kitActionsMap = new Map<string, Action>();
+
+/**
+ * Handle an actionTriggered message from the Rust app.
+ * Looks up the action in the map and either calls onAction or submits the value.
+ * @internal - Exposed for testing
+ */
+(globalThis as any).__handleActionTriggered = async function __handleActionTriggered(
+  msg: ActionTriggeredMessage
+): Promise<void> {
+  const actionsMap = (globalThis as any).__kitActionsMap as Map<string, Action>;
+  const action = actionsMap.get(msg.action);
+  
+  if (!action) {
+    console.error(`[SDK] Action not found: ${msg.action}`);
+    return;
+  }
+  
+  if (action.onAction) {
+    // Call the handler with input and state
+    await Promise.resolve(action.onAction(msg.input, msg.state));
+  } else if (action.value !== undefined) {
+    // No handler, submit the value
+    send({ type: 'forceSubmit', value: action.value });
+  }
+};
+
 function send(msg: object): void {
   process.stdout.write(`${JSON.stringify(msg)}\n`);
 }
@@ -1456,8 +1539,13 @@ process.stdin.on('data', (chunk: string) => {
           }
         }
         
+        // Handle actionTriggered messages
+        if (msg.type === 'actionTriggered') {
+          (globalThis as any).__handleActionTriggered(msg as ActionTriggeredMessage);
+        }
+        
         // Also emit a custom event for widget handlers
-        if (msg.type === 'widgetEvent') {
+        if ((msg as any).type === 'widgetEvent') {
           process.emit('widgetEvent' as any, msg);
         }
       } catch (e) {
@@ -1655,6 +1743,14 @@ declare global {
    * @param scripts - Optional array of script paths
    */
   function menu(icon: string, scripts?: string[]): Promise<void>;
+  
+  /**
+   * Set the available actions for the current prompt.
+   * Actions appear in the actions panel and can have keyboard shortcuts.
+   * 
+   * @param actions - Array of action definitions
+   */
+  function setActions(actions: Action[]): Promise<void>;
   
   /**
    * Copy text to clipboard (alias for clipboard.writeText)
@@ -2762,6 +2858,66 @@ globalThis.setStatus = async function setStatus(options: StatusOptions): Promise
 
 globalThis.menu = async function menu(icon: string, scripts?: string[]): Promise<void> {
   const message: MenuMessage = { type: 'menu', icon, scripts };
+  send(message);
+};
+
+// =============================================================================
+// Actions API
+// =============================================================================
+
+/**
+ * Set the available actions for the current prompt.
+ * Actions appear in the actions panel and can have keyboard shortcuts.
+ * 
+ * @param actions - Array of action definitions
+ * 
+ * @example
+ * ```typescript
+ * await setActions([
+ *   {
+ *     name: 'copy',
+ *     description: 'Copy to clipboard',
+ *     shortcut: 'cmd+c',
+ *     onAction: async (input, state) => {
+ *       await copy(input);
+ *       hud('Copied!');
+ *     },
+ *   },
+ *   {
+ *     name: 'paste',
+ *     shortcut: 'cmd+v',
+ *     value: 'paste', // Will be submitted if no onAction
+ *   },
+ * ]);
+ * ```
+ */
+globalThis.setActions = async function setActions(actions: Action[]): Promise<void> {
+  const actionsMap = (globalThis as any).__kitActionsMap as Map<string, Action>;
+  
+  // Clear previous actions
+  actionsMap.clear();
+  
+  // Store actions with handlers
+  for (const action of actions) {
+    actionsMap.set(action.name, action);
+  }
+  
+  // Send to Rust (strip onAction function, add hasAction boolean)
+  const serializable: SerializableAction[] = actions.map(a => ({
+    name: a.name,
+    description: a.description,
+    shortcut: a.shortcut,
+    value: a.value,
+    hasAction: typeof a.onAction === 'function',
+    visible: a.visible,
+    close: a.close,
+  }));
+  
+  const message: SetActionsMessage = {
+    type: 'setActions',
+    actions: serializable,
+  };
+  
   send(message);
 };
 
@@ -4464,6 +4620,9 @@ declare global {
   function editFile(filePath: string): Promise<void>;
   function run(scriptName: string, ...args: string[]): Promise<unknown>;
   function inspect(data: unknown): Promise<void>;
+  
+  // Actions API
+  function setActions(actions: Action[]): Promise<void>;
 }
 
 export {};

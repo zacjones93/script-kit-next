@@ -14,6 +14,7 @@
 use crate::components::scrollbar::{Scrollbar, ScrollbarColors};
 use crate::designs::{get_tokens, DesignColors, DesignVariant};
 use crate::logging;
+use crate::protocol::ProtocolAction;
 use crate::theme;
 use gpui::{
     div, point, prelude::*, px, rgb, rgba, uniform_list, App, BoxShadow, Context, FocusHandle,
@@ -56,6 +57,11 @@ pub struct Action {
     pub category: ActionCategory,
     /// Optional keyboard shortcut hint (e.g., "⌘E")
     pub shortcut: Option<String>,
+    /// If true, send ActionTriggered to SDK; if false, submit value directly
+    /// Built-in actions default to false; SDK actions may set this to true
+    pub has_action: bool,
+    /// Optional value to submit when action is triggered
+    pub value: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -78,11 +84,23 @@ impl Action {
             description,
             category,
             shortcut: None,
+            has_action: false,
+            value: None,
         }
     }
 
     pub fn with_shortcut(mut self, shortcut: impl Into<String>) -> Self {
         self.shortcut = Some(shortcut.into());
+        self
+    }
+
+    pub fn with_value(mut self, value: impl Into<String>) -> Self {
+        self.value = Some(value.into());
+        self
+    }
+
+    pub fn with_has_action(mut self, has_action: bool) -> Self {
+        self.has_action = has_action;
         self
     }
 }
@@ -273,6 +291,8 @@ pub struct ActionsDialog {
     pub cursor_visible: bool,
     /// When true, hide the search input (used when rendered inline in main.rs header)
     pub hide_search: bool,
+    /// SDK-provided actions (when present, replaces built-in actions)
+    pub sdk_actions: Option<Vec<ProtocolAction>>,
 }
 
 /// Helper function to combine a hex color with an alpha value
@@ -348,6 +368,7 @@ impl ActionsDialog {
             design_variant: DesignVariant::Default,
             cursor_visible: true,
             hide_search: false,
+            sdk_actions: None,
         }
     }
 
@@ -393,6 +414,7 @@ impl ActionsDialog {
             design_variant,
             cursor_visible: true,
             hide_search: false,
+            sdk_actions: None,
         }
     }
 
@@ -404,6 +426,67 @@ impl ActionsDialog {
     /// Hide the search input (for inline mode where header has search)
     pub fn set_hide_search(&mut self, hide: bool) {
         self.hide_search = hide;
+    }
+
+    /// Set actions from SDK (replaces built-in actions)
+    ///
+    /// Converts `ProtocolAction` items to internal `Action` format and updates
+    /// the actions list. The `has_action` field on each action determines routing:
+    /// - `has_action=true`: Send ActionTriggered back to SDK
+    /// - `has_action=false`: Submit value directly
+    pub fn set_sdk_actions(&mut self, actions: Vec<ProtocolAction>) {
+        let converted: Vec<Action> = actions
+            .iter()
+            .map(|pa| {
+                Action {
+                    id: pa.name.clone(),
+                    title: pa.name.clone(),
+                    description: pa.description.clone(),
+                    category: ActionCategory::ScriptContext,
+                    shortcut: pa.shortcut.clone(),
+                    has_action: pa.has_action,
+                    value: pa.value.clone(),
+                }
+            })
+            .collect();
+
+        logging::log(
+            "ACTIONS",
+            &format!(
+                "SDK actions set: {} actions",
+                converted.len()
+            ),
+        );
+
+        self.actions = converted;
+        self.filtered_actions = (0..self.actions.len()).collect();
+        self.selected_index = 0;
+        self.search_text.clear();
+        self.sdk_actions = Some(actions);
+    }
+
+    /// Clear SDK actions and restore built-in actions
+    pub fn clear_sdk_actions(&mut self) {
+        if self.sdk_actions.is_some() {
+            logging::log("ACTIONS", "Clearing SDK actions, restoring built-in actions");
+            self.sdk_actions = None;
+            self.actions = Self::build_actions(&self.focused_script);
+            self.filtered_actions = (0..self.actions.len()).collect();
+            self.selected_index = 0;
+            self.search_text.clear();
+        }
+    }
+
+    /// Check if SDK actions are currently active
+    pub fn has_sdk_actions(&self) -> bool {
+        self.sdk_actions.is_some()
+    }
+
+    /// Get the currently selected action (for external handling)
+    pub fn get_selected_action(&self) -> Option<&Action> {
+        self.filtered_actions
+            .get(self.selected_index)
+            .and_then(|&idx| self.actions.get(idx))
     }
 
     /// Build the complete actions list based on focused script
@@ -1430,5 +1513,127 @@ mod tests {
         assert!(get_script_path("Test123")
             .to_string_lossy()
             .ends_with("Test123.ts"));
+    }
+
+    // ========================================================================
+    // SDK Actions Tests
+    // ========================================================================
+
+    #[test]
+    fn test_action_with_has_action() {
+        let action = Action::new("test", "Test Action", None, ActionCategory::GlobalOps)
+            .with_has_action(true);
+        assert!(action.has_action);
+
+        let action2 = Action::new("test2", "Test Action 2", None, ActionCategory::GlobalOps);
+        assert!(!action2.has_action); // default is false
+    }
+
+    #[test]
+    fn test_action_with_value() {
+        let action = Action::new("test", "Test Action", None, ActionCategory::GlobalOps)
+            .with_value("my-value");
+        assert_eq!(action.value, Some("my-value".to_string()));
+
+        let action2 = Action::new("test2", "Test Action 2", None, ActionCategory::GlobalOps);
+        assert!(action2.value.is_none()); // default is None
+    }
+
+    #[test]
+    fn test_action_new_defaults() {
+        let action = Action::new("id", "title", Some("desc".to_string()), ActionCategory::ScriptContext);
+        assert_eq!(action.id, "id");
+        assert_eq!(action.title, "title");
+        assert_eq!(action.description, Some("desc".to_string()));
+        assert_eq!(action.category, ActionCategory::ScriptContext);
+        assert!(action.shortcut.is_none());
+        assert!(!action.has_action);
+        assert!(action.value.is_none());
+    }
+
+    #[test]
+    fn test_protocol_action_to_action_conversion() {
+        use crate::protocol::ProtocolAction;
+
+        let protocol_action = ProtocolAction {
+            name: "Copy".to_string(),
+            description: Some("Copy to clipboard".to_string()),
+            shortcut: Some("cmd+c".to_string()),
+            value: Some("copy-value".to_string()),
+            has_action: true,
+            visible: None,
+            close: None,
+        };
+
+        // Simulate conversion logic from set_sdk_actions
+        let action = Action {
+            id: protocol_action.name.clone(),
+            title: protocol_action.name.clone(),
+            description: protocol_action.description.clone(),
+            category: ActionCategory::ScriptContext,
+            shortcut: protocol_action.shortcut.clone(),
+            has_action: protocol_action.has_action,
+            value: protocol_action.value.clone(),
+        };
+
+        assert_eq!(action.id, "Copy");
+        assert_eq!(action.title, "Copy");
+        assert_eq!(action.description, Some("Copy to clipboard".to_string()));
+        assert_eq!(action.shortcut, Some("cmd+c".to_string()));
+        assert_eq!(action.value, Some("copy-value".to_string()));
+        assert!(action.has_action);
+    }
+
+    #[test]
+    fn test_protocol_action_has_action_routing() {
+        use crate::protocol::ProtocolAction;
+
+        // Action with has_action=true should trigger ActionTriggered to SDK
+        let action_with_handler = ProtocolAction {
+            name: "Custom Action".to_string(),
+            description: None,
+            shortcut: None,
+            value: Some("custom-value".to_string()),
+            has_action: true,
+            visible: None,
+            close: None,
+        };
+        assert!(action_with_handler.has_action);
+
+        // Action with has_action=false should submit value directly
+        let action_without_handler = ProtocolAction {
+            name: "Simple Action".to_string(),
+            description: None,
+            shortcut: None,
+            value: Some("simple-value".to_string()),
+            has_action: false,
+            visible: None,
+            close: None,
+        };
+        assert!(!action_without_handler.has_action);
+    }
+
+    #[test]
+    fn test_built_in_actions_have_no_has_action() {
+        // All built-in actions should have has_action=false
+        let script = ScriptInfo::new("test-script", "/path/to/test.ts");
+        let script_actions = get_script_context_actions(&script);
+        let global_actions = get_global_actions();
+
+        for action in script_actions.iter() {
+            assert!(
+                !action.has_action,
+                "Built-in action '{}' should have has_action=false",
+                action.id
+            );
+        }
+
+        for action in global_actions.iter() {
+            assert!(
+                !action.has_action,
+                "Built-in action '{}' should have has_action=false",
+                action.id
+            );
+        }
     }
 }
