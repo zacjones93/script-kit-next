@@ -551,6 +551,147 @@ export interface Config {
 }
 
 // =============================================================================
+// Script Metadata Types (AI-First Protocol)
+// =============================================================================
+
+/**
+ * Supported field types for schema definitions.
+ * These map to JSON Schema types for MCP tool generation.
+ */
+export type SchemaFieldType = 'string' | 'number' | 'boolean' | 'array' | 'object' | 'any';
+
+/**
+ * Field definition for schema input/output.
+ * Defines the type, validation rules, and documentation for a single field.
+ * 
+ * @example Simple required string field
+ * ```typescript
+ * { type: 'string', required: true, description: 'The title of the note' }
+ * ```
+ * 
+ * @example Number field with constraints
+ * ```typescript
+ * { type: 'number', min: 0, max: 100, default: 50 }
+ * ```
+ * 
+ * @example String enum field
+ * ```typescript
+ * { type: 'string', enum: ['low', 'medium', 'high'] }
+ * ```
+ */
+export interface SchemaFieldDef {
+  /** The type of this field */
+  type: SchemaFieldType;
+  /** Whether this field is required (defaults to false) */
+  required?: boolean;
+  /** Human-readable description for AI agents and documentation */
+  description?: string;
+  /** Default value if not provided */
+  default?: unknown;
+  /** For array types, the type of items */
+  items?: SchemaFieldType;
+  /** For object types, nested field definitions */
+  properties?: Record<string, SchemaFieldDef>;
+  /** Enum values (for string fields with limited options) */
+  enum?: string[];
+  /** Minimum value (for numbers) or length (for strings/arrays) */
+  min?: number;
+  /** Maximum value (for numbers) or length (for strings/arrays) */
+  max?: number;
+  /** Regex pattern for validation (strings only) */
+  pattern?: string;
+  /** Example value for documentation */
+  example?: unknown;
+}
+
+/**
+ * Schema definition for script input/output.
+ * Defines the typed interface for the input() and output() functions,
+ * enabling MCP tool generation and AI agent integration.
+ * 
+ * @example Complete schema with input and output
+ * ```typescript
+ * schema = {
+ *   input: {
+ *     title: { type: 'string', required: true, description: 'Note title' },
+ *     tags: { type: 'array', items: 'string', description: 'Tags for categorization' }
+ *   },
+ *   output: {
+ *     path: { type: 'string', description: 'Path to created file' },
+ *     wordCount: { type: 'number' }
+ *   }
+ * }
+ * ```
+ */
+export interface ScriptSchema {
+  /** Input fields - what the script expects to receive */
+  input?: Record<string, SchemaFieldDef>;
+  /** Output fields - what the script will produce */
+  output?: Record<string, SchemaFieldDef>;
+}
+
+/**
+ * Typed metadata for scripts (replaces comment-based metadata).
+ * Provides rich metadata for script discovery, documentation, and AI agents.
+ * 
+ * @example Basic metadata
+ * ```typescript
+ * metadata = {
+ *   name: 'Create Note',
+ *   description: 'Creates a new note in the notes directory',
+ *   enter: 'Create'
+ * }
+ * ```
+ * 
+ * @example Full metadata with all fields
+ * ```typescript
+ * metadata = {
+ *   name: 'Git Commit',
+ *   description: 'Stage and commit changes with a message',
+ *   author: 'John Lindquist',
+ *   enter: 'Commit',
+ *   alias: 'gc',
+ *   icon: 'Terminal',
+ *   shortcut: 'cmd shift g',
+ *   tags: ['git', 'development'],
+ *   hidden: false
+ * }
+ * ```
+ */
+export interface ScriptMetadata {
+  /** Display name for the script */
+  name?: string;
+  /** Description shown in the UI and used by AI agents */
+  description?: string;
+  /** Author of the script */
+  author?: string;
+  /** Text shown on the Enter/Submit button */
+  enter?: string;
+  /** Short alias for quick triggering (e.g., 'gc' for 'git-commit') */
+  alias?: string;
+  /** Icon name (e.g., 'File', 'Terminal', 'Star') */
+  icon?: string;
+  /** Keyboard shortcut (e.g., 'opt i', 'cmd shift k') */
+  shortcut?: string;
+  /** Tags for categorization and search */
+  tags?: string[];
+  /** Whether to hide this script from the main list */
+  hidden?: boolean;
+  /** Custom placeholder text for the input */
+  placeholder?: string;
+  /** Cron expression for scheduled execution */
+  cron?: string;
+  /** Watch patterns for file-triggered execution */
+  watch?: string[];
+  /** Background script (runs without UI) */
+  background?: boolean;
+  /** System-level script (higher privileges) */
+  system?: boolean;
+  /** Additional custom metadata fields */
+  [key: string]: unknown;
+}
+
+// =============================================================================
 // Arg Types (for all calling conventions)
 // =============================================================================
 
@@ -3818,3 +3959,229 @@ globalThis.fileSearch = async function fileSearch(query: string, options?: FindO
     send(message);
   });
 };
+
+// =============================================================================
+// AI-First Protocol: input() and output() Functions
+// =============================================================================
+
+/**
+ * Internal state for schema-based input/output
+ */
+let scriptInputData: Record<string, unknown> | null = null;
+let scriptOutputData: Record<string, unknown> = {};
+
+/**
+ * Receive typed input for the script.
+ * 
+ * When a script has a `schema` with `input` fields defined, this function
+ * retrieves the input values passed by the caller (AI agent, MCP client, etc.).
+ * 
+ * If no schema input is defined or no input was provided, returns an empty object.
+ * 
+ * @example
+ * ```typescript
+ * schema = {
+ *   input: {
+ *     title: { type: 'string', required: true, description: 'Note title' },
+ *     tags: { type: 'array', items: 'string' }
+ *   }
+ * }
+ * 
+ * const { title, tags } = await input();
+ * console.log(`Creating note: ${title} with tags: ${tags?.join(', ')}`);
+ * ```
+ * 
+ * @returns Promise resolving to the input object with typed fields
+ */
+globalThis.input = async function input<T extends Record<string, unknown> = Record<string, unknown>>(): Promise<T> {
+  // If input data was set via protocol message, return it
+  if (scriptInputData !== null) {
+    return scriptInputData as T;
+  }
+  
+  // Otherwise return empty object (script may be run interactively)
+  return {} as T;
+};
+
+/**
+ * Send typed output from the script.
+ * 
+ * When a script has a `schema` with `output` fields defined, this function
+ * sends structured output back to the caller. Multiple calls accumulate
+ * the output object (later calls merge with earlier ones).
+ * 
+ * Output is streamed via SSE when running through MCP, allowing real-time
+ * progress updates.
+ * 
+ * @param data - The output data to send (will be merged with previous output)
+ * 
+ * @example
+ * ```typescript
+ * schema = {
+ *   output: {
+ *     path: { type: 'string' },
+ *     wordCount: { type: 'number' }
+ *   }
+ * }
+ * 
+ * // ... create note ...
+ * output({ path: notePath });
+ * 
+ * // ... count words ...
+ * output({ wordCount: content.split(' ').length });
+ * 
+ * // Final output will be { path: '...', wordCount: 42 }
+ * ```
+ */
+globalThis.output = function output(data: Record<string, unknown>): void {
+  // Merge with existing output
+  scriptOutputData = { ...scriptOutputData, ...data };
+  
+  // Send output message to app (will be streamed via SSE if MCP)
+  send({
+    type: 'scriptOutput',
+    data: scriptOutputData,
+  });
+};
+
+/**
+ * Set the input data for the script (called by protocol handler).
+ * @internal
+ */
+globalThis._setScriptInput = function _setScriptInput(data: Record<string, unknown>): void {
+  scriptInputData = data;
+};
+
+/**
+ * Get the accumulated output data (called by protocol handler).
+ * @internal
+ */
+globalThis._getScriptOutput = function _getScriptOutput(): Record<string, unknown> {
+  return scriptOutputData;
+};
+
+// =============================================================================
+// Global Type Declarations
+// =============================================================================
+
+declare global {
+  // SDK Version
+  const SDK_VERSION: string;
+
+  // Metadata and Schema globals (set at top of script, parsed by app)
+  var metadata: ScriptMetadata;
+  var schema: ScriptSchema;
+
+  // AI-First Protocol functions
+  function input<T extends Record<string, unknown> = Record<string, unknown>>(): Promise<T>;
+  function output(data: Record<string, unknown>): void;
+  /** @internal */
+  function _setScriptInput(data: Record<string, unknown>): void;
+  /** @internal */
+  function _getScriptOutput(): Record<string, unknown>;
+
+  // Core prompt functions
+  function arg(placeholderOrConfig?: string | ArgConfig, choices?: ChoicesInput): Promise<string>;
+  function div(html: string, tailwind?: string): Promise<void>;
+  function md(markdown: string): string;
+  function editor(content?: string, language?: string): Promise<string>;
+  function mini(placeholderOrConfig?: string | ArgConfig, choices?: ChoicesInput): Promise<string>;
+  function micro(placeholderOrConfig?: string | ArgConfig, choices?: ChoicesInput): Promise<string>;
+  function select(placeholderOrConfig?: string | ArgConfig, choices?: ChoicesInput): Promise<string>;
+  function fields(fieldDefs: FieldDef[]): Promise<string[]>;
+  function form(htmlOrConfig: string | FormConfig): Promise<Record<string, string>>;
+  function path(hint?: string | PathOptions): Promise<string>;
+  function hotkey(placeholder?: string): Promise<HotkeyInfo>;
+  function drop(): Promise<FileInfo[]>;
+  function template(content: string, options?: TemplateOptions): Promise<string>;
+  function env(name: string, defaultValue?: string): Promise<string>;
+
+  // Chat (TIER 4A)
+  function chat(options?: ChatOptions): Promise<string>;
+
+  // Widget/Term/Media (TIER 4B)
+  function widget(html: string, options?: WidgetOptions): Promise<WidgetController>;
+  function term(command?: string): Promise<string>;
+  function webcam(): Promise<Buffer>;
+  function mic(): Promise<Buffer>;
+  function eyeDropper(): Promise<ColorInfo>;
+  function find(name: string, options?: FindOptions): Promise<string[]>;
+
+  // System
+  function beep(): Promise<void>;
+  function say(text: string, voice?: string): Promise<void>;
+  function notify(options: string | NotifyOptions): Promise<void>;
+  function hud(message: string, options?: { duration?: number }): void;
+  function setStatus(options: StatusOptions): Promise<void>;
+  function menu(icon: string, scripts?: string[]): Promise<void>;
+  function setSelectedText(text: string): Promise<void>;
+  function getSelectedText(): Promise<string>;
+  function hasAccessibilityPermission(): Promise<boolean>;
+  function requestAccessibilityPermission(): Promise<boolean>;
+
+  // Clipboard
+  const clipboard: ClipboardAPI;
+  function copy(text: string): Promise<void>;
+  function paste(): Promise<string>;
+
+  // Clipboard History
+  function clipboardHistory(): Promise<ClipboardHistoryEntry[]>;
+  function clipboardHistoryPin(entryId: string): Promise<void>;
+  function clipboardHistoryUnpin(entryId: string): Promise<void>;
+  function clipboardHistoryRemove(entryId: string): Promise<void>;
+  function clipboardHistoryClear(): Promise<void>;
+
+  // Window Management
+  function getWindows(): Promise<SystemWindowInfo[]>;
+  function focusWindow(windowId: number): Promise<void>;
+  function closeWindow(windowId: number): Promise<void>;
+  function minimizeWindow(windowId: number): Promise<void>;
+  function maximizeWindow(windowId: number): Promise<void>;
+  function moveWindow(windowId: number, x: number, y: number): Promise<void>;
+  function resizeWindow(windowId: number, width: number, height: number): Promise<void>;
+  function tileWindow(windowId: number, position: TilePosition): Promise<void>;
+
+  // File Search
+  function fileSearch(query: string, options?: FindOptions): Promise<FileSearchResult[]>;
+
+  // Input
+  const keyboard: KeyboardAPI;
+  const mouse: MouseAPI;
+
+  // UI Control
+  function show(): Promise<void>;
+  function hide(): Promise<void>;
+  function blur(): Promise<void>;
+  function getWindowBounds(): Promise<WindowBounds>;
+  function setWindowBounds(bounds: Partial<WindowBounds>): Promise<void>;
+  function centerWindow(): Promise<void>;
+  function submit(value: unknown): void;
+  function exit(code?: number): void;
+  function wait(ms: number): Promise<void>;
+  function setPanel(html: string): void;
+  function setPreview(html: string): void;
+  function setPrompt(html: string): void;
+  function captureScreenshot(options?: ScreenshotOptions): Promise<ScreenshotData>;
+
+  // Utilities
+  function uuid(): string;
+  function compile(template: string): (data: Record<string, string>) => string;
+  function home(...segments: string[]): string;
+  function kenvPath(...segments: string[]): string;
+  function kitPath(...segments: string[]): string;
+  function tmpPath(...segments: string[]): string;
+  function isFile(filePath: string): Promise<boolean>;
+  function isDir(dirPath: string): Promise<boolean>;
+  function isBin(filePath: string): Promise<boolean>;
+
+  // Memory
+  const memoryMap: MemoryMapAPI;
+
+  // File operations
+  function browse(url: string): Promise<void>;
+  function editFile(filePath: string): Promise<void>;
+  function run(scriptName: string, ...args: string[]): Promise<unknown>;
+  function inspect(data: unknown): Promise<void>;
+}
+
+export {};

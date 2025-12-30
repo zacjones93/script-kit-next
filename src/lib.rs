@@ -48,6 +48,12 @@ pub mod process_manager;
 // Scriptlet parsing and variable substitution
 pub mod scriptlets;
 
+// Typed metadata parser for new `metadata = {}` global syntax
+pub mod metadata_parser;
+
+// Schema parser for `schema = { input: {}, output: {} }` definitions
+pub mod schema_parser;
+
 // VSCode snippet syntax parser for template() SDK function
 pub mod snippet;
 
