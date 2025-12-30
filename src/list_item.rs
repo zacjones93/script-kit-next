@@ -28,13 +28,24 @@ pub enum IconKind {
 pub const LIST_ITEM_HEIGHT: f32 = 48.0;
 
 /// Fixed height for section headers (RECENT, MAIN, etc.)
-/// Total height includes: pt(16px) + text (~8px) + pb(4px) = ~28px
-/// Using 24px as the uniform_list height for consistent calculations
+/// Total height includes: pt(8px) + text (~8px via text_xs) + pb(4px) = ~20px content
+/// Using 24px for comfortable spacing while maintaining visual compactness.
+///
+/// ## Performance Note (uniform_list vs list)
+/// The main menu uses GPUI's `list()` component (not `uniform_list`) to support variable heights:
+/// - Section headers: 24px (SECTION_HEADER_HEIGHT)
+/// - Regular items: 48px (LIST_ITEM_HEIGHT)
+///
+/// Performance comparison:
+/// - `uniform_list`: O(1) scroll position calculation (all items same height)
+/// - `list()`: O(log n) scroll position via SumTree (supports variable heights)
+///
+/// For typical menu sizes (< 1000 items), the performance difference is negligible.
 pub const SECTION_HEADER_HEIGHT: f32 = 24.0;
 
 /// Enum for grouped list items - supports both regular items and section headers
 ///
-/// Used with uniform_list when rendering grouped results (e.g., frecency with RECENT/MAIN sections).
+/// Used with GPUI's `list()` component when rendering grouped results (e.g., frecency with RECENT/MAIN sections).
 /// The usize in Item variant is the index into the flat results array.
 #[derive(Clone, Debug)]
 pub enum GroupedListItem {
@@ -742,20 +753,22 @@ pub fn icon_from_png(png_data: &[u8]) -> Option<IconKind> {
 /// render_section_header("Recent", colors)
 /// ```
 pub fn render_section_header(label: &str, colors: ListItemColors) -> impl IntoElement {
-    // Full-height container that creates visual compression
-    // The parent sets h(px(LIST_ITEM_HEIGHT=48px)), so we use h_full() to fill it
-    // Large top padding (24px) compresses visible content to bottom ~24px
-    // This creates the visual illusion of a 50% height header while maintaining
-    // uniform_list's fixed-height requirement
+    // Compact section header with explicit height (SECTION_HEADER_HEIGHT = 24px)
+    // Used with GPUI's list() component which supports variable-height items.
+    //
+    // Layout: 24px total height
+    // - pt(8px) top padding for visual separation from above item
+    // - ~8px text height (text_xs)
+    // - pb(4px) bottom padding for visual separation from below item
     div()
         .w_full()
-        .h_full() // Fill parent's height (LIST_ITEM_HEIGHT = 48px)
+        .h(px(SECTION_HEADER_HEIGHT)) // Explicit 24px height for variable-height list
         .px(px(16.))
-        .pt(px(24.)) // Large top padding: 48px - 24px = 24px visible content area
-        .pb(px(4.)) // Small bottom padding so text doesn't touch next item
+        .pt(px(8.)) // Top padding for visual separation
+        .pb(px(4.)) // Bottom padding
         .flex()
         .flex_col()
-        .justify_end() // Push content to bottom of remaining space
+        .justify_center() // Center content vertically
         .child(
             div()
                 .text_xs() // 10-11px font

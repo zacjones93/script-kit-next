@@ -5,10 +5,11 @@ use global_hotkey::{
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
 use gpui::{
-    div, hsla, point, prelude::*, px, rgb, rgba, size, svg, uniform_list, AnyElement, App,
-    Application, Bounds, BoxShadow, Context, ElementId, Entity, FocusHandle, Focusable, Pixels,
-    Render, ScrollStrategy, SharedString, Timer, UniformListScrollHandle, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions,
+    div, hsla, list, point, prelude::*, px, rgb, rgba, size, svg, uniform_list, AnyElement, App,
+    Application, Bounds, BoxShadow, Context, ElementId, Entity, FocusHandle, Focusable,
+    ListAlignment, ListState, Pixels, Render, ScrollStrategy, SharedString, Timer,
+    UniformListScrollHandle, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
+    WindowOptions,
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -108,6 +109,7 @@ use designs::{get_tokens, render_design_item, DesignVariant};
 use frecency::FrecencyStore;
 use list_item::{
     render_section_header, GroupedListItem, ListItem, ListItemColors, LIST_ITEM_HEIGHT,
+    SECTION_HEADER_HEIGHT,
 };
 use scripts::get_grouped_results;
 use utils::strip_html_tags;
@@ -1538,7 +1540,9 @@ struct ScriptListApp {
     prompt_receiver: Option<async_channel::Receiver<PromptMessage>>,
     // Channel for sending responses back to script
     response_sender: Option<mpsc::Sender<Message>>,
-    // Scroll handle for uniform_list (automatic virtualized scrolling)
+    // List state for variable-height list (supports section headers at 24px + items at 48px)
+    main_list_state: ListState,
+    // Scroll handle for uniform_list (still used for backward compat in some views)
     list_scroll_handle: UniformListScrollHandle,
     // P0: Scroll handle for virtualized arg prompt choices
     arg_list_scroll_handle: UniformListScrollHandle,
@@ -1765,6 +1769,9 @@ impl ScriptListApp {
             arg_selected_index: 0,
             prompt_receiver: None,
             response_sender: None,
+            // Variable-height list state for main menu (section headers at 24px, items at 48px)
+            // Start with 0 items, will be reset when grouped_items changes
+            main_list_state: ListState::new(0, ListAlignment::Top, px(100.)),
             list_scroll_handle: UniformListScrollHandle::new(),
             arg_list_scroll_handle: UniformListScrollHandle::new(),
             clipboard_list_scroll_handle: UniformListScrollHandle::new(),
@@ -6979,10 +6986,9 @@ impl ScriptListApp {
                 })
                 .into_any_element()
         } else {
-            // Use uniform_list for automatic virtualized scrolling
-            // Note: Hover-to-select is implemented via on_mouse_down on each item wrapper
-            // to update selected_index when the user clicks (selecting on hover alone would
-            // be too aggressive - we update on hover enter instead for visual highlight)
+            // Use GPUI's list() component for variable-height items
+            // Section headers render at 24px, regular items at 48px
+            // This gives true visual compression for headers without the uniform_list hack
 
             // Clone grouped_items and flat_results for the closure
             let grouped_items_clone = grouped_items.clone();
@@ -6990,12 +6996,11 @@ impl ScriptListApp {
 
             // Calculate scrollbar parameters
             // Estimate visible items based on typical container height
-            // The actual container height varies, but we use a reasonable estimate
+            // Note: With variable heights, this is approximate
             let estimated_container_height = 400.0_f32; // Typical visible height
             let visible_items = (estimated_container_height / LIST_ITEM_HEIGHT) as usize;
 
             // Use selected_index as approximate scroll offset
-            // When scrolling, the selected item should be visible, so this gives a reasonable estimate
             let scroll_offset = if self.selected_index > visible_items.saturating_sub(1) {
                 self.selected_index.saturating_sub(visible_items / 2)
             } else {
@@ -7015,111 +7020,105 @@ impl ScriptListApp {
                     .container_height(estimated_container_height)
                     .visible(self.is_scrolling);
 
-            let list = uniform_list(
-                "script-list",
-                item_count,
-                cx.processor(move |this, visible_range: std::ops::Range<usize>, _window, cx| {
-                    let mut items = Vec::new();
-                    // Get the current selected_index (keyboard focus) FIRST
+            // Update list state if item count changed
+            if self.main_list_state.item_count() != item_count {
+                self.main_list_state.reset(item_count);
+            }
+
+            // Scroll to reveal selected item
+            self.main_list_state.scroll_to_reveal_item(self.selected_index);
+
+            // Capture entity handle for use in the render closure
+            let entity = cx.entity();
+
+            // Clone values needed in the closure (can't access self in FnMut)
+            let theme_colors = ListItemColors::from_theme(&self.theme);
+            let current_design = self.current_design;
+
+            let variable_height_list = list(self.main_list_state.clone(), move |ix, _window, cx| {
+                // Access entity state inside the closure
+                entity.update(cx, |this, cx| {
                     let current_selected = this.selected_index;
-                    // Get the current hovered_index (mouse hover - separate from selected)
                     let current_hovered = this.hovered_index;
-                    // Get current design from app state
-                    let design = this.current_design;
-                    // Pre-compute colors for section headers
-                    let colors = ListItemColors::from_theme(&this.theme);
 
-                    for ix in visible_range.clone() {
-                        if let Some(grouped_item) = grouped_items_clone.get(ix) {
-                            match grouped_item {
-                                GroupedListItem::SectionHeader(label) => {
-                                    // Render section header (RECENT, MAIN)
-                                    // Use LIST_ITEM_HEIGHT to maintain uniform height for virtualization
-                                    items.push(
-                                        div()
-                                            .id(ElementId::NamedInteger("section-header".into(), ix as u64))
-                                            .h(px(LIST_ITEM_HEIGHT))
-                                            .child(render_section_header(label, colors)),
-                                    );
-                                }
-                                GroupedListItem::Item(result_idx) => {
-                                    // Get the actual result from flat_results
-                                    if let Some(result) = flat_results_clone.get(*result_idx) {
-                                        let is_selected = ix == current_selected;
-                                        let is_hovered = current_hovered == Some(ix);
+                    if let Some(grouped_item) = grouped_items_clone.get(ix) {
+                        match grouped_item {
+                            GroupedListItem::SectionHeader(label) => {
+                                // Section header at 24px height (SECTION_HEADER_HEIGHT)
+                                div()
+                                    .id(ElementId::NamedInteger("section-header".into(), ix as u64))
+                                    .h(px(SECTION_HEADER_HEIGHT))
+                                    .child(render_section_header(label, theme_colors))
+                                    .into_any_element()
+                            }
+                            GroupedListItem::Item(result_idx) => {
+                                // Regular item at 48px height (LIST_ITEM_HEIGHT)
+                                if let Some(result) = flat_results_clone.get(*result_idx) {
+                                    let is_selected = ix == current_selected;
+                                    let is_hovered = current_hovered == Some(ix);
 
-                                        // Create hover handler that updates hovered_index (subtle visual)
-                                        // This is SEPARATE from selected_index (full focus styling)
-                                        // P0-2: Uses 16ms debounce to reduce ~50% unnecessary re-renders
-                                        let hover_handler = cx.listener(move |this: &mut ScriptListApp, hovered: &bool, _window, cx| {
-                                            let now = std::time::Instant::now();
-                                            const HOVER_DEBOUNCE_MS: u64 = 16; // ~1 frame at 60fps
+                                    // Create hover handler
+                                    let hover_handler = cx.listener(move |this: &mut ScriptListApp, hovered: &bool, _window, cx| {
+                                        let now = std::time::Instant::now();
+                                        const HOVER_DEBOUNCE_MS: u64 = 16;
 
-                                            if *hovered {
-                                                // Mouse entered - set hovered_index with debounce
-                                                if this.hovered_index != Some(ix) {
-                                                    // Only notify if enough time has passed since last hover notify
-                                                    if now.duration_since(this.last_hover_notify).as_millis() >= HOVER_DEBOUNCE_MS as u128 {
-                                                        this.hovered_index = Some(ix);
-                                                        this.last_hover_notify = now;
-                                                        cx.notify();
-                                                    }
-                                                }
-                                            } else {
-                                                // Mouse left - clear hovered_index if it was this item
-                                                if this.hovered_index == Some(ix) {
-                                                    this.hovered_index = None;
-                                                    this.last_hover_notify = now;
-                                                    cx.notify();
-                                                }
-                                            }
-                                        });
-
-                                        // Create click handler that sets selected_index to clicked item
-                                        // This gives full focus styling (dark bg + accent bar)
-                                        // NOTE: Click only focuses - Enter key executes
-                                        let click_handler = cx.listener(move |this: &mut ScriptListApp, _event: &gpui::ClickEvent, _window, cx| {
-                                            if this.selected_index != ix {
-                                                this.selected_index = ix;
+                                        if *hovered {
+                                            // Mouse entered - set hovered_index with debounce
+                                            if this.hovered_index != Some(ix)
+                                                && now.duration_since(this.last_hover_notify).as_millis() >= HOVER_DEBOUNCE_MS as u128
+                                            {
+                                                this.hovered_index = Some(ix);
+                                                this.last_hover_notify = now;
                                                 cx.notify();
                                             }
-                                        });
+                                        } else if this.hovered_index == Some(ix) {
+                                            // Mouse left - clear hovered_index if it was this item
+                                            this.hovered_index = None;
+                                            this.last_hover_notify = now;
+                                            cx.notify();
+                                        }
+                                    });
 
-                                        // Dispatch to design-specific item renderer
-                                        // is_hovered provides subtle visual feedback (25% opacity bg)
-                                        // is_selected provides full focus styling (50% opacity bg + accent bar)
-                                        let item_element = render_design_item(
-                                            design,
-                                            result,
-                                            ix,
-                                            is_selected,
-                                            is_hovered,
-                                            colors,
-                                        );
+                                    // Create click handler
+                                    let click_handler = cx.listener(move |this: &mut ScriptListApp, _event: &gpui::ClickEvent, _window, cx| {
+                                        if this.selected_index != ix {
+                                            this.selected_index = ix;
+                                            cx.notify();
+                                        }
+                                    });
 
-                                        // Wrap in div with hover and click handlers
-                                        // - hover: updates hovered_index for subtle visual feedback
-                                        // - click: sets selected_index (focus only, Enter to execute)
-                                        items.push(
-                                            div()
-                                                .id(ElementId::NamedInteger("script-item".into(), ix as u64))
-                                                .on_hover(hover_handler)
-                                                .on_click(click_handler)
-                                                .child(item_element),
-                                        );
-                                    }
+                                    // Dispatch to design-specific item renderer
+                                    let item_element = render_design_item(
+                                        current_design,
+                                        result,
+                                        ix,
+                                        is_selected,
+                                        is_hovered,
+                                        theme_colors,
+                                    );
+
+                                    div()
+                                        .id(ElementId::NamedInteger("script-item".into(), ix as u64))
+                                        .h(px(LIST_ITEM_HEIGHT)) // Explicit 48px height
+                                        .on_hover(hover_handler)
+                                        .on_click(click_handler)
+                                        .child(item_element)
+                                        .into_any_element()
+                                } else {
+                                    // Fallback for missing result
+                                    div().h(px(LIST_ITEM_HEIGHT)).into_any_element()
                                 }
                             }
                         }
+                    } else {
+                        // Fallback for out-of-bounds index
+                        div().h(px(LIST_ITEM_HEIGHT)).into_any_element()
                     }
-                    items
-                }),
-            )
-            .h_full()
-            .track_scroll(&self.list_scroll_handle);
+                })
+            })
+            .h_full();
 
-            // Wrap uniform_list in a relative container with scrollbar overlay
-            // NOTE: The wrapper needs flex + h_full for uniform_list to properly calculate visible range
+            // Wrap list in a relative container with scrollbar overlay
             div()
                 .relative()
                 .flex()
@@ -7127,7 +7126,7 @@ impl ScriptListApp {
                 .flex_1()
                 .w_full()
                 .h_full()
-                .child(list)
+                .child(variable_height_list)
                 .child(scrollbar)
                 .into_any_element()
         };
