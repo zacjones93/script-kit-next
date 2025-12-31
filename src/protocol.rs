@@ -712,12 +712,15 @@ pub enum Message {
     // ============================================================
     // CORE PROMPTS (existing)
     // ============================================================
-    /// Script sends arg prompt with choices
+    /// Script sends arg prompt with choices and optional actions
     #[serde(rename = "arg")]
     Arg {
         id: String,
         placeholder: String,
         choices: Vec<Choice>,
+        /// Optional actions for the actions panel (Cmd+K to open)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        actions: Option<Vec<ProtocolAction>>,
     },
 
     /// Script sends div (HTML display)
@@ -1446,6 +1449,26 @@ impl Message {
             id,
             placeholder,
             choices,
+            actions: None,
+        }
+    }
+
+    /// Create an arg prompt message with actions
+    pub fn arg_with_actions(
+        id: String,
+        placeholder: String,
+        choices: Vec<Choice>,
+        actions: Vec<ProtocolAction>,
+    ) -> Self {
+        Message::Arg {
+            id,
+            placeholder,
+            choices,
+            actions: if actions.is_empty() {
+                None
+            } else {
+                Some(actions)
+            },
         }
     }
 
@@ -2622,12 +2645,14 @@ mod tests {
                 id,
                 placeholder,
                 choices,
+                actions,
             } => {
                 assert_eq!(id, "1");
                 assert_eq!(placeholder, "Pick one");
                 assert_eq!(choices.len(), 2);
                 assert_eq!(choices[0].name, "Apple");
                 assert_eq!(choices[0].value, "apple");
+                assert!(actions.is_none());
             }
             _ => panic!("Expected Arg message"),
         }

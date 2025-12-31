@@ -885,6 +885,8 @@ export interface ArgConfig {
     name: string;
     action: () => void;
   }>;
+  /** Actions shown in the actions panel (Cmd+K to open) */
+  actions?: Action[];
 }
 
 /**
@@ -954,6 +956,7 @@ interface ArgMessage {
   id: string;
   placeholder: string;
   choices: Choice[];
+  actions?: SerializableAction[];
 }
 
 interface DivMessage {
@@ -1583,11 +1586,13 @@ declare global {
    * - arg('placeholder', [{name, value}]) - with structured choices
    * - arg('placeholder', async () => [...]) - with async function returning choices
    * - arg('placeholder', (input) => [...]) - with filter function
-   * - arg({placeholder, choices, ...}) - config object with all options
+   * - arg('placeholder', choices, actions) - with choices and actions
+   * - arg({placeholder, choices, actions, ...}) - config object with all options
    */
   function arg(): Promise<string>;
   function arg(placeholder: string): Promise<string>;
   function arg(placeholder: string, choices: ChoicesInput): Promise<string>;
+  function arg(placeholder: string, choices: ChoicesInput, actions: Action[]): Promise<string>;
   function arg(config: ArgConfig): Promise<string>;
   
   /**
@@ -2210,34 +2215,39 @@ function isArgConfig(value: unknown): value is ArgConfig {
 
 globalThis.arg = async function arg(
   placeholderOrConfig?: string | ArgConfig,
-  choicesInput?: ChoicesInput
+  choicesInput?: ChoicesInput,
+  actionsInput?: Action[]
 ): Promise<string> {
   const id = nextId();
   
-  // Parse arguments to extract placeholder and choices
+  // Parse arguments to extract placeholder, choices, and actions
   let placeholder = '';
   let choices: ChoicesInput | undefined;
+  let actions: Action[] | undefined;
   let config: ArgConfig | undefined;
   
   // Handle different calling conventions:
   // 1. arg() - no arguments
   // 2. arg('placeholder') - string only
   // 3. arg('placeholder', choices) - string + choices
-  // 4. arg({...}) - config object
+  // 4. arg('placeholder', choices, actions) - string + choices + actions
+  // 5. arg({...}) - config object
   
   if (placeholderOrConfig === undefined) {
     // arg() - no arguments, empty prompt
     placeholder = '';
     choices = undefined;
   } else if (typeof placeholderOrConfig === 'string') {
-    // arg('placeholder') or arg('placeholder', choices)
+    // arg('placeholder') or arg('placeholder', choices) or arg('placeholder', choices, actions)
     placeholder = placeholderOrConfig;
     choices = choicesInput;
+    actions = actionsInput;
   } else if (isArgConfig(placeholderOrConfig)) {
-    // arg({placeholder, choices, ...})
+    // arg({placeholder, choices, actions, ...})
     config = placeholderOrConfig;
     placeholder = config.placeholder ?? '';
     choices = config.choices;
+    actions = config.actions;
   }
   
   // Resolve choices if it's a function (sync or async)
@@ -2280,6 +2290,28 @@ globalThis.arg = async function arg(
   // Normalize all choices to {name, value} format
   const normalizedChoices = normalizeChoices(resolvedChoices);
   
+  // Process actions: store handlers and create serializable actions
+  let serializedActions: SerializableAction[] | undefined;
+  if (actions && actions.length > 0) {
+    // Store action handlers in global map for later invocation
+    for (const action of actions) {
+      if (action.onAction) {
+        (globalThis as any).__kitActionsMap.set(action.name, action.onAction);
+      }
+    }
+    
+    // Convert to serializable format (without function handlers)
+    serializedActions = actions.map(action => ({
+      name: action.name,
+      description: action.description,
+      shortcut: action.shortcut,
+      value: action.value,
+      hasAction: !!action.onAction,
+      visible: action.visible,
+      close: action.close,
+    }));
+  }
+  
   // Call onInit callback if provided
   if (config?.onInit) {
     await Promise.resolve(config.onInit());
@@ -2306,6 +2338,7 @@ globalThis.arg = async function arg(
       id,
       placeholder,
       choices: normalizedChoices,
+      actions: serializedActions,
     };
     
     send(message);
@@ -4519,7 +4552,7 @@ declare global {
   function _resetScriptIO(): void;
 
   // Core prompt functions
-  function arg(placeholderOrConfig?: string | ArgConfig, choices?: ChoicesInput): Promise<string>;
+  function arg(placeholderOrConfig?: string | ArgConfig, choices?: ChoicesInput, actions?: Action[]): Promise<string>;
   function div(html: string, tailwind?: string): Promise<void>;
   function md(markdown: string): string;
   function editor(content?: string, language?: string): Promise<string>;

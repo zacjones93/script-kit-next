@@ -8,8 +8,8 @@ use gpui::{
     div, hsla, list, point, prelude::*, px, rgb, rgba, size, svg, uniform_list, AnyElement, App,
     Application, Bounds, BoxShadow, Context, ElementId, Entity, FocusHandle, Focusable,
     ListAlignment, ListSizingBehavior, ListState, Pixels, Render, ScrollStrategy, SharedString,
-    Timer, UniformListScrollHandle, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
-    WindowOptions,
+    Timer, UniformListScrollHandle, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowOptions,
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -134,7 +134,7 @@ use utils::strip_html_tags;
 use actions::{ActionsDialog, ScriptInfo};
 use panel::{CURSOR_HEIGHT_LG, CURSOR_MARGIN_Y, DEFAULT_PLACEHOLDER};
 use parking_lot::Mutex as ParkingMutex;
-use protocol::{Choice, Message};
+use protocol::{Choice, Message, ProtocolAction};
 use std::sync::{mpsc, Arc, Mutex};
 use syntax::highlight_code_lines;
 
@@ -1116,6 +1116,7 @@ enum AppView {
         id: String,
         placeholder: String,
         choices: Vec<Choice>,
+        actions: Option<Vec<ProtocolAction>>,
     },
     /// Showing a div prompt from a script
     DivPrompt {
@@ -1223,6 +1224,7 @@ enum PromptMessage {
         id: String,
         placeholder: String,
         choices: Vec<Choice>,
+        actions: Option<Vec<ProtocolAction>>,
     },
     ShowDiv {
         id: String,
@@ -2613,6 +2615,73 @@ impl ScriptListApp {
             self.actions_dialog = Some(dialog.clone());
             window.focus(&dialog_focus_handle, cx);
             logging::log("FOCUS", "Actions opened, focus moved to ActionsSearch");
+        }
+        cx.notify();
+    }
+
+    /// Toggle actions dialog for arg prompts with SDK-defined actions
+    fn toggle_arg_actions(&mut self, cx: &mut Context<Self>, window: &mut Window) {
+        logging::log(
+            "KEY",
+            &format!(
+                "toggle_arg_actions called: show_actions_popup={}, actions_dialog.is_some={}, sdk_actions.is_some={}",
+                self.show_actions_popup,
+                self.actions_dialog.is_some(),
+                self.sdk_actions.is_some()
+            ),
+        );
+        if self.show_actions_popup {
+            // Close - return focus to arg prompt
+            self.show_actions_popup = false;
+            self.actions_dialog = None;
+            self.focused_input = FocusedInput::ArgPrompt;
+            window.focus(&self.focus_handle, cx);
+            logging::log("FOCUS", "Arg actions closed, focus returned to ArgPrompt");
+        } else {
+            // Check if we have SDK actions
+            if let Some(ref sdk_actions) = self.sdk_actions {
+                logging::log("KEY", &format!("SDK actions count: {}", sdk_actions.len()));
+                if !sdk_actions.is_empty() {
+                    // Open - create dialog entity with SDK actions
+                    self.show_actions_popup = true;
+                    self.focused_input = FocusedInput::ActionsSearch;
+
+                    let theme_arc = std::sync::Arc::new(self.theme.clone());
+                    let sdk_actions_clone = sdk_actions.clone();
+                    let dialog = cx.new(|cx| {
+                        let focus_handle = cx.focus_handle();
+                        let mut dialog = ActionsDialog::with_script(
+                            focus_handle,
+                            std::sync::Arc::new(|_action_id| {}), // Callback handled separately
+                            None, // No script info for arg prompts
+                            theme_arc,
+                        );
+                        // Set SDK actions to replace built-in actions
+                        dialog.set_sdk_actions(sdk_actions_clone);
+                        dialog
+                    });
+
+                    // Hide the dialog's built-in search input since header already has search
+                    dialog.update(cx, |d, _| d.set_hide_search(true));
+
+                    // Focus the dialog's internal focus handle
+                    let dialog_focus_handle = dialog.read(cx).focus_handle.clone();
+                    self.actions_dialog = Some(dialog.clone());
+                    window.focus(&dialog_focus_handle, cx);
+                    logging::log(
+                        "FOCUS",
+                        &format!(
+                            "Arg actions OPENED: show_actions_popup={}, actions_dialog.is_some={}",
+                            self.show_actions_popup,
+                            self.actions_dialog.is_some()
+                        ),
+                    );
+                } else {
+                    logging::log("KEY", "No SDK actions available to show (empty list)");
+                }
+            } else {
+                logging::log("KEY", "No SDK actions defined for this arg prompt (None)");
+            }
         }
         cx.notify();
     }
@@ -4194,10 +4263,12 @@ impl ScriptListApp {
                                         id,
                                         placeholder,
                                         choices,
+                                        actions,
                                     } => Some(PromptMessage::ShowArg {
                                         id,
                                         placeholder,
                                         choices,
+                                        actions,
                                     }),
                                     Message::Div { id, html, tailwind } => {
                                         Some(PromptMessage::ShowDiv { id, html, tailwind })
@@ -4832,16 +4903,44 @@ impl ScriptListApp {
                 id,
                 placeholder,
                 choices,
+                actions,
             } => {
                 logging::log(
                     "UI",
-                    &format!("Showing arg prompt: {} with {} choices", id, choices.len()),
+                    &format!(
+                        "Showing arg prompt: {} with {} choices, {} actions",
+                        id,
+                        choices.len(),
+                        actions.as_ref().map(|a| a.len()).unwrap_or(0)
+                    ),
                 );
                 let choice_count = choices.len();
+
+                // If actions were provided, store them in the SDK actions system
+                // so they can be triggered via shortcuts and Cmd+K
+                if let Some(ref action_list) = actions {
+                    // Store SDK actions for trigger_action_by_name lookup
+                    self.sdk_actions = Some(action_list.clone());
+
+                    // Register keyboard shortcuts for SDK actions
+                    self.action_shortcuts.clear();
+                    for action in action_list {
+                        if let Some(shortcut) = &action.shortcut {
+                            self.action_shortcuts
+                                .insert(Self::normalize_shortcut(shortcut), action.name.clone());
+                        }
+                    }
+                } else {
+                    // Clear any previous SDK actions
+                    self.sdk_actions = None;
+                    self.action_shortcuts.clear();
+                }
+
                 self.current_view = AppView::ArgPrompt {
                     id,
                     placeholder,
                     choices,
+                    actions,
                 };
                 self.arg_input_text.clear();
                 self.arg_selected_index = 0;
@@ -5252,6 +5351,7 @@ impl ScriptListApp {
                         id,
                         placeholder,
                         choices,
+                        actions: _,
                     } => {
                         let filtered = self.get_filtered_arg_choices(choices);
                         let selected_value = if self.arg_selected_index < filtered.len() {
@@ -6380,7 +6480,8 @@ impl Render for ScriptListApp {
                 id,
                 placeholder,
                 choices,
-            } => self.render_arg_prompt(id, placeholder, choices, cx),
+                actions,
+            } => self.render_arg_prompt(id, placeholder, choices, actions, cx),
             AppView::DivPrompt { id, html, tailwind } => {
                 self.render_div_prompt(id, html, tailwind, cx)
             }
@@ -7450,6 +7551,8 @@ impl ScriptListApp {
                 .h_full();
 
             // Wrap list in a relative container with scrollbar overlay
+            // The list() component with ListSizingBehavior::Infer handles scroll internally
+            // No custom on_scroll_wheel handler needed - let GPUI handle it natively
             div()
                 .relative()
                 .flex()
@@ -8148,10 +8251,12 @@ impl ScriptListApp {
         id: String,
         placeholder: String,
         choices: Vec<Choice>,
+        actions: Option<Vec<ProtocolAction>>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let _theme = &self.theme;
         let _filtered = self.filtered_arg_choices();
+        let has_actions = actions.is_some() && !actions.as_ref().unwrap().is_empty();
 
         // Use design tokens for GLOBAL theming - all prompts use current design
         let tokens = get_tokens(self.current_design);
@@ -8162,13 +8267,86 @@ impl ScriptListApp {
 
         // Key handler for arg prompt
         let prompt_id = id.clone();
+        let has_actions_for_handler = has_actions;
         let handle_key = cx.listener(
             move |this: &mut Self,
                   event: &gpui::KeyDownEvent,
-                  _window: &mut Window,
+                  window: &mut Window,
                   cx: &mut Context<Self>| {
                 let key_str = event.keystroke.key.to_lowercase();
-                logging::log("KEY", &format!("ArgPrompt key: '{}'", key_str));
+                let has_cmd = event.keystroke.modifiers.platform;
+                logging::log("KEY", &format!("ArgPrompt key: '{}' cmd={}", key_str, has_cmd));
+
+                // Check for Cmd+K to toggle actions popup (if actions are available)
+                if has_cmd && key_str == "k" && has_actions_for_handler {
+                    logging::log("KEY", "Cmd+K in ArgPrompt - calling toggle_arg_actions");
+                    this.toggle_arg_actions(cx, window);
+                    return;
+                }
+
+                // If actions popup is open, route keyboard events to it (same as main menu)
+                if this.show_actions_popup {
+                    if let Some(ref dialog) = this.actions_dialog {
+                        match key_str.as_str() {
+                            "up" | "arrowup" => {
+                                dialog.update(cx, |d, cx| d.move_up(cx));
+                                return;
+                            }
+                            "down" | "arrowdown" => {
+                                dialog.update(cx, |d, cx| d.move_down(cx));
+                                return;
+                            }
+                            "enter" => {
+                                // Get the selected action and execute it
+                                let action_id = dialog.read(cx).get_selected_action_id();
+                                if let Some(action_id) = action_id {
+                                    logging::log(
+                                        "ACTIONS",
+                                        &format!("ArgPrompt executing action: {}", action_id),
+                                    );
+                                    this.show_actions_popup = false;
+                                    this.actions_dialog = None;
+                                    this.focused_input = FocusedInput::ArgPrompt;
+                                    window.focus(&this.focus_handle, cx);
+                                    // Trigger the SDK action by name
+                                    this.trigger_action_by_name(&action_id, cx);
+                                }
+                                return;
+                            }
+                            "escape" => {
+                                this.show_actions_popup = false;
+                                this.actions_dialog = None;
+                                this.focused_input = FocusedInput::ArgPrompt;
+                                window.focus(&this.focus_handle, cx);
+                                cx.notify();
+                                return;
+                            }
+                            "backspace" => {
+                                dialog.update(cx, |d, cx| d.handle_backspace(cx));
+                                return;
+                            }
+                            _ => {
+                                // Route character input to the dialog for search
+                                if let Some(ref key_char) = event.keystroke.key_char {
+                                    if let Some(ch) = key_char.chars().next() {
+                                        if !ch.is_control() {
+                                            dialog.update(cx, |d, cx| d.handle_char(ch, cx));
+                                        }
+                                    }
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                // Check for SDK action shortcuts (only when actions popup is NOT open)
+                let shortcut_key = Self::keystroke_to_shortcut(&key_str, &event.keystroke.modifiers);
+                if let Some(action_name) = this.action_shortcuts.get(&shortcut_key).cloned() {
+                    logging::log("KEY", &format!("SDK action shortcut matched: {}", action_name));
+                    this.trigger_action_by_name(&action_name, cx);
+                    return;
+                }
 
                 match key_str.as_str() {
                     "up" | "arrowup" => {
@@ -8325,6 +8503,7 @@ impl ScriptListApp {
         let text_dimmed = design_colors.text_dimmed;
 
         div()
+            .relative() // Needed for absolute positioned actions dialog overlay
             .flex()
             .flex_col()
             .bg(rgba(bg_with_alpha))
@@ -8394,6 +8573,24 @@ impl ScriptListApp {
                                 )
                             }),
                     )
+                    // Actions button (only shown when actions are available)
+                    // Uses same Button component as main menu for consistent styling
+                    .when(has_actions, |d| {
+                        let button_colors = ButtonColors::from_theme(&self.theme);
+                        let handle_actions = cx.entity().downgrade();
+                        d.child(
+                            Button::new("Actions", button_colors)
+                                .variant(ButtonVariant::Ghost)
+                                .shortcut("⌘ K")
+                                .on_click(Box::new(move |_, window, cx| {
+                                    if let Some(app) = handle_actions.upgrade() {
+                                        app.update(cx, |this, cx| {
+                                            this.toggle_arg_actions(cx, window);
+                                        });
+                                    }
+                                })),
+                        )
+                    })
                     .child(
                         div()
                             .text_sm()
@@ -8430,6 +8627,48 @@ impl ScriptListApp {
                     .text_xs()
                     .text_color(rgb(text_muted))
                     .child("↑↓ navigate • ⏎ select • Esc cancel"),
+            )
+            // Actions dialog overlay (when Cmd+K is pressed with SDK actions)
+            // Uses same pattern as main menu: check BOTH show_actions_popup AND actions_dialog
+            .when_some(
+                if self.show_actions_popup {
+                    self.actions_dialog.clone()
+                } else {
+                    None
+                },
+                |d, dialog| {
+                    // Create click handler for backdrop to dismiss dialog
+                    let backdrop_click = cx.listener(|this: &mut Self, _event: &gpui::ClickEvent, window: &mut Window, cx: &mut Context<Self>| {
+                        logging::log("FOCUS", "Arg actions backdrop clicked - dismissing dialog");
+                        this.show_actions_popup = false;
+                        this.actions_dialog = None;
+                        this.focused_input = FocusedInput::ArgPrompt;
+                        window.focus(&this.focus_handle, cx);
+                        cx.notify();
+                    });
+
+                    d.child(
+                        div()
+                            .absolute()
+                            .inset_0() // Cover entire arg prompt area
+                            // Backdrop layer - captures clicks outside the dialog
+                            .child(
+                                div()
+                                    .id("arg-actions-backdrop")
+                                    .absolute()
+                                    .inset_0()
+                                    .on_click(backdrop_click)
+                            )
+                            // Dialog positioned at top-right
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top(px(52.)) // Clear the header bar (~44px header + 8px margin)
+                                    .right(px(8.))
+                                    .child(dialog),
+                            ),
+                    )
+                },
             )
             .into_any_element()
     }
@@ -12713,8 +12952,93 @@ fn main() {
                                             }
                                         });
                                     }
+                                    AppView::ArgPrompt { id, .. } => {
+                                        // Arg prompt key handling via SimulateKey
+                                        logging::log("STDIN", &format!("SimulateKey: Dispatching '{}' to ArgPrompt (actions_popup={})", key_lower, view.show_actions_popup));
+                                        
+                                        // Check for Cmd+K to toggle actions popup
+                                        if has_cmd && key_lower == "k" {
+                                            logging::log("STDIN", "SimulateKey: Cmd+K - toggle arg actions");
+                                            view.toggle_arg_actions(ctx, window);
+                                        } else if view.show_actions_popup {
+                                            // If actions popup is open, route to it
+                                            if let Some(ref dialog) = view.actions_dialog {
+                                                match key_lower.as_str() {
+                                                    "up" | "arrowup" => {
+                                                        logging::log("STDIN", "SimulateKey: Up in actions dialog");
+                                                        dialog.update(ctx, |d, cx| d.move_up(cx));
+                                                    }
+                                                    "down" | "arrowdown" => {
+                                                        logging::log("STDIN", "SimulateKey: Down in actions dialog");
+                                                        dialog.update(ctx, |d, cx| d.move_down(cx));
+                                                    }
+                                                    "enter" => {
+                                                        logging::log("STDIN", "SimulateKey: Enter in actions dialog");
+                                                        let action_id = dialog.read(ctx).get_selected_action_id();
+                                                        if let Some(action_id) = action_id {
+                                                            logging::log("ACTIONS", &format!("SimulateKey: Executing action: {}", action_id));
+                                                            view.show_actions_popup = false;
+                                                            view.actions_dialog = None;
+                                                            view.focused_input = FocusedInput::ArgPrompt;
+                                                            window.focus(&view.focus_handle, ctx);
+                                                            view.trigger_action_by_name(&action_id, ctx);
+                                                        }
+                                                    }
+                                                    "escape" => {
+                                                        logging::log("STDIN", "SimulateKey: Escape - close actions dialog");
+                                                        view.show_actions_popup = false;
+                                                        view.actions_dialog = None;
+                                                        view.focused_input = FocusedInput::ArgPrompt;
+                                                        window.focus(&view.focus_handle, ctx);
+                                                    }
+                                                    _ => {
+                                                        logging::log("STDIN", &format!("SimulateKey: Unhandled key '{}' in ArgPrompt actions dialog", key_lower));
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            // Normal arg prompt key handling
+                                            let prompt_id = id.clone();
+                                            match key_lower.as_str() {
+                                                "up" | "arrowup" => {
+                                                    if view.arg_selected_index > 0 {
+                                                        view.arg_selected_index -= 1;
+                                                        view.arg_list_scroll_handle.scroll_to_item(view.arg_selected_index, ScrollStrategy::Nearest);
+                                                        logging::log("STDIN", &format!("SimulateKey: Arg up, index={}", view.arg_selected_index));
+                                                    }
+                                                }
+                                                "down" | "arrowdown" => {
+                                                    let filtered = view.filtered_arg_choices();
+                                                    if view.arg_selected_index < filtered.len().saturating_sub(1) {
+                                                        view.arg_selected_index += 1;
+                                                        view.arg_list_scroll_handle.scroll_to_item(view.arg_selected_index, ScrollStrategy::Nearest);
+                                                        logging::log("STDIN", &format!("SimulateKey: Arg down, index={}", view.arg_selected_index));
+                                                    }
+                                                }
+                                                "enter" => {
+                                                    logging::log("STDIN", "SimulateKey: Enter - submit selection");
+                                                    let filtered = view.filtered_arg_choices();
+                                                    if let Some((_, choice)) = filtered.get(view.arg_selected_index) {
+                                                        let value = choice.value.clone();
+                                                        view.submit_prompt_response(prompt_id, Some(value), ctx);
+                                                    } else if !view.arg_input_text.is_empty() {
+                                                        let value = view.arg_input_text.clone();
+                                                        view.submit_prompt_response(prompt_id, Some(value), ctx);
+                                                    }
+                                                }
+                                                "escape" => {
+                                                    logging::log("STDIN", "SimulateKey: Escape - cancel script");
+                                                    view.submit_prompt_response(prompt_id, None, ctx);
+                                                    view.cancel_script_execution(ctx);
+                                                }
+                                                _ => {
+                                                    logging::log("STDIN", &format!("SimulateKey: Unhandled key '{}' in ArgPrompt", key_lower));
+                                                }
+                                            }
+                                        }
+                                    }
                                     _ => {
-                                        logging::log("STDIN", "SimulateKey: View not supported for key simulation");
+                                        logging::log("STDIN", &format!("SimulateKey: View {:?} not supported for key simulation", std::mem::discriminant(&view.current_view)));
                                     }
                                 }
                             }
