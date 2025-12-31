@@ -23,9 +23,14 @@ node_modules/
 .test-screenshots/
 .mocks/
 
+# AI-generated bundles (ephemeral)
+*-bundle.md
+
+# Package caches
+.packx_cache/
+
 # OpenCode / Agent tooling
 .opencode/
-.beads/
 
 # Logs
 *.log
