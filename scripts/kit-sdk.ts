@@ -130,11 +130,25 @@ export interface WindowBounds {
 // =============================================================================
 
 /**
- * Options for customizing the div() container appearance
+ * Configuration for div() prompt (matches original Script Kit API)
  */
-export interface DivOptions {
+export interface DivConfig {
+  /** HTML content to display */
+  html?: string;
+  /** Placeholder text (shown in header) */
+  placeholder?: string;
+  /** Hint text */
+  hint?: string;
+  /** Footer text */
+  footer?: string;
+  /** 
+   * Tailwind classes for the container.
+   * Use "bg-transparent" for transparent background,
+   * or any Tailwind bg-* classes for custom backgrounds.
+   */
+  containerClasses?: string;
   /**
-   * Container background color.
+   * Container background color (alternative to containerClasses).
    * Can be:
    * - "transparent" - fully transparent background
    * - "#RGB" or "#RRGGBB" - hex color (e.g., "#f00", "#ff0000")
@@ -142,13 +156,11 @@ export interface DivOptions {
    * - Tailwind color name (e.g., "blue-500", "gray-900")
    */
   containerBg?: string;
-  
   /**
    * Container padding in pixels, or "none" to disable padding.
    * Default is theme-based padding (~16px).
    */
   containerPadding?: number | "none";
-  
   /**
    * Container opacity (0-100).
    * Applied to the entire container including the background.
@@ -995,8 +1007,15 @@ interface DivMessage {
   type: 'div';
   id: string;
   html: string;
-  tailwind?: string;
+  /** Tailwind classes for the content container */
+  containerClasses?: string;
   actions?: SerializableAction[];
+  /** Placeholder text for header */
+  placeholder?: string;
+  /** Hint text */
+  hint?: string;
+  /** Footer text */
+  footer?: string;
   /** Container background color */
   containerBg?: string;
   /** Container padding in pixels, or "none" */
@@ -1508,7 +1527,7 @@ const pending = new Map<string, (msg: ResponseMessage) => void>();
 // Actions API - Global state for action handlers
 // =============================================================================
 
-/** Global map to store action handlers for lookup when ActionTriggered is received */
+/** Global map to store full action definitions for lookup when ActionTriggered is received */
 (globalThis as any).__kitActionsMap = new Map<string, Action>();
 
 /**
@@ -1521,18 +1540,28 @@ const pending = new Map<string, (msg: ResponseMessage) => void>();
 ): Promise<void> {
   const actionsMap = (globalThis as any).__kitActionsMap as Map<string, Action>;
   const action = actionsMap.get(msg.action);
-  
+
   if (!action) {
     console.error(`[SDK] Action not found: ${msg.action}`);
     return;
   }
-  
-  if (action.onAction) {
-    // Call the handler with input and state
-    await Promise.resolve(action.onAction(msg.input, msg.state));
-  } else if (action.value !== undefined) {
-    // No handler, submit the value
-    send({ type: 'forceSubmit', value: action.value });
+
+  try {
+    if (typeof action.onAction === 'function') {
+      await Promise.resolve(action.onAction(msg.input, msg.state));
+      return;
+    }
+
+    if (action.value !== undefined) {
+      send({ type: 'forceSubmit', value: action.value });
+      return;
+    }
+
+    console.warn(
+      `[SDK] Action "${action.name}" has no onAction handler and no value. Ignoring.`
+    );
+  } catch (error) {
+    console.error(`[SDK] Action "${action.name}" failed:`, error);
   }
 };
 
@@ -1641,37 +1670,38 @@ declare global {
   /**
    * Display HTML content to user
    * 
-   * @param html - HTML content to display (supports Tailwind classes in elements)
-   * @param tailwindOrOptions - Either Tailwind classes for root element, or DivOptions
-   * @param options - Container options when tailwind is also provided
+   * Matches original Script Kit API: div(html?, config?, actions?)
+   * 
+   * @param htmlOrConfig - HTML string or DivConfig object
+   * @param actions - Optional actions for the actions panel (Cmd+K)
    * 
    * @example
    * // Basic usage
    * await div("<h1>Hello</h1>");
    * 
    * @example
-   * // With tailwind classes on root
-   * await div("<h1>Hello</h1>", "p-4 bg-blue-500");
+   * // With config object
+   * await div({
+   *   html: "<h1>Hello</h1>",
+   *   placeholder: "My Title",
+   *   containerClasses: "bg-blue-500 p-4"
+   * });
    * 
    * @example
-   * // With container options
-   * await div("<h1>Hello</h1>", { containerBg: "transparent" });
-   * 
-   * @example
-   * // Transparent background with custom HTML background
-   * await div('<div class="bg-gradient-to-r from-purple-500 to-pink-500 p-8 h-full">Content</div>', {
+   * // Transparent background with gradient content
+   * await div({
+   *   html: '<div class="bg-gradient-to-r from-purple-500 to-pink-500 p-8 h-full">Content</div>',
    *   containerBg: "transparent",
    *   containerPadding: "none"
    * });
    * 
    * @example
-   * // Semi-transparent container
-   * await div("<h1>Hello</h1>", { containerBg: "#00000080" }); // 50% black
-   * await div("<h1>Hello</h1>", { opacity: 50 }); // 50% opacity on theme bg
+   * // With actions
+   * await div("<h1>Hello</h1>", [
+   *   { name: "Copy", shortcut: "cmd+c", onAction: () => clipboard.writeText("Hello") }
+   * ]);
    */
-  function div(html: string, tailwind?: string): Promise<void>;
-  function div(html: string, options?: DivOptions): Promise<void>;
-  function div(html: string, tailwind?: string, options?: DivOptions): Promise<void>;
+  function div(html?: string | DivConfig, actions?: Action[]): Promise<void>;
   
   /**
    * Convert Markdown to HTML
@@ -2367,23 +2397,53 @@ globalThis.arg = async function arg(
   // Process actions: store handlers and create serializable actions
   let serializedActions: SerializableAction[] | undefined;
   if (actions && actions.length > 0) {
-    // Store action handlers in global map for later invocation
+    const actionsMap = (globalThis as any).__kitActionsMap as Map<string, Action>;
+    actionsMap.clear(); // Clear stale actions from previous prompts
+
+    const seen = new Set<string>();
+    const normalized: Action[] = [];
+
     for (const action of actions) {
-      if (action.onAction) {
-        (globalThis as any).__kitActionsMap.set(action.name, action.onAction);
+      // Default visible=true, skip if explicitly hidden
+      if (action.visible === false) continue;
+
+      const name = action.name?.trim();
+      if (!name) {
+        console.warn('[SDK] Skipping action with empty name');
+        continue;
       }
+
+      if (seen.has(name)) {
+        console.warn(`[SDK] Duplicate action name "${name}". Skipping duplicate.`);
+        continue;
+      }
+      seen.add(name);
+
+      const hasHandler = typeof action.onAction === 'function';
+      const hasValue = action.value !== undefined;
+
+      if (!hasHandler && !hasValue) {
+        console.warn(`[SDK] Action "${name}" has no onAction and no value. Skipping.`);
+        continue;
+      }
+
+      // Store the full Action object for __handleActionTriggered
+      actionsMap.set(name, action);
+      normalized.push(action);
     }
-    
-    // Convert to serializable format (without function handlers)
-    serializedActions = actions.map(action => ({
-      name: action.name,
-      description: action.description,
-      shortcut: action.shortcut,
-      value: action.value,
-      hasAction: !!action.onAction,
-      visible: action.visible,
-      close: action.close,
-    }));
+
+    if (normalized.length > 0) {
+      // Convert to serializable format (without function handlers)
+      serializedActions = normalized.map(action => ({
+        name: action.name,
+        description: action.description,
+        shortcut: action.shortcut,
+        value: action.value,
+        hasAction: typeof action.onAction === 'function',
+        visible: action.visible,
+        close: action.close,
+      }));
+    }
   }
   
   // Call onInit callback if provided
@@ -2420,59 +2480,67 @@ globalThis.arg = async function arg(
 };
 
 /**
- * Display HTML content with optional styling and container customization.
+ * Display HTML content to user.
  * 
- * Signature overloads:
- * - div(html) - basic HTML display
- * - div(html, tailwind) - with tailwind classes on root
- * - div(html, options) - with container options
- * - div(html, tailwind, options) - with both
+ * Matches original Script Kit API: div(htmlOrConfig?, actions?)
+ * 
+ * @param htmlOrConfig - HTML string or DivConfig object
+ * @param actions - Optional actions for the actions panel (Cmd+K)
  */
 globalThis.div = async function div(
-  html: string,
-  tailwindOrOptions?: string | DivOptions,
-  optionsOrActions?: DivOptions | Action[]
+  htmlOrConfig?: string | DivConfig,
+  actionsInput?: Action[]
 ): Promise<void> {
   const id = nextId();
   
-  // Parse arguments to handle overloaded signatures
-  let tailwind: string | undefined;
-  let options: DivOptions | undefined;
-  let actionsInput: Action[] | undefined;
+  // Parse arguments - support both string and config object
+  let html: string;
+  let config: DivConfig | undefined;
   
-  if (typeof tailwindOrOptions === 'string') {
-    // div(html, tailwind) or div(html, tailwind, options)
-    tailwind = tailwindOrOptions;
-    if (optionsOrActions && !Array.isArray(optionsOrActions)) {
-      options = optionsOrActions as DivOptions;
-    } else if (Array.isArray(optionsOrActions)) {
-      actionsInput = optionsOrActions;
-    }
-  } else if (typeof tailwindOrOptions === 'object' && tailwindOrOptions !== null) {
-    // div(html, options)
-    options = tailwindOrOptions as DivOptions;
+  if (typeof htmlOrConfig === 'string') {
+    html = htmlOrConfig;
+  } else if (typeof htmlOrConfig === 'object' && htmlOrConfig !== null) {
+    config = htmlOrConfig;
+    html = config.html || '';
+  } else {
+    html = '';
   }
   
   // Process actions: store handlers and create serializable actions
   let serializedActions: SerializableAction[] | undefined;
   if (actionsInput && actionsInput.length > 0) {
-    // Store action handlers in global map for later invocation
+    const actionsMap = (globalThis as any).__kitActionsMap as Map<string, Action>;
+    actionsMap.clear();
+
+    const seen = new Set<string>();
+    const normalized: Action[] = [];
+
     for (const action of actionsInput) {
-      if (action.onAction) {
-        (globalThis as any).__kitActionsMap.set(action.name, action.onAction);
-      }
+      if (action.visible === false) continue;
+      const name = action.name?.trim();
+      if (!name) continue;
+      if (seen.has(name)) continue;
+      seen.add(name);
+
+      const hasHandler = typeof action.onAction === 'function';
+      const hasValue = action.value !== undefined;
+      if (!hasHandler && !hasValue) continue;
+
+      actionsMap.set(name, action);
+      normalized.push(action);
     }
-    
-    // Convert to serializable format (without function handlers)
-    serializedActions = actionsInput.map(action => ({
-      name: action.name,
-      description: action.description,
-      shortcut: action.shortcut,
-      value: action.value,
-      hasAction: !!action.onAction,
-      visible: action.visible,
-      close: action.close,
-    }));
+
+    if (normalized.length > 0) {
+      serializedActions = normalized.map(action => ({
+        name: action.name,
+        description: action.description,
+        shortcut: action.shortcut,
+        value: action.value,
+        hasAction: typeof action.onAction === 'function',
+        visible: action.visible,
+        close: action.close,
+      }));
+    }
   }
   
   return new Promise((resolve) => {
@@ -2484,11 +2552,14 @@ globalThis.div = async function div(
       type: 'div',
       id,
       html,
-      tailwind,
+      containerClasses: config?.containerClasses,
       actions: serializedActions,
-      containerBg: options?.containerBg,
-      containerPadding: options?.containerPadding,
-      opacity: options?.opacity,
+      placeholder: config?.placeholder,
+      hint: config?.hint,
+      footer: config?.footer,
+      containerBg: config?.containerBg,
+      containerPadding: config?.containerPadding,
+      opacity: config?.opacity,
     };
     
     send(message);
@@ -2580,23 +2651,38 @@ globalThis.editor = async function editor(
   // Process actions: store handlers and create serializable actions
   let serializedActions: SerializableAction[] | undefined;
   if (actionsInput && actionsInput.length > 0) {
-    // Store action handlers in global map for later invocation
+    const actionsMap = (globalThis as any).__kitActionsMap as Map<string, Action>;
+    actionsMap.clear();
+
+    const seen = new Set<string>();
+    const normalized: Action[] = [];
+
     for (const action of actionsInput) {
-      if (action.onAction) {
-        (globalThis as any).__kitActionsMap.set(action.name, action.onAction);
-      }
+      if (action.visible === false) continue;
+      const name = action.name?.trim();
+      if (!name) continue;
+      if (seen.has(name)) continue;
+      seen.add(name);
+
+      const hasHandler = typeof action.onAction === 'function';
+      const hasValue = action.value !== undefined;
+      if (!hasHandler && !hasValue) continue;
+
+      actionsMap.set(name, action);
+      normalized.push(action);
     }
-    
-    // Convert to serializable format (without function handlers)
-    serializedActions = actionsInput.map(action => ({
-      name: action.name,
-      description: action.description,
-      shortcut: action.shortcut,
-      value: action.value,
-      hasAction: !!action.onAction,
-      visible: action.visible,
-      close: action.close,
-    }));
+
+    if (normalized.length > 0) {
+      serializedActions = normalized.map(action => ({
+        name: action.name,
+        description: action.description,
+        shortcut: action.shortcut,
+        value: action.value,
+        hasAction: typeof action.onAction === 'function',
+        visible: action.visible,
+        close: action.close,
+      }));
+    }
   }
 
   return new Promise((resolve) => {
@@ -2743,20 +2829,30 @@ globalThis.fields = async function fields(
   // Process actions: store handlers and create serializable actions
   let serializedActions: SerializableAction[] | undefined;
   if (actionsInput && actionsInput.length > 0) {
+    const actionsMap = (globalThis as any).__kitActionsMap as Map<string, Action>;
+    actionsMap.clear();
+    const seen = new Set<string>();
+    const normalized: Action[] = [];
     for (const action of actionsInput) {
-      if (action.onAction) {
-        (globalThis as any).__kitActionsMap.set(action.name, action.onAction);
-      }
+      if (action.visible === false) continue;
+      const name = action.name?.trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      if (typeof action.onAction !== 'function' && action.value === undefined) continue;
+      actionsMap.set(name, action);
+      normalized.push(action);
     }
-    serializedActions = actionsInput.map(action => ({
-      name: action.name,
-      description: action.description,
-      shortcut: action.shortcut,
-      value: action.value,
-      hasAction: !!action.onAction,
-      visible: action.visible,
-      close: action.close,
-    }));
+    if (normalized.length > 0) {
+      serializedActions = normalized.map(action => ({
+        name: action.name,
+        description: action.description,
+        shortcut: action.shortcut,
+        value: action.value,
+        hasAction: typeof action.onAction === 'function',
+        visible: action.visible,
+        close: action.close,
+      }));
+    }
   }
 
   return new Promise((resolve) => {
@@ -2795,20 +2891,30 @@ globalThis.form = async function form(
   // Process actions: store handlers and create serializable actions
   let serializedActions: SerializableAction[] | undefined;
   if (actionsInput && actionsInput.length > 0) {
+    const actionsMap = (globalThis as any).__kitActionsMap as Map<string, Action>;
+    actionsMap.clear();
+    const seen = new Set<string>();
+    const normalized: Action[] = [];
     for (const action of actionsInput) {
-      if (action.onAction) {
-        (globalThis as any).__kitActionsMap.set(action.name, action.onAction);
-      }
+      if (action.visible === false) continue;
+      const name = action.name?.trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      if (typeof action.onAction !== 'function' && action.value === undefined) continue;
+      actionsMap.set(name, action);
+      normalized.push(action);
     }
-    serializedActions = actionsInput.map(action => ({
-      name: action.name,
-      description: action.description,
-      shortcut: action.shortcut,
-      value: action.value,
-      hasAction: !!action.onAction,
-      visible: action.visible,
-      close: action.close,
-    }));
+    if (normalized.length > 0) {
+      serializedActions = normalized.map(action => ({
+        name: action.name,
+        description: action.description,
+        shortcut: action.shortcut,
+        value: action.value,
+        hasAction: typeof action.onAction === 'function',
+        visible: action.visible,
+        close: action.close,
+      }));
+    }
   }
 
   return new Promise((resolve) => {
@@ -3614,23 +3720,30 @@ globalThis.term = async function term(command?: string, actionsInput?: Action[])
   // Process actions: store handlers and create serializable actions
   let serializedActions: SerializableAction[] | undefined;
   if (actionsInput && actionsInput.length > 0) {
-    // Store action handlers in global map for later invocation
+    const actionsMap = (globalThis as any).__kitActionsMap as Map<string, Action>;
+    actionsMap.clear();
+    const seen = new Set<string>();
+    const normalized: Action[] = [];
     for (const action of actionsInput) {
-      if (action.onAction) {
-        (globalThis as any).__kitActionsMap.set(action.name, action.onAction);
-      }
+      if (action.visible === false) continue;
+      const name = action.name?.trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      if (typeof action.onAction !== 'function' && action.value === undefined) continue;
+      actionsMap.set(name, action);
+      normalized.push(action);
     }
-    
-    // Convert to serializable format (without function handlers)
-    serializedActions = actionsInput.map(action => ({
-      name: action.name,
-      description: action.description,
-      shortcut: action.shortcut,
-      value: action.value,
-      hasAction: !!action.onAction,
-      visible: action.visible,
-      close: action.close,
-    }));
+    if (normalized.length > 0) {
+      serializedActions = normalized.map(action => ({
+        name: action.name,
+        description: action.description,
+        shortcut: action.shortcut,
+        value: action.value,
+        hasAction: typeof action.onAction === 'function',
+        visible: action.visible,
+        close: action.close,
+      }));
+    }
   }
 
   return new Promise((resolve) => {
@@ -4773,9 +4886,7 @@ declare global {
 
   // Core prompt functions
   function arg(placeholderOrConfig?: string | ArgConfig, choices?: ChoicesInput, actions?: Action[]): Promise<string>;
-  function div(html: string, tailwind?: string): Promise<void>;
-  function div(html: string, options?: DivOptions): Promise<void>;
-  function div(html: string, tailwind?: string, options?: DivOptions): Promise<void>;
+  function div(html?: string | DivConfig, actions?: Action[]): Promise<void>;
   function md(markdown: string): string;
   function editor(content?: string, language?: string, actions?: Action[]): Promise<string>;
   function mini(placeholderOrConfig?: string | ArgConfig, choices?: ChoicesInput): Promise<string>;

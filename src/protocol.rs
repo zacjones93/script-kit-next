@@ -339,6 +339,20 @@ impl ProtocolAction {
         }
     }
 
+    /// Default visibility is true when unset.
+    /// Actions with `visible: false` should be filtered out of the UI.
+    #[inline]
+    pub fn is_visible(&self) -> bool {
+        self.visible.unwrap_or(true)
+    }
+
+    /// Default close behavior is true when unset.
+    /// Actions with `close: false` should keep the dialog open after triggering.
+    #[inline]
+    pub fn should_close(&self) -> bool {
+        self.close.unwrap_or(true)
+    }
+
     /// Create a ProtocolAction with a value that submits directly
     pub fn with_value(name: String, value: String) -> Self {
         ProtocolAction {
@@ -728,11 +742,21 @@ pub enum Message {
     Div {
         id: String,
         html: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        tailwind: Option<String>,
+        /// Tailwind classes for the content container
+        #[serde(rename = "containerClasses", skip_serializing_if = "Option::is_none")]
+        container_classes: Option<String>,
         /// Optional actions for the actions panel (Cmd+K to open)
         #[serde(default, skip_serializing_if = "Option::is_none")]
         actions: Option<Vec<ProtocolAction>>,
+        /// Placeholder text (shown in header)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        placeholder: Option<String>,
+        /// Hint text
+        #[serde(skip_serializing_if = "Option::is_none")]
+        hint: Option<String>,
+        /// Footer text
+        #[serde(skip_serializing_if = "Option::is_none")]
+        footer: Option<String>,
         /// Container background color: "transparent", "#RRGGBB", "#RRGGBBAA", or Tailwind color name
         #[serde(rename = "containerBg", skip_serializing_if = "Option::is_none")]
         container_bg: Option<String>,
@@ -1507,21 +1531,27 @@ impl Message {
         Message::Div {
             id,
             html,
-            tailwind: None,
+            container_classes: None,
             actions: None,
+            placeholder: None,
+            hint: None,
+            footer: None,
             container_bg: None,
             container_padding: None,
             opacity: None,
         }
     }
 
-    /// Create a div message with tailwind classes
-    pub fn div_with_tailwind(id: String, html: String, tailwind: String) -> Self {
+    /// Create a div message with container classes
+    pub fn div_with_classes(id: String, html: String, container_classes: String) -> Self {
         Message::Div {
             id,
             html,
-            tailwind: Some(tailwind),
+            container_classes: Some(container_classes),
             actions: None,
+            placeholder: None,
+            hint: None,
+            footer: None,
             container_bg: None,
             container_padding: None,
             opacity: None,
@@ -2717,26 +2747,26 @@ mod tests {
         let msg = parse_message(json).unwrap();
 
         match msg {
-            Message::Div { id, html, tailwind, .. } => {
+            Message::Div { id, html, container_classes, .. } => {
                 assert_eq!(id, "2");
                 assert_eq!(html, "<h1>Hello</h1>");
-                assert_eq!(tailwind, None);
+                assert_eq!(container_classes, None);
             }
             _ => panic!("Expected Div message"),
         }
     }
 
     #[test]
-    fn test_parse_div_with_tailwind() {
+    fn test_parse_div_with_container_classes() {
         let json =
-            r#"{"type":"div","id":"2","html":"<h1>Hello</h1>","tailwind":"text-2xl font-bold"}"#;
+            r#"{"type":"div","id":"2","html":"<h1>Hello</h1>","containerClasses":"text-2xl font-bold"}"#;
         let msg = parse_message(json).unwrap();
 
         match msg {
-            Message::Div { id, html, tailwind, .. } => {
+            Message::Div { id, html, container_classes, .. } => {
                 assert_eq!(id, "2");
                 assert_eq!(html, "<h1>Hello</h1>");
-                assert_eq!(tailwind, Some("text-2xl font-bold".to_string()));
+                assert_eq!(container_classes, Some("text-2xl font-bold".to_string()));
             }
             _ => panic!("Expected Div message"),
         }

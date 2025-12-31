@@ -1,5 +1,5 @@
-// Name: Quick Test - div() Container Options
-// Description: Quick visual test for container options - exits after first screenshot
+// Name: Quick Test - div() Container Options (DivConfig API)
+// Description: Quick visual test for container options using DivConfig
 
 import '../../scripts/kit-sdk';
 import { writeFileSync, mkdirSync } from 'fs';
@@ -9,19 +9,23 @@ console.error('[TEST] Starting div container options quick test...');
 
 const SCREENSHOT_DIR = join(process.cwd(), '.test-screenshots');
 
-// Test: Transparent background with gradient content
-console.error('[TEST] Testing transparent container + gradient content');
+// Test: Transparent background with gradient content using DivConfig
+console.error('[TEST] Testing transparent container + gradient content (DivConfig API)');
 
-// Set up the div with transparent background and no padding
-// The content provides its own gradient background
-const divPromise = div(`
-  <div class="bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 p-8 rounded-xl text-white h-full w-full flex flex-col justify-center items-center">
-    <h1 class="text-3xl font-bold mb-4">Transparent Container Test</h1>
-    <p class="text-lg mb-2">containerBg: "transparent"</p>
-    <p class="text-lg mb-2">containerPadding: "none"</p>
-    <p class="text-sm opacity-75 mt-4">The gradient should extend edge-to-edge</p>
-  </div>
-`, { containerBg: 'transparent', containerPadding: 'none' });
+// Use the DivConfig object format (matches original Script Kit API)
+const divPromise = div({
+  html: `
+    <div class="bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 p-8 rounded-xl text-white h-full w-full flex flex-col justify-center items-center">
+      <h1 class="text-3xl font-bold mb-4">DivConfig API Test</h1>
+      <p class="text-lg mb-2">containerBg: "transparent"</p>
+      <p class="text-lg mb-2">containerPadding: "none"</p>
+      <p class="text-sm opacity-75 mt-4">The gradient should extend edge-to-edge</p>
+    </div>
+  `,
+  containerBg: 'transparent',
+  containerPadding: 'none',
+  placeholder: 'Transparent Container Demo'
+});
 
 // Wait, capture screenshot, then exit
 setTimeout(async () => {
@@ -31,7 +35,7 @@ setTimeout(async () => {
     console.error(`[TEST] Captured: ${screenshot.width}x${screenshot.height}`);
     
     mkdirSync(SCREENSHOT_DIR, { recursive: true });
-    const filename = `div-options-transparent-gradient-${Date.now()}.png`;
+    const filename = `div-config-transparent-${Date.now()}.png`;
     const filepath = join(SCREENSHOT_DIR, filename);
     writeFileSync(filepath, Buffer.from(screenshot.data, 'base64'));
     console.error(`[SCREENSHOT] ${filepath}`);

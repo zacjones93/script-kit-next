@@ -28,6 +28,8 @@ pub struct ContainerOptions {
     pub padding: Option<ContainerPadding>,
     /// Opacity (0-100), applies to entire container
     pub opacity: Option<u8>,
+    /// Tailwind classes for the content container
+    pub container_classes: Option<String>,
 }
 
 /// Padding options for the container
@@ -807,15 +809,32 @@ impl Render for DivPrompt {
         // Render the HTML elements with any inline Tailwind classes
         let content = render_elements(&elements, render_ctx);
 
-        // Apply root tailwind classes if provided
+        // Apply root tailwind classes if provided (legacy support)
         let styled_content = if let Some(tw) = &self.tailwind {
             apply_tailwind_styles(content, tw)
         } else {
             content
         };
 
+        // Build the content container with optional containerClasses
+        // Apply containerClasses first (before .id() which makes it Stateful)
+        let content_base = div()
+            .flex_1() // Grow to fill available space to bottom
+            .min_h(px(0.)) // Allow shrinking
+            .w_full()
+            .overflow_y_hidden() // Clip content at container boundary
+            .child(styled_content);
+
+        let content_styled = if let Some(ref classes) = self.container_options.container_classes {
+            apply_tailwind_styles(content_base, classes)
+        } else {
+            content_base
+        };
+
+        // Add ID after styling
+        let content_container = content_styled.id(gpui::ElementId::Name(panel_semantic_id.into()));
+
         // Main container - fills entire window height with no bottom gap
-        // Content area uses flex_1 to fill all remaining space
         div()
             .id(gpui::ElementId::Name("window:div".into()))
             .flex()
@@ -828,15 +847,7 @@ impl Render for DivPrompt {
             .key_context("div_prompt")
             .track_focus(&self.focus_handle)
             .on_key_down(handle_key)
-            .child(
-                div()
-                    .id(gpui::ElementId::Name(panel_semantic_id.into()))
-                    .flex_1() // Grow to fill available space to bottom
-                    .min_h(px(0.)) // Allow shrinking
-                    .w_full()
-                    .overflow_y_hidden() // Clip content at container boundary
-                    .child(styled_content),
-            )
+            .child(content_container)
         // Footer removed - content now extends to bottom of container
     }
 }

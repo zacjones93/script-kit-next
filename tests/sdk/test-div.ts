@@ -95,17 +95,20 @@ logTest(test2, 'running');
 const start2 = Date.now();
 
 try {
-  debug('Test 2: div() with tailwind parameter');
+  debug('Test 2: div() with containerClasses (DivConfig API)');
   
-  await div(`
-    <div class="content">
-      <h1>div() Test - Tailwind Support</h1>
-      <p>This tests the optional tailwind parameter for styling hints.</p>
-      <div class="info-box">
-        <strong>Note:</strong> Tailwind classes provide styling hints to the renderer.
+  await div({
+    html: `
+      <div class="content">
+        <h1>div() Test - Tailwind Support</h1>
+        <p>This tests containerClasses for styling hints.</p>
+        <div class="info-box">
+          <strong>Note:</strong> Tailwind classes provide styling hints to the renderer.
+        </div>
       </div>
-    </div>
-  `, 'p-6 bg-gray-50');
+    `,
+    containerClasses: 'p-6 bg-gray-50'
+  });
   
   debug('Test 2 completed - user dismissed div');
   logTest(test2, 'pass', { result: 'dismissed', duration_ms: Date.now() - start2 });

@@ -1232,8 +1232,15 @@ enum PromptMessage {
     ShowDiv {
         id: String,
         html: String,
-        tailwind: Option<String>,
+        /// Tailwind classes for the content container
+        container_classes: Option<String>,
         actions: Option<Vec<ProtocolAction>>,
+        /// Placeholder text (header)
+        placeholder: Option<String>,
+        /// Hint text
+        hint: Option<String>,
+        /// Footer text
+        footer: Option<String>,
         /// Container background color
         container_bg: Option<String>,
         /// Container padding (number or "none")
@@ -4519,8 +4526,8 @@ impl ScriptListApp {
                                         choices,
                                         actions,
                                     }),
-                                    Message::Div { id, html, tailwind, actions, container_bg, container_padding, opacity } => {
-                                        Some(PromptMessage::ShowDiv { id, html, tailwind, actions, container_bg, container_padding, opacity })
+                                    Message::Div { id, html, container_classes, actions, placeholder, hint, footer, container_bg, container_padding, opacity } => {
+                                        Some(PromptMessage::ShowDiv { id, html, container_classes, actions, placeholder, hint, footer, container_bg, container_padding, opacity })
                                     }
                                     Message::Form { id, html, actions } => {
                                         Some(PromptMessage::ShowForm { id, html, actions })
@@ -5208,8 +5215,11 @@ impl ScriptListApp {
             PromptMessage::ShowDiv {
                 id,
                 html,
-                tailwind,
+                container_classes,
                 actions,
+                placeholder: _placeholder, // TODO: render in header
+                hint: _hint,               // TODO: render hint
+                footer: _footer,           // TODO: render footer
                 container_bg,
                 container_padding,
                 opacity,
@@ -5249,13 +5259,14 @@ impl ScriptListApp {
                         }
                     }),
                     opacity,
+                    container_classes,
                 };
 
                 // Create DivPrompt entity with proper HTML rendering
                 let div_prompt = DivPrompt::with_options(
                     id.clone(),
                     html,
-                    tailwind,
+                    None, // tailwind param deprecated - use container_classes in options
                     div_focus_handle,
                     submit_callback,
                     std::sync::Arc::new(self.theme.clone()),
@@ -8005,15 +8016,19 @@ impl ScriptListApp {
                             "enter" => {
                                 // Get the selected action and execute it
                                 let action_id = dialog.read(cx).get_selected_action_id();
+                                let should_close = dialog.read(cx).selected_action_should_close();
                                 if let Some(action_id) = action_id {
                                     logging::log(
                                         "ACTIONS",
-                                        &format!("Executing action: {}", action_id),
+                                        &format!("Executing action: {} (close={})", action_id, should_close),
                                     );
-                                    this.show_actions_popup = false;
-                                    this.actions_dialog = None;
-                                    this.focused_input = FocusedInput::MainFilter;
-                                    window.focus(&this.focus_handle, cx);
+                                    // Only close if action has close: true (default)
+                                    if should_close {
+                                        this.show_actions_popup = false;
+                                        this.actions_dialog = None;
+                                        this.focused_input = FocusedInput::MainFilter;
+                                        window.focus(&this.focus_handle, cx);
+                                    }
                                     this.handle_action(action_id, cx);
                                 }
                                 return;
@@ -8643,15 +8658,19 @@ impl ScriptListApp {
                             "enter" => {
                                 // Get the selected action and execute it
                                 let action_id = dialog.read(cx).get_selected_action_id();
+                                let should_close = dialog.read(cx).selected_action_should_close();
                                 if let Some(action_id) = action_id {
                                     logging::log(
                                         "ACTIONS",
-                                        &format!("ArgPrompt executing action: {}", action_id),
+                                        &format!("ArgPrompt executing action: {} (close={})", action_id, should_close),
                                     );
-                                    this.show_actions_popup = false;
-                                    this.actions_dialog = None;
-                                    this.focused_input = FocusedInput::ArgPrompt;
-                                    window.focus(&this.focus_handle, cx);
+                                    // Only close if action has close: true (default)
+                                    if should_close {
+                                        this.show_actions_popup = false;
+                                        this.actions_dialog = None;
+                                        this.focused_input = FocusedInput::ArgPrompt;
+                                        window.focus(&this.focus_handle, cx);
+                                    }
                                     // Trigger the SDK action by name
                                     this.trigger_action_by_name(&action_id, cx);
                                 }
