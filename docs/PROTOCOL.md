@@ -5,9 +5,10 @@ This document provides a comprehensive reference for the JSONL protocol used in 
 ## Table of Contents
 
 1. [Architecture Overview](#architecture-overview)
-2. [Stdin Commands](#stdin-commands)
-3. [Message ID Correlation](#message-id-correlation)
-4. [Message Categories](#message-categories)
+2. [Rust Module Structure](#rust-module-structure)
+3. [Stdin Commands](#stdin-commands)
+4. [Message ID Correlation](#message-id-correlation)
+5. [Message Categories](#message-categories)
    - [Core Prompts](#core-prompts)
    - [Text Input Prompts](#text-input-prompts)
    - [Selection Prompts](#selection-prompts)
@@ -26,9 +27,9 @@ This document provides a comprehensive reference for the JSONL protocol used in 
    - [File Search](#file-search)
    - [Screenshot Capture](#screenshot-capture)
    - [Error Reporting](#error-reporting)
-5. [Data Types](#data-types)
-6. [Graceful Error Handling](#graceful-error-handling)
-7. [SDK Integration](#sdk-integration)
+6. [Data Types](#data-types)
+7. [Graceful Error Handling](#graceful-error-handling)
+8. [SDK Integration](#sdk-integration)
 
 ---
 
@@ -54,6 +55,77 @@ This document provides a comprehensive reference for the JSONL protocol used in 
 2. App sends responses back via **stdin** to the script
 3. Each message has a `"type"` field for discrimination
 4. Messages use `"id"` or `"requestId"` for correlation
+
+---
+
+## Rust Module Structure
+
+The protocol implementation is organized as a modular Rust package in `src/protocol/`:
+
+```
+src/protocol/
+├── mod.rs          # Public API re-exports
+├── types.rs        # Core types: Choice, FormField, ActionFlag, PromptOptions
+├── message.rs      # Message enum with 59+ variants + ParseResult
+├── semantic_id.rs  # Semantic ID generator (sid(), new_sid())
+└── io.rs           # JSONL I/O: write_message(), read_message()
+```
+
+### Module Responsibilities
+
+| Module | Purpose | Key Types |
+|--------|---------|-----------|
+| `types.rs` | Core data structures shared across messages | `Choice`, `FormField`, `ActionFlag`, `PromptOptions`, `ResizeOptions` |
+| `message.rs` | All protocol message variants and parsing | `Message`, `ParseResult`, `MessageParseError` |
+| `semantic_id.rs` | Generate unique IDs for prompts/requests | `sid()`, `new_sid()` |
+| `io.rs` | JSONL serialization/deserialization | `write_message()`, `read_message()` |
+
+### Usage Example
+
+```rust
+use crate::protocol::{
+    Message, Choice, FormField, ParseResult,
+    write_message, read_message, sid
+};
+
+// Create a message
+let msg = Message::Arg {
+    id: sid(),
+    placeholder: "Pick a fruit".to_string(),
+    choices: vec![
+        Choice::new("Apple", "apple"),
+        Choice::new("Banana", "banana"),
+    ],
+    ..Default::default()
+};
+
+// Serialize to JSONL
+write_message(&mut stdout, &msg)?;
+
+// Parse incoming message (graceful error handling)
+match Message::parse(&json_str) {
+    ParseResult::Ok(msg) => handle_message(msg),
+    ParseResult::UnknownType { message_type } => log::warn!("Unknown: {}", message_type),
+    ParseResult::MalformedJson { error } => log::error!("JSON error: {}", error),
+}
+```
+
+### ParseResult Pattern
+
+The protocol uses a three-variant parse result for graceful error handling:
+
+```rust
+pub enum ParseResult {
+    Ok(Message),                           // Successfully parsed
+    UnknownType { message_type: String },  // Valid JSON but unknown "type"
+    MalformedJson { error: String },       // Invalid JSON syntax
+}
+```
+
+This allows the app to:
+- Process known messages normally
+- Log and ignore unknown message types (forward compatibility)
+- Report JSON syntax errors appropriately
 
 ---
 

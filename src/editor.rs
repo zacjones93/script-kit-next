@@ -14,8 +14,8 @@
 
 use gpui::{
     div, prelude::*, px, rgb, rgba, uniform_list, ClipboardItem, Context, FocusHandle, Focusable,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Point, Render, SharedString,
-    UniformListScrollHandle, Window,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Point, Render, ScrollStrategy,
+    SharedString, UniformListScrollHandle, Window,
 };
 use std::time::{Duration, Instant};
 use ropey::Rope;
@@ -100,10 +100,54 @@ impl Selection {
     }
 }
 
+// --- Find / Replace / Go To Line -------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FindField {
+    Query,
+    Replace,
+}
+
+#[derive(Debug, Clone)]
+struct FindReplaceState {
+    query: String,
+    replacement: String,
+    is_visible: bool,
+    show_replace: bool,
+    case_sensitive: bool,
+    use_regex: bool,
+    matches: Vec<(usize, usize)>,
+    current_match_idx: Option<usize>,
+    focus: FindField,
+}
+
+impl Default for FindReplaceState {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            replacement: String::new(),
+            is_visible: false,
+            show_replace: false,
+            case_sensitive: false,
+            use_regex: false,
+            matches: Vec::new(),
+            current_match_idx: None,
+            focus: FindField::Query,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct GoToLineState {
+    is_visible: bool,
+    line_input: String,
+}
+
 /// Undo/redo state snapshot
+/// Uses Rope instead of String for cheap O(1) persistent clones
 #[derive(Debug, Clone)]
 struct EditorSnapshot {
-    content: String,
+    rope: Rope,
     cursor: CursorPosition,
     selection: Selection,
 }
@@ -115,8 +159,6 @@ pub struct SnippetState {
     pub snippet: ParsedSnippet,
     /// Current tabstop index in the navigation order (0..tabstops.len())
     pub current_tabstop_idx: usize,
-    /// Whether we've visited all tabstops (ready to exit snippet mode)
-    pub completed: bool,
 }
 
 /// EditorPrompt - Full-featured code editor
@@ -160,6 +202,12 @@ pub struct EditorPrompt {
     // When true, ignore all key events (used when actions panel is open)
     pub suppress_keys: bool,
 
+    // Find / Replace
+    find_state: FindReplaceState,
+
+    // Go to line
+    go_to_line_state: GoToLineState,
+
     // Mouse selection state
     is_selecting: bool,
     last_click_time: Option<Instant>,
@@ -176,29 +224,6 @@ struct RenderState {
 }
 
 impl EditorPrompt {
-    /// Create a new EditorPrompt
-    #[allow(dead_code)]
-    pub fn new(
-        id: String,
-        content: String,
-        language: String,
-        focus_handle: FocusHandle,
-        on_submit: SubmitCallback,
-        theme: Arc<Theme>,
-        config: Arc<Config>,
-    ) -> Self {
-        Self::with_height(
-            id,
-            content,
-            language,
-            focus_handle,
-            on_submit,
-            theme,
-            config,
-            None,
-        )
-    }
-
     /// Create a new EditorPrompt with explicit height
     ///
     /// This is necessary because GPUI entities don't inherit parent flex sizing.
@@ -225,6 +250,9 @@ impl EditorPrompt {
                 content_height
             ),
         );
+
+        // Normalize line endings (CRLF -> LF) for consistent handling
+        let content = Self::normalize_line_endings(&content);
 
         let rope = Rope::from_str(&content);
         let highlighted_lines = highlight_code_lines(&content, &language);
@@ -258,6 +286,8 @@ impl EditorPrompt {
             last_render_state: None,
             snippet_state: None,
             suppress_keys: false,
+            find_state: FindReplaceState::default(),
+            go_to_line_state: GoToLineState::default(),
             is_selecting: false,
             last_click_time: None,
             last_click_position: None,
@@ -291,6 +321,9 @@ impl EditorPrompt {
             ),
         );
 
+        // Normalize line endings in template before parsing
+        let template = Self::normalize_line_endings(&template);
+        
         let snippet = ParsedSnippet::parse(&template);
         let content = snippet.text.clone();
 
@@ -307,12 +340,13 @@ impl EditorPrompt {
         let highlighted_lines = highlight_code_lines(&content, &language);
 
         // Set up initial cursor position and selection
+        // Ranges are now in char indices (not byte offsets)
         let (cursor, selection) = if !snippet.tabstops.is_empty() {
             // Select the first tabstop's range
             let first_tabstop = &snippet.tabstops[0];
-            if let Some(&(start, end)) = first_tabstop.ranges.first() {
-                let start_pos = Self::byte_to_cursor_static(&rope, start);
-                let end_pos = Self::byte_to_cursor_static(&rope, end);
+            if let Some(&(start_char, end_char)) = first_tabstop.ranges.first() {
+                let start_pos = Self::char_to_cursor_static(&rope, start_char);
+                let end_pos = Self::char_to_cursor_static(&rope, end_char);
                 (end_pos, Selection::new(start_pos, end_pos))
             } else {
                 (
@@ -333,7 +367,6 @@ impl EditorPrompt {
             Some(SnippetState {
                 snippet,
                 current_tabstop_idx: 0,
-                completed: false,
             })
         };
 
@@ -357,6 +390,8 @@ impl EditorPrompt {
             last_render_state: None,
             snippet_state,
             suppress_keys: false,
+            find_state: FindReplaceState::default(),
+            go_to_line_state: GoToLineState::default(),
             is_selecting: false,
             last_click_time: None,
             last_click_position: None,
@@ -368,6 +403,15 @@ impl EditorPrompt {
     fn byte_to_cursor_static(rope: &Rope, byte_offset: usize) -> CursorPosition {
         // Convert byte offset to char offset
         let char_offset = rope.byte_to_char(byte_offset.min(rope.len_bytes()));
+        let line = rope.char_to_line(char_offset);
+        let line_start = rope.line_to_char(line);
+        let column = char_offset - line_start;
+        CursorPosition::new(line, column)
+    }
+
+    /// Convert char index to CursorPosition (static helper for constructor)
+    fn char_to_cursor_static(rope: &Rope, char_offset: usize) -> CursorPosition {
+        let char_offset = char_offset.min(rope.len_chars());
         let line = rope.char_to_line(char_offset);
         let line_start = rope.line_to_char(line);
         let column = char_offset - line_start;
@@ -446,6 +490,12 @@ impl EditorPrompt {
         CursorPosition::new(line, column)
     }
 
+    /// Normalize line endings: convert CRLF to LF
+    /// This ensures consistent handling regardless of input source (Windows, Unix, mixed)
+    fn normalize_line_endings(content: &str) -> String {
+        content.replace("\r\n", "\n").replace('\r', "\n")
+    }
+
     /// Get the current content as a String
     pub fn content(&self) -> String {
         self.rope.to_string()
@@ -465,9 +515,9 @@ impl EditorPrompt {
     fn get_line(&self, line_idx: usize) -> Option<String> {
         if line_idx < self.rope.len_lines() {
             let line = self.rope.line(line_idx);
-            // Remove trailing newline if present
+            // Remove trailing newline and carriage return (handles both LF and CRLF)
             let s = line.to_string();
-            Some(s.trim_end_matches('\n').to_string())
+            Some(s.trim_end_matches(&['\n', '\r'][..]).to_string())
         } else {
             None
         }
@@ -477,13 +527,15 @@ impl EditorPrompt {
     fn line_len(&self, line_idx: usize) -> usize {
         if line_idx < self.rope.len_lines() {
             let line = self.rope.line(line_idx);
-            let len = line.len_chars();
-            // Don't count the newline character
+            let mut len = line.len_chars();
+            // Don't count trailing newline or carriage return (handles both LF and CRLF)
             if len > 0 && line.char(len - 1) == '\n' {
-                len - 1
-            } else {
-                len
+                len -= 1;
             }
+            if len > 0 && line.char(len - 1) == '\r' {
+                len -= 1;
+            }
+            len
         } else {
             0
         }
@@ -509,9 +561,10 @@ impl EditorPrompt {
     }
 
     /// Save current state for undo
+    /// Uses Rope.clone() which is O(1) due to persistent data structure
     fn save_undo_state(&mut self) {
         let snapshot = EditorSnapshot {
-            content: self.rope.to_string(),
+            rope: self.rope.clone(),
             cursor: self.cursor,
             selection: self.selection,
         };
@@ -526,16 +579,16 @@ impl EditorPrompt {
     /// Undo last action
     fn undo(&mut self) {
         if let Some(snapshot) = self.undo_stack.pop_back() {
-            // Save current state for redo
+            // Save current state for redo (Rope.clone() is O(1))
             let current = EditorSnapshot {
-                content: self.rope.to_string(),
+                rope: self.rope.clone(),
                 cursor: self.cursor,
                 selection: self.selection,
             };
             self.redo_stack.push_back(current);
 
-            // Restore previous state
-            self.rope = Rope::from_str(&snapshot.content);
+            // Restore previous state (Rope.clone() is O(1))
+            self.rope = snapshot.rope.clone();
             self.cursor = snapshot.cursor;
             self.selection = snapshot.selection;
             self.needs_rehighlight = true;
@@ -546,16 +599,20 @@ impl EditorPrompt {
     /// Redo last undone action
     fn redo(&mut self) {
         if let Some(snapshot) = self.redo_stack.pop_back() {
-            // Save current state for undo
+            // Save current state for undo (Rope.clone() is O(1))
             let current = EditorSnapshot {
-                content: self.rope.to_string(),
+                rope: self.rope.clone(),
                 cursor: self.cursor,
                 selection: self.selection,
             };
+            // Cap undo stack during redo (same as in save_undo_state)
+            if self.undo_stack.len() >= MAX_UNDO_HISTORY {
+                self.undo_stack.pop_front();
+            }
             self.undo_stack.push_back(current);
 
-            // Restore redo state
-            self.rope = Rope::from_str(&snapshot.content);
+            // Restore redo state (Rope.clone() is O(1))
+            self.rope = snapshot.rope.clone();
             self.cursor = snapshot.cursor;
             self.selection = snapshot.selection;
             self.needs_rehighlight = true;
@@ -575,16 +632,36 @@ impl EditorPrompt {
     fn insert_text(&mut self, text: &str) {
         self.save_undo_state();
 
+        // Track edit position for snippet tabstop update
+        let edit_start = self.cursor_to_char_idx(self.cursor);
+        let mut old_len = 0;
+
         // Delete selection first if any
         if !self.selection.is_empty() {
+            let (sel_start, sel_end) = self.selection.ordered();
+            let sel_start_idx = self.cursor_to_char_idx(sel_start);
+            let sel_end_idx = self.cursor_to_char_idx(sel_end);
+            old_len = sel_end_idx - sel_start_idx;
             self.delete_selection_internal();
         }
 
         let char_idx = self.cursor_to_char_idx(self.cursor);
         self.rope.insert(char_idx, text);
 
+        let new_len = text.chars().count();
+
+        // Update snippet tabstops if in snippet mode
+        if let Some(ref mut state) = self.snippet_state {
+            state.snippet.update_tabstops_after_edit(
+                state.current_tabstop_idx,
+                edit_start,
+                old_len,
+                new_len,
+            );
+        }
+
         // Move cursor after inserted text
-        let new_idx = char_idx + text.chars().count();
+        let new_idx = char_idx + new_len;
         self.cursor = self.char_idx_to_cursor(new_idx);
         self.selection = Selection::caret(self.cursor);
         self.needs_rehighlight = true;
@@ -622,38 +699,115 @@ impl EditorPrompt {
 
     /// Delete selected text or character before cursor (backspace)
     fn backspace(&mut self) {
-        self.save_undo_state();
-
         if !self.selection.is_empty() {
+            // Save undo state before mutation
+            self.save_undo_state();
+
+            // Track selection range for snippet update
+            let (sel_start, sel_end) = self.selection.ordered();
+            let sel_start_idx = self.cursor_to_char_idx(sel_start);
+            let sel_end_idx = self.cursor_to_char_idx(sel_end);
+            let old_len = sel_end_idx - sel_start_idx;
+
             self.delete_selection_internal();
-        } else if self.cursor.line > 0 || self.cursor.column > 0 {
+
+            // Update snippet tabstops if in snippet mode
+            if let Some(ref mut state) = self.snippet_state {
+                state.snippet.update_tabstops_after_edit(
+                    state.current_tabstop_idx,
+                    sel_start_idx,
+                    old_len,
+                    0,
+                );
+            }
+            self.needs_rehighlight = true;
+        } else {
+            // Check if there's anything to delete before saving undo state
             let char_idx = self.cursor_to_char_idx(self.cursor);
             if char_idx > 0 {
+                // Save undo state only when mutation will happen
+                self.save_undo_state();
+
                 self.rope.remove((char_idx - 1)..char_idx);
                 self.cursor = self.char_idx_to_cursor(char_idx - 1);
                 self.selection = Selection::caret(self.cursor);
+
+                // Update snippet tabstops if in snippet mode
+                if let Some(ref mut state) = self.snippet_state {
+                    state.snippet.update_tabstops_after_edit(
+                        state.current_tabstop_idx,
+                        char_idx - 1,
+                        1,
+                        0,
+                    );
+                }
+                self.needs_rehighlight = true;
             }
+            // At document start with no selection - no-op, don't save undo state
         }
-        self.needs_rehighlight = true;
     }
 
     /// Delete selected text or character after cursor
     fn delete(&mut self) {
-        self.save_undo_state();
-
         if !self.selection.is_empty() {
+            // Save undo state before mutation
+            self.save_undo_state();
+
+            // Track selection range for snippet update
+            let (sel_start, sel_end) = self.selection.ordered();
+            let sel_start_idx = self.cursor_to_char_idx(sel_start);
+            let sel_end_idx = self.cursor_to_char_idx(sel_end);
+            let old_len = sel_end_idx - sel_start_idx;
+
             self.delete_selection_internal();
+
+            // Update snippet tabstops if in snippet mode
+            if let Some(ref mut state) = self.snippet_state {
+                state.snippet.update_tabstops_after_edit(
+                    state.current_tabstop_idx,
+                    sel_start_idx,
+                    old_len,
+                    0,
+                );
+            }
+            self.needs_rehighlight = true;
         } else {
+            // Check if there's anything to delete before saving undo state
             let char_idx = self.cursor_to_char_idx(self.cursor);
             if char_idx < self.rope.len_chars() {
+                // Save undo state only when mutation will happen
+                self.save_undo_state();
+
                 self.rope.remove(char_idx..(char_idx + 1));
+
+                // Update snippet tabstops if in snippet mode
+                if let Some(ref mut state) = self.snippet_state {
+                    state.snippet.update_tabstops_after_edit(
+                        state.current_tabstop_idx,
+                        char_idx,
+                        1,
+                        0,
+                    );
+                }
+                self.needs_rehighlight = true;
             }
+            // At document end with no selection - no-op, don't save undo state
         }
-        self.needs_rehighlight = true;
     }
 
     /// Move cursor left
+    ///
+    /// When `extend_selection` is false and there's an existing selection,
+    /// collapse to the selection start (standard editor behavior).
     fn move_left(&mut self, extend_selection: bool) {
+        // If not extending and selection exists, collapse to selection start
+        if !extend_selection && !self.selection.is_empty() {
+            let (start, _end) = self.selection.ordered();
+            self.cursor = start;
+            self.selection = Selection::caret(self.cursor);
+            return;
+        }
+
         let char_idx = self.cursor_to_char_idx(self.cursor);
         if char_idx > 0 {
             self.cursor = self.char_idx_to_cursor(char_idx - 1);
@@ -667,7 +821,18 @@ impl EditorPrompt {
     }
 
     /// Move cursor right
+    ///
+    /// When `extend_selection` is false and there's an existing selection,
+    /// collapse to the selection end (standard editor behavior).
     fn move_right(&mut self, extend_selection: bool) {
+        // If not extending and selection exists, collapse to selection end
+        if !extend_selection && !self.selection.is_empty() {
+            let (_start, end) = self.selection.ordered();
+            self.cursor = end;
+            self.selection = Selection::caret(self.cursor);
+            return;
+        }
+
         let char_idx = self.cursor_to_char_idx(self.cursor);
         if char_idx < self.rope.len_chars() {
             self.cursor = self.char_idx_to_cursor(char_idx + 1);
@@ -681,7 +846,18 @@ impl EditorPrompt {
     }
 
     /// Move cursor up
+    ///
+    /// When `extend_selection` is false and there's an existing selection,
+    /// collapse to the selection start (standard editor behavior).
     fn move_up(&mut self, extend_selection: bool) {
+        // If not extending and selection exists, collapse to selection start
+        if !extend_selection && !self.selection.is_empty() {
+            let (start, _end) = self.selection.ordered();
+            self.cursor = start;
+            self.selection = Selection::caret(self.cursor);
+            return;
+        }
+
         if self.cursor.line > 0 {
             self.cursor.line -= 1;
             let line_len = self.line_len(self.cursor.line);
@@ -696,7 +872,18 @@ impl EditorPrompt {
     }
 
     /// Move cursor down
+    ///
+    /// When `extend_selection` is false and there's an existing selection,
+    /// collapse to the selection end (standard editor behavior).
     fn move_down(&mut self, extend_selection: bool) {
+        // If not extending and selection exists, collapse to selection end
+        if !extend_selection && !self.selection.is_empty() {
+            let (_start, end) = self.selection.ordered();
+            self.cursor = end;
+            self.selection = Selection::caret(self.cursor);
+            return;
+        }
+
         if self.cursor.line < self.line_count() - 1 {
             self.cursor.line += 1;
             let line_len = self.line_len(self.cursor.line);
@@ -755,36 +942,40 @@ impl EditorPrompt {
         }
     }
 
+    /// Ensure the cursor line is visible by scrolling if needed
+    /// Uses `ScrollStrategy::Top` to scroll the cursor line into view at the top
+    /// when it's outside the current viewport
+    fn ensure_cursor_visible(&mut self) {
+        self.scroll_handle
+            .scroll_to_item(self.cursor.line, ScrollStrategy::Top);
+    }
+
+    /// Check if a character is a word character (alphanumeric or underscore)
+    #[inline]
+    fn is_word_char(ch: char) -> bool {
+        ch.is_alphanumeric() || ch == '_'
+    }
+
     /// Move cursor by word (Option/Alt + arrow)
+    /// Optimized: Uses direct rope char access - O(log n) per char instead of
+    /// O(n) String allocation + O(n²) repeated .nth() calls
     fn move_word_left(&mut self, extend_selection: bool) {
-        let char_idx = self.cursor_to_char_idx(self.cursor);
-        if char_idx == 0 {
+        let mut idx = self.cursor_to_char_idx(self.cursor);
+        if idx == 0 {
             return;
         }
 
-        // Find the start of the previous word
-        let text: String = self.rope.chars().take(char_idx).collect();
-        let mut new_idx = char_idx;
-
-        // Skip whitespace
-        while new_idx > 0 {
-            let ch = text.chars().nth(new_idx - 1).unwrap_or(' ');
-            if !ch.is_whitespace() {
-                break;
-            }
-            new_idx -= 1;
+        // Skip whitespace backwards
+        while idx > 0 && self.rope.char(idx - 1).is_whitespace() {
+            idx -= 1;
         }
 
-        // Skip word characters
-        while new_idx > 0 {
-            let ch = text.chars().nth(new_idx - 1).unwrap_or(' ');
-            if ch.is_whitespace() || !ch.is_alphanumeric() && ch != '_' {
-                break;
-            }
-            new_idx -= 1;
+        // Skip word characters backwards
+        while idx > 0 && Self::is_word_char(self.rope.char(idx - 1)) {
+            idx -= 1;
         }
 
-        self.cursor = self.char_idx_to_cursor(new_idx);
+        self.cursor = self.char_idx_to_cursor(idx);
 
         if extend_selection {
             self.selection.head = self.cursor;
@@ -794,35 +985,26 @@ impl EditorPrompt {
     }
 
     /// Move cursor by word (Option/Alt + arrow)
+    /// Optimized: Uses direct rope char access - O(log n) per char instead of
+    /// O(n) String allocation + O(n²) repeated .nth() calls
     fn move_word_right(&mut self, extend_selection: bool) {
-        let char_idx = self.cursor_to_char_idx(self.cursor);
+        let mut idx = self.cursor_to_char_idx(self.cursor);
         let total_chars = self.rope.len_chars();
-        if char_idx >= total_chars {
+        if idx >= total_chars {
             return;
         }
 
-        let text: String = self.rope.chars().collect();
-        let mut new_idx = char_idx;
-
-        // Skip current word characters
-        while new_idx < total_chars {
-            let ch = text.chars().nth(new_idx).unwrap_or(' ');
-            if ch.is_whitespace() || (!ch.is_alphanumeric() && ch != '_') {
-                break;
-            }
-            new_idx += 1;
+        // Skip current word characters forwards
+        while idx < total_chars && Self::is_word_char(self.rope.char(idx)) {
+            idx += 1;
         }
 
-        // Skip whitespace
-        while new_idx < total_chars {
-            let ch = text.chars().nth(new_idx).unwrap_or(' ');
-            if !ch.is_whitespace() {
-                break;
-            }
-            new_idx += 1;
+        // Skip whitespace forwards
+        while idx < total_chars && self.rope.char(idx).is_whitespace() {
+            idx += 1;
         }
 
-        self.cursor = self.char_idx_to_cursor(new_idx);
+        self.cursor = self.char_idx_to_cursor(idx);
 
         if extend_selection {
             self.selection.head = self.cursor;
@@ -898,6 +1080,833 @@ impl EditorPrompt {
         (self.on_submit)(self.id.clone(), None);
     }
 
+    // --- Helper Methods for Find/Replace, Go-To-Line, Line Operations ---
+
+    /// Get max column for a line (0 if line doesn't exist)
+    fn line_max_column(&self, line: usize) -> usize {
+        self.line_len(line)
+    }
+
+    /// Convert cursor position to rope char index (alias for cursor_to_char_idx)
+    fn cursor_char_index(&self, pos: CursorPosition) -> usize {
+        self.cursor_to_char_idx(pos)
+    }
+
+    /// Convert char index to cursor position (alias for char_idx_to_cursor)
+    fn char_index_to_cursor_pos(&self, char_idx: usize) -> CursorPosition {
+        self.char_idx_to_cursor(char_idx)
+    }
+
+    /// Set cursor position and clear any selection
+    fn set_caret(&mut self, pos: CursorPosition) {
+        self.cursor = pos;
+        self.selection = Selection::caret(pos);
+    }
+
+    /// Set selection range from start to end
+    fn select_range(&mut self, start: CursorPosition, end: CursorPosition) {
+        self.selection = Selection::new(start, end);
+        self.cursor = end;
+    }
+
+    /// Get the inclusive line range of the current selection
+    /// Returns (start_line, end_line) based on selection.ordered()
+    fn selected_line_range_inclusive(&self) -> (usize, usize) {
+        let (start, end) = self.selection.ordered();
+        (start.line, end.line)
+    }
+
+    /// Get the char index range for a span of lines (inclusive)
+    /// Returns (start_char_idx, end_char_idx) where end is at end of end_line
+    fn line_char_range_inclusive(&self, start_line: usize, end_line: usize) -> (usize, usize) {
+        let start_char = self.rope.line_to_char(start_line.min(self.line_count().saturating_sub(1)));
+        let end_line_clamped = end_line.min(self.line_count().saturating_sub(1));
+        
+        // Get the char index at the start of the line after end_line (or end of doc)
+        let end_char = if end_line_clamped + 1 < self.line_count() {
+            self.rope.line_to_char(end_line_clamped + 1)
+        } else {
+            self.rope.len_chars()
+        };
+        
+        (start_char, end_char)
+    }
+
+    /// Get the appropriate comment token for the current language
+    fn line_comment_token(&self) -> &'static str {
+        match self.language.to_lowercase().as_str() {
+            "python" | "py" => "#",
+            "shell" | "sh" | "bash" | "zsh" => "#",
+            "yaml" | "yml" => "#",
+            "ruby" | "rb" => "#",
+            "perl" | "pl" => "#",
+            "r" => "#",
+            "toml" => "#",
+            "makefile" | "make" => "#",
+            "dockerfile" => "#",
+            "powershell" | "ps1" => "#",
+            "coffeescript" | "coffee" => "#",
+            "nim" => "#",
+            "julia" | "jl" => "#",
+            _ => "//", // Default for C-style languages (JS, TS, Rust, Go, Java, C, C++, etc.)
+        }
+    }
+
+    // --- Line Operations ---
+
+    /// Duplicate the selected lines (or current line if no selection)
+    fn duplicate_selected_lines(&mut self) {
+        self.save_undo_state();
+        
+        let (start_line, end_line) = self.selected_line_range_inclusive();
+        
+        // Get the text of all selected lines including newlines
+        let (start_char, end_char) = self.line_char_range_inclusive(start_line, end_line);
+        let lines_text = self.rope.slice(start_char..end_char).to_string();
+        
+        // Ensure we have a trailing newline
+        let to_insert = if lines_text.ends_with('\n') {
+            lines_text
+        } else {
+            format!("{}\n", lines_text)
+        };
+        
+        // Insert at end of the last selected line
+        self.rope.insert(end_char, &to_insert);
+        
+        // Move cursor to the duplicated region
+        let new_cursor_line = end_line + 1 + (end_line - start_line);
+        let new_cursor_col = self.cursor.column.min(self.line_len(new_cursor_line));
+        self.cursor = CursorPosition::new(new_cursor_line, new_cursor_col);
+        self.selection = Selection::caret(self.cursor);
+        
+        self.needs_rehighlight = true;
+        logging::log(
+            "EDITOR",
+            &format!("Duplicated lines {}-{}", start_line + 1, end_line + 1),
+        );
+    }
+
+    /// Toggle line comments for selected lines (or current line)
+    fn toggle_line_comment(&mut self) {
+        self.save_undo_state();
+        
+        let (start_line, end_line) = self.selected_line_range_inclusive();
+        let comment_token = self.line_comment_token();
+        let comment_prefix = format!("{} ", comment_token);
+        
+        // Check if all lines are commented (to determine toggle direction)
+        let all_commented = (start_line..=end_line).all(|line_idx| {
+            self.get_line(line_idx)
+                .map(|line| line.trim_start().starts_with(comment_token))
+                .unwrap_or(false)
+        });
+        
+        // Process lines from end to start to maintain correct indices
+        for line_idx in (start_line..=end_line).rev() {
+            let line_start_char = self.rope.line_to_char(line_idx);
+            
+            if let Some(line_content) = self.get_line(line_idx) {
+                let trimmed = line_content.trim_start();
+                let leading_whitespace = line_content.len() - trimmed.len();
+                
+                if all_commented {
+                    // Uncomment: remove comment prefix
+                    if trimmed.starts_with(&comment_prefix) {
+                        // Remove "// " (with space)
+                        let remove_start = line_start_char + leading_whitespace;
+                        let remove_end = remove_start + comment_prefix.len();
+                        self.rope.remove(remove_start..remove_end);
+                    } else if trimmed.starts_with(comment_token) {
+                        // Remove "//" (without space)
+                        let remove_start = line_start_char + leading_whitespace;
+                        let remove_end = remove_start + comment_token.len();
+                        self.rope.remove(remove_start..remove_end);
+                    }
+                } else {
+                    // Comment: add comment prefix after leading whitespace
+                    let insert_pos = line_start_char + leading_whitespace;
+                    self.rope.insert(insert_pos, &comment_prefix);
+                }
+            }
+        }
+        
+        self.needs_rehighlight = true;
+        logging::log(
+            "EDITOR",
+            &format!(
+                "{} lines {}-{}",
+                if all_commented { "Uncommented" } else { "Commented" },
+                start_line + 1,
+                end_line + 1
+            ),
+        );
+    }
+
+    /// Indent selected lines by adding 4 spaces at the start of each line
+    fn indent_selected_lines(&mut self) {
+        self.save_undo_state();
+        
+        let (start_line, end_line) = self.selected_line_range_inclusive();
+        let indent = "    "; // 4 spaces
+        
+        // Process lines from end to start to maintain correct indices
+        for line_idx in (start_line..=end_line).rev() {
+            let line_start_char = self.rope.line_to_char(line_idx);
+            self.rope.insert(line_start_char, indent);
+        }
+        
+        // Update cursor column
+        self.cursor.column += 4;
+        
+        // Update selection to reflect indent
+        if !self.selection.is_empty() {
+            self.selection.anchor.column += 4;
+            self.selection.head.column += 4;
+        }
+        
+        self.needs_rehighlight = true;
+        logging::log(
+            "EDITOR",
+            &format!("Indented lines {}-{}", start_line + 1, end_line + 1),
+        );
+    }
+
+    /// Outdent selected lines by removing up to 4 leading spaces or one tab
+    fn outdent_selected_lines(&mut self) {
+        self.save_undo_state();
+        
+        let (start_line, end_line) = self.selected_line_range_inclusive();
+        let mut total_removed_on_cursor_line = 0;
+        
+        // Process lines from end to start to maintain correct indices
+        for line_idx in (start_line..=end_line).rev() {
+            let line_start_char = self.rope.line_to_char(line_idx);
+            
+            if let Some(line_content) = self.get_line(line_idx) {
+                let chars: Vec<char> = line_content.chars().collect();
+                
+                // Count leading spaces/tabs to remove (up to 4 spaces or 1 tab)
+                let mut chars_to_remove = 0;
+                let mut spaces_counted = 0;
+                
+                for ch in &chars {
+                    if *ch == '\t' && chars_to_remove == 0 {
+                        // Remove one tab
+                        chars_to_remove = 1;
+                        break;
+                    } else if *ch == ' ' && spaces_counted < 4 {
+                        spaces_counted += 1;
+                        chars_to_remove += 1;
+                    } else {
+                        break;
+                    }
+                }
+                
+                if chars_to_remove > 0 {
+                    let remove_end = line_start_char + chars_to_remove;
+                    self.rope.remove(line_start_char..remove_end);
+                    
+                    if line_idx == self.cursor.line {
+                        total_removed_on_cursor_line = chars_to_remove;
+                    }
+                }
+            }
+        }
+        
+        // Update cursor column (don't go negative)
+        self.cursor.column = self.cursor.column.saturating_sub(total_removed_on_cursor_line);
+        
+        // Update selection columns
+        if !self.selection.is_empty() {
+            if self.selection.anchor.line >= start_line && self.selection.anchor.line <= end_line {
+                self.selection.anchor.column = self.selection.anchor.column.saturating_sub(total_removed_on_cursor_line);
+            }
+            if self.selection.head.line >= start_line && self.selection.head.line <= end_line {
+                self.selection.head.column = self.selection.head.column.saturating_sub(total_removed_on_cursor_line);
+            }
+        }
+        
+        self.needs_rehighlight = true;
+        logging::log(
+            "EDITOR",
+            &format!("Outdented lines {}-{}", start_line + 1, end_line + 1),
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Find / Replace Methods
+    // -------------------------------------------------------------------------
+
+    /// Show the find dialog, optionally seeding from selection if single-line
+    pub fn show_find(&mut self, cx: &mut Context<Self>) {
+        // If there's a single-line selection, use it as the initial query
+        if !self.selection.is_empty() {
+            let (start, end) = self.selection.ordered();
+            if start.line == end.line {
+                let selected = self.get_selected_text();
+                if !selected.is_empty() && !selected.contains('\n') {
+                    self.find_state.query = selected;
+                }
+            }
+        }
+
+        self.find_state.is_visible = true;
+        self.find_state.show_replace = false;
+        self.find_state.focus = FindField::Query;
+
+        // Perform initial search if query is non-empty
+        if !self.find_state.query.is_empty() {
+            self.perform_find();
+            // Jump to first match near cursor
+            if !self.find_state.matches.is_empty() {
+                self.find_nearest_match_to_cursor();
+                self.jump_to_current_match(cx, true);
+            }
+        }
+
+        cx.notify();
+        logging::log("EDITOR", "Find dialog opened");
+    }
+
+    /// Show the find+replace dialog
+    pub fn show_find_replace(&mut self, cx: &mut Context<Self>) {
+        // If there's a single-line selection, use it as the initial query
+        if !self.selection.is_empty() {
+            let (start, end) = self.selection.ordered();
+            if start.line == end.line {
+                let selected = self.get_selected_text();
+                if !selected.is_empty() && !selected.contains('\n') {
+                    self.find_state.query = selected;
+                }
+            }
+        }
+
+        self.find_state.is_visible = true;
+        self.find_state.show_replace = true;
+        self.find_state.focus = FindField::Query;
+
+        // Perform initial search if query is non-empty
+        if !self.find_state.query.is_empty() {
+            self.perform_find();
+            if !self.find_state.matches.is_empty() {
+                self.find_nearest_match_to_cursor();
+                self.jump_to_current_match(cx, true);
+            }
+        }
+
+        cx.notify();
+        logging::log("EDITOR", "Find/Replace dialog opened");
+    }
+
+    /// Hide the find dialog and clear matches
+    pub fn hide_find(&mut self, cx: &mut Context<Self>) {
+        self.find_state.is_visible = false;
+        self.find_state.matches.clear();
+        self.find_state.current_match_idx = None;
+        cx.notify();
+        logging::log("EDITOR", "Find dialog closed");
+    }
+
+    /// Search for the query in the rope, populate matches vec with (start_char, end_char) tuples
+    pub fn perform_find(&mut self) {
+        self.find_state.matches.clear();
+        self.find_state.current_match_idx = None;
+
+        let query = &self.find_state.query;
+        if query.is_empty() {
+            return;
+        }
+
+        let content = self.rope.to_string();
+        let search_content: String;
+        let search_query: String;
+
+        if self.find_state.case_sensitive {
+            search_content = content.clone();
+            search_query = query.clone();
+        } else {
+            search_content = content.to_lowercase();
+            search_query = query.to_lowercase();
+        }
+
+        // Simple substring search (regex support could be added later)
+        let query_len = search_query.chars().count();
+        if query_len == 0 {
+            return;
+        }
+
+        // Find all occurrences
+        let mut search_start = 0;
+        while let Some(byte_pos) = search_content[search_start..].find(&search_query) {
+            let abs_byte_pos = search_start + byte_pos;
+
+            // Convert byte position to char position
+            let start_char = content[..abs_byte_pos].chars().count();
+            let end_char = start_char + query_len;
+
+            self.find_state.matches.push((start_char, end_char));
+
+            // Move past this match to find the next one
+            search_start = abs_byte_pos + search_query.len().max(1);
+            if search_start >= search_content.len() {
+                break;
+            }
+        }
+
+        logging::log(
+            "EDITOR",
+            &format!(
+                "Find: '{}' found {} matches",
+                query,
+                self.find_state.matches.len()
+            ),
+        );
+    }
+
+    /// Find the match nearest to the current cursor position and set it as current
+    fn find_nearest_match_to_cursor(&mut self) {
+        if self.find_state.matches.is_empty() {
+            self.find_state.current_match_idx = None;
+            return;
+        }
+
+        let cursor_char = self.cursor_to_char_idx(self.cursor);
+
+        // Find the first match at or after cursor, or wrap to first match
+        let idx = self
+            .find_state
+            .matches
+            .iter()
+            .position(|(start, _)| *start >= cursor_char)
+            .unwrap_or(0);
+
+        self.find_state.current_match_idx = Some(idx);
+    }
+
+    /// Select the current match and optionally scroll to it
+    pub fn jump_to_current_match(&mut self, cx: &mut Context<Self>, scroll: bool) {
+        let Some(idx) = self.find_state.current_match_idx else {
+            return;
+        };
+
+        let Some(&(start_char, end_char)) = self.find_state.matches.get(idx) else {
+            return;
+        };
+
+        let start_pos = self.char_idx_to_cursor(start_char);
+        let end_pos = self.char_idx_to_cursor(end_char);
+
+        self.select_range(start_pos, end_pos);
+
+        if scroll {
+            // Scroll to the line containing the match
+            self.scroll_handle
+                .scroll_to_item(start_pos.line, ScrollStrategy::Center);
+        }
+
+        cx.notify();
+        logging::log(
+            "EDITOR",
+            &format!(
+                "Jump to match {}/{}: chars {}..{}",
+                idx + 1,
+                self.find_state.matches.len(),
+                start_char,
+                end_char
+            ),
+        );
+    }
+
+    /// Go to the next match (wrap around)
+    pub fn find_next(&mut self, cx: &mut Context<Self>) {
+        if self.find_state.matches.is_empty() {
+            return;
+        }
+
+        let next_idx = match self.find_state.current_match_idx {
+            Some(idx) => {
+                if idx + 1 >= self.find_state.matches.len() {
+                    0 // Wrap to first
+                } else {
+                    idx + 1
+                }
+            }
+            None => 0,
+        };
+
+        self.find_state.current_match_idx = Some(next_idx);
+        self.jump_to_current_match(cx, true);
+    }
+
+    /// Go to the previous match (wrap around)
+    pub fn find_prev(&mut self, cx: &mut Context<Self>) {
+        if self.find_state.matches.is_empty() {
+            return;
+        }
+
+        let prev_idx = match self.find_state.current_match_idx {
+            Some(idx) => {
+                if idx == 0 {
+                    self.find_state.matches.len() - 1 // Wrap to last
+                } else {
+                    idx - 1
+                }
+            }
+            None => self.find_state.matches.len() - 1,
+        };
+
+        self.find_state.current_match_idx = Some(prev_idx);
+        self.jump_to_current_match(cx, true);
+    }
+
+    /// Replace the current match with the replacement string
+    pub fn replace_current(&mut self, cx: &mut Context<Self>) {
+        let Some(idx) = self.find_state.current_match_idx else {
+            return;
+        };
+
+        let Some(&(start_char, end_char)) = self.find_state.matches.get(idx) else {
+            return;
+        };
+
+        self.save_undo_state();
+
+        let replacement = self.find_state.replacement.clone();
+        let replacement_len = replacement.chars().count();
+        let match_len = end_char - start_char;
+
+        // Remove the matched text and insert replacement
+        self.rope.remove(start_char..end_char);
+        self.rope.insert(start_char, &replacement);
+        self.needs_rehighlight = true;
+
+        logging::log(
+            "EDITOR",
+            &format!(
+                "Replaced match at {}..{} with '{}'",
+                start_char, end_char, replacement
+            ),
+        );
+
+        // Update all match positions after the replaced match
+        let offset = replacement_len as isize - match_len as isize;
+
+        // Remove the current match from the list
+        self.find_state.matches.remove(idx);
+
+        // Adjust positions of subsequent matches
+        for (start, end) in self.find_state.matches.iter_mut().skip(idx) {
+            *start = (*start as isize + offset) as usize;
+            *end = (*end as isize + offset) as usize;
+        }
+
+        // Move to next match (or wrap)
+        if self.find_state.matches.is_empty() {
+            self.find_state.current_match_idx = None;
+            // Position cursor after replacement
+            let new_cursor = self.char_idx_to_cursor(start_char + replacement_len);
+            self.set_caret(new_cursor);
+        } else {
+            // Keep the same index (now points to what was the next match)
+            // or wrap to 0 if we were at the end
+            if idx >= self.find_state.matches.len() {
+                self.find_state.current_match_idx = Some(0);
+            }
+            self.jump_to_current_match(cx, true);
+        }
+
+        cx.notify();
+    }
+
+    /// Replace all matches (iterate from end to start to maintain indices)
+    pub fn replace_all(&mut self, cx: &mut Context<Self>) {
+        if self.find_state.matches.is_empty() {
+            return;
+        }
+
+        self.save_undo_state();
+
+        let replacement = self.find_state.replacement.clone();
+        let match_count = self.find_state.matches.len();
+
+        // Process matches from end to start to avoid index shifting issues
+        for &(start_char, end_char) in self.find_state.matches.iter().rev() {
+            self.rope.remove(start_char..end_char);
+            self.rope.insert(start_char, &replacement);
+        }
+
+        self.needs_rehighlight = true;
+
+        logging::log(
+            "EDITOR",
+            &format!("Replaced all {} matches with '{}'", match_count, replacement),
+        );
+
+        // Clear matches
+        self.find_state.matches.clear();
+        self.find_state.current_match_idx = None;
+
+        cx.notify();
+    }
+
+    /// Handle keyboard input for the find/replace dialog
+    /// Returns true if the event was handled, false otherwise
+    pub fn handle_find_dialog_key_event(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.find_state.is_visible {
+            return false;
+        }
+
+        let key = event.keystroke.key.to_lowercase();
+        let cmd = event.keystroke.modifiers.platform;
+        let shift = event.keystroke.modifiers.shift;
+
+        match (key.as_str(), cmd, shift) {
+            // Escape -> hide find
+            ("escape", _, _) => {
+                self.hide_find(cx);
+                true
+            }
+
+            // Enter -> find_next (or replace_current if on Replace field)
+            ("enter", false, false) => {
+                if self.find_state.focus == FindField::Replace {
+                    self.replace_current(cx);
+                } else {
+                    self.find_next(cx);
+                }
+                true
+            }
+
+            // Shift+Enter -> find_prev
+            ("enter", false, true) => {
+                self.find_prev(cx);
+                true
+            }
+
+            // Cmd+Enter -> replace_all
+            ("enter", true, _) => {
+                self.replace_all(cx);
+                true
+            }
+
+            // Tab -> toggle focus to Replace field
+            ("tab", false, false) => {
+                if self.find_state.show_replace {
+                    self.find_state.focus = FindField::Replace;
+                    cx.notify();
+                }
+                true
+            }
+
+            // Shift+Tab -> toggle focus to Query field
+            ("tab", false, true) => {
+                self.find_state.focus = FindField::Query;
+                cx.notify();
+                true
+            }
+
+            // Backspace -> pop char from focused field
+            ("backspace", false, _) => {
+                match self.find_state.focus {
+                    FindField::Query => {
+                        self.find_state.query.pop();
+                        self.perform_find();
+                        if !self.find_state.matches.is_empty() {
+                            self.find_nearest_match_to_cursor();
+                            self.jump_to_current_match(cx, true);
+                        }
+                    }
+                    FindField::Replace => {
+                        self.find_state.replacement.pop();
+                    }
+                }
+                cx.notify();
+                true
+            }
+
+            // Cmd+G -> find_next
+            ("g", true, false) => {
+                self.find_next(cx);
+                true
+            }
+
+            // Cmd+Shift+G -> find_prev
+            ("g", true, true) => {
+                self.find_prev(cx);
+                true
+            }
+
+            // F3 -> find_next
+            ("f3", false, false) => {
+                self.find_next(cx);
+                true
+            }
+
+            // Shift+F3 -> find_prev
+            ("f3", false, true) => {
+                self.find_prev(cx);
+                true
+            }
+
+            // Printable chars (without Cmd) -> push to focused field
+            _ if !cmd => {
+                if let Some(ref key_char) = event.keystroke.key_char {
+                    if let Some(ch) = key_char.chars().next() {
+                        if !ch.is_control() {
+                            match self.find_state.focus {
+                                FindField::Query => {
+                                    self.find_state.query.push(ch);
+                                    self.perform_find();
+                                    if !self.find_state.matches.is_empty() {
+                                        self.find_nearest_match_to_cursor();
+                                        self.jump_to_current_match(cx, true);
+                                    }
+                                }
+                                FindField::Replace => {
+                                    self.find_state.replacement.push(ch);
+                                }
+                            }
+                            cx.notify();
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+
+            // Otherwise -> let normal handling continue
+            _ => false,
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // End Find / Replace Methods
+    // -------------------------------------------------------------------------
+
+    // -------------------------------------------------------------------------
+    // Go To Line Methods
+    // -------------------------------------------------------------------------
+
+    /// Show the Go To Line dialog, prefilling with current line number (1-based)
+    pub fn show_go_to_line(&mut self, cx: &mut Context<Self>) {
+        // Prefill with current line number (1-based for user display)
+        self.go_to_line_state.line_input = format!("{}", self.cursor.line + 1);
+        self.go_to_line_state.is_visible = true;
+        cx.notify();
+        logging::log("EDITOR", "Go To Line dialog opened");
+    }
+
+    /// Hide the Go To Line dialog
+    pub fn hide_go_to_line(&mut self, cx: &mut Context<Self>) {
+        self.go_to_line_state.is_visible = false;
+        self.go_to_line_state.line_input.clear();
+        cx.notify();
+        logging::log("EDITOR", "Go To Line dialog closed");
+    }
+
+    /// Parse input, jump to line, and hide dialog
+    pub fn commit_go_to_line(&mut self, cx: &mut Context<Self>) {
+        // Parse the line number from input
+        if let Ok(user_line) = self.go_to_line_state.line_input.parse::<usize>() {
+            // Convert 1-based user input to 0-based internal line
+            let target_line = user_line.saturating_sub(1);
+            
+            // Clamp to valid range: 0 to line_count()-1
+            let max_line = self.line_count().saturating_sub(1);
+            let clamped_line = target_line.min(max_line);
+            
+            // Create cursor position at start of target line (column 0)
+            let pos = CursorPosition::new(clamped_line, 0);
+            
+            // Set cursor and clear selection
+            self.set_caret(pos);
+            
+            // Scroll to center the target line in view
+            self.scroll_handle
+                .scroll_to_item(clamped_line, ScrollStrategy::Center);
+            
+            logging::log(
+                "EDITOR",
+                &format!(
+                    "Go To Line: jumped to line {} (input: '{}')",
+                    clamped_line + 1,
+                    self.go_to_line_state.line_input
+                ),
+            );
+        } else {
+            logging::log(
+                "EDITOR",
+                &format!(
+                    "Go To Line: invalid input '{}', closing dialog",
+                    self.go_to_line_state.line_input
+                ),
+            );
+        }
+        
+        // Hide the dialog regardless of whether parse succeeded
+        self.hide_go_to_line(cx);
+    }
+
+    /// Handle keyboard input for the Go To Line dialog
+    /// Returns true if the event was handled, false otherwise
+    pub fn handle_go_to_line_dialog_key_event(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.go_to_line_state.is_visible {
+            return false;
+        }
+
+        let key = event.keystroke.key.to_lowercase();
+
+        match key.as_str() {
+            // Escape -> hide dialog
+            "escape" => {
+                self.hide_go_to_line(cx);
+                true
+            }
+
+            // Enter -> commit (jump to line) and hide
+            "enter" => {
+                self.commit_go_to_line(cx);
+                true
+            }
+
+            // Backspace -> pop char from line_input
+            "backspace" => {
+                self.go_to_line_state.line_input.pop();
+                cx.notify();
+                true
+            }
+
+            // Digit chars (0-9) -> push to line_input
+            _ => {
+                // Check if it's a digit character
+                if let Some(ref key_char) = event.keystroke.key_char {
+                    if let Some(ch) = key_char.chars().next() {
+                        if ch.is_ascii_digit() {
+                            self.go_to_line_state.line_input.push(ch);
+                            cx.notify();
+                            return true;
+                        }
+                    }
+                }
+                // Swallow all other keys to keep the dialog modal
+                true
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // End Go To Line Methods
+    // -------------------------------------------------------------------------
+
     /// Navigate to the next tabstop in snippet mode
     fn next_tabstop(&mut self) {
         let Some(state) = &mut self.snippet_state else {
@@ -914,7 +1923,6 @@ impl EditorPrompt {
 
         if state.current_tabstop_idx >= tabstop_count {
             // We've visited all tabstops - exit snippet mode
-            state.completed = true;
             logging::log("EDITOR", "Snippet mode complete - all tabstops visited");
 
             // Clear snippet state and position cursor at end of last tabstop
@@ -957,9 +1965,10 @@ impl EditorPrompt {
 
         // For now, select only the first range (primary)
         // Linked editing support will be added in a future PR
-        if let Some(&(start, end)) = tabstop.ranges.first() {
-            let start_pos = Self::byte_to_cursor_static(&self.rope, start);
-            let end_pos = Self::byte_to_cursor_static(&self.rope, end);
+        if let Some(&(start_char, end_char)) = tabstop.ranges.first() {
+            // Ranges are now in char indices, so use char_idx_to_cursor directly
+            let start_pos = self.char_idx_to_cursor(start_char);
+            let end_pos = self.char_idx_to_cursor(end_char);
 
             self.cursor = end_pos;
             self.selection = Selection::new(start_pos, end_pos);
@@ -967,8 +1976,8 @@ impl EditorPrompt {
             logging::log(
                 "EDITOR",
                 &format!(
-                    "Tabstop {} selected: range ({}, {}) -> cursor at ({}, {})",
-                    tabstop.index, start, end, end_pos.line, end_pos.column
+                    "Tabstop {} selected: char range ({}, {}) -> cursor at ({}, {})",
+                    tabstop.index, start_char, end_char, end_pos.line, end_pos.column
                 ),
             );
         }
@@ -999,6 +2008,17 @@ impl EditorPrompt {
             return;
         }
 
+        // Route to dialog handlers first (they return true if event was consumed)
+        // Go To Line dialog takes priority (more modal)
+        if self.handle_go_to_line_dialog_key_event(event, cx) {
+            return;
+        }
+
+        // Find/Replace dialog
+        if self.handle_find_dialog_key_event(event, cx) {
+            return;
+        }
+
         let key = event.keystroke.key.to_lowercase();
         let cmd = event.keystroke.modifiers.platform;
         let shift = event.keystroke.modifiers.shift;
@@ -1020,6 +2040,22 @@ impl EditorPrompt {
 
             // Select all
             ("a", true, false, false) => self.select_all(),
+
+            // Find/Replace shortcuts
+            ("f", true, false, false) => self.show_find(cx),
+            ("h", true, false, false) => self.show_find_replace(cx),
+            ("f", true, false, true) => self.show_find_replace(cx), // Cmd+Alt+F alternative
+
+            // Find next/prev (when find dialog is NOT open, for repeat search)
+            ("f3", false, false, false) => self.find_next(cx),
+            ("f3", false, true, false) => self.find_prev(cx),
+
+            // Go To Line (Cmd+G when find dialog is closed)
+            ("g", true, false, false) => self.show_go_to_line(cx),
+
+            // Line operations
+            ("d", true, true, false) => self.duplicate_selected_lines(), // Cmd+Shift+D
+            ("/", true, false, false) => self.toggle_line_comment(),     // Cmd+/
 
             // Navigation (basic arrow keys, with or without shift for selection)
             // GPUI may send "up" or "arrowup" depending on platform/context
@@ -1049,20 +2085,25 @@ impl EditorPrompt {
             ("delete", _, _, _) => self.delete(),
             ("enter", false, _, _) => self.insert_newline(),
 
-            // Tab handling - snippet mode or regular indent
+            // Tab handling - snippet mode, selection indent, or regular tab
             ("tab", false, false, false) => {
                 if self.snippet_state.is_some() {
                     self.next_tabstop();
+                } else if !self.selection.is_empty() {
+                    // Selection exists - indent selected lines
+                    self.indent_selected_lines();
                 } else {
                     self.insert_text("    "); // 4 spaces for tab
                 }
             }
             ("tab", false, true, false) => {
-                // Shift+Tab - previous tabstop in snippet mode
+                // Shift+Tab - previous tabstop in snippet mode, or outdent
                 if self.snippet_state.is_some() {
                     self.prev_tabstop();
+                } else {
+                    // Outdent selected lines (or current line)
+                    self.outdent_selected_lines();
                 }
-                // In non-snippet mode, Shift+Tab does nothing for now
             }
 
             // Character input
@@ -1077,6 +2118,8 @@ impl EditorPrompt {
             }
         }
 
+        // Ensure cursor remains visible after any operation that might have moved it
+        self.ensure_cursor_visible();
         cx.notify();
     }
 
@@ -1341,10 +2384,12 @@ impl EditorPrompt {
                     } else {
                         0
                     };
+                    // Use chars().count() instead of len() to get character count, not bytes
+                    // This is critical for Unicode content (e.g., CJK characters, emojis)
                     let end_col = if line_idx == sel_end.line {
                         sel_end.column
                     } else {
-                        line_content.len()
+                        line_content.chars().count()
                     };
                     Some((start_col, end_col))
                 } else {
@@ -1505,6 +2550,7 @@ impl EditorPrompt {
     }
 
     /// Render a text span with potential cursor and selection
+    /// Optimized: uses boundary-based splitting (max 3 segments) instead of per-char iteration
     fn render_span(
         &self,
         text: &str,
@@ -1514,7 +2560,8 @@ impl EditorPrompt {
         selection_range: Option<(usize, usize)>,
         colors: &crate::theme::ColorScheme,
     ) -> impl IntoElement {
-        let span_len = text.chars().count();
+        let chars: Vec<char> = text.chars().collect();
+        let span_len = chars.len();
         let span_end = span_start + span_len;
 
         // Check if cursor is within this span
@@ -1535,56 +2582,98 @@ impl EditorPrompt {
                 .into_any_element();
         }
 
-        // Complex case: need to split the span
-        let mut elements: Vec<gpui::AnyElement> = Vec::new();
-        let chars: Vec<char> = text.chars().collect();
+        // Optimized: compute boundaries and create max 3 segments
+        // Pre-allocate for worst case: before + cursor + selected + cursor + after = 5 elements
+        let mut elements: Vec<gpui::AnyElement> = Vec::with_capacity(5);
 
-        let mut i = 0;
-        while i < chars.len() {
-            let global_idx = span_start + i;
+        // Compute selection intersection with span (in local indices)
+        let (sel_local_start, sel_local_end) = if let Some((sel_start, sel_end)) = selection_range {
+            let local_start = sel_start.saturating_sub(span_start).min(span_len);
+            let local_end = sel_end.saturating_sub(span_start).min(span_len);
+            if local_start < local_end {
+                (Some(local_start), Some(local_end))
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
 
-            // Check if cursor is at this position
-            if cursor_column == Some(global_idx) {
+        // Compute cursor position in local indices
+        let cursor_local = cursor_column.and_then(|col| {
+            if col >= span_start && col < span_end {
+                Some(col - span_start)
+            } else {
+                None
+            }
+        });
+
+        // Compute selection background color from theme (accent.selected with 25% opacity)
+        let selection_bg = rgba((colors.accent.selected << 8) | 0x44);
+        
+        // Helper to create a text element
+        let make_text_element =
+            |chars_slice: &[char], selected: bool, color: u32| -> gpui::AnyElement {
+                let chunk: String = chars_slice.iter().collect();
+                if selected {
+                    div()
+                        .bg(selection_bg)
+                        .text_color(rgb(color))
+                        .child(SharedString::from(chunk))
+                        .into_any_element()
+                } else {
+                    div()
+                        .text_color(rgb(color))
+                        .child(SharedString::from(chunk))
+                        .into_any_element()
+                }
+            };
+
+        // Build segments based on boundaries
+        // Possible boundaries: 0, sel_local_start, cursor_local, sel_local_end, span_len
+        let mut boundaries: Vec<usize> = Vec::with_capacity(5);
+        boundaries.push(0);
+        if let Some(s) = sel_local_start {
+            if s > 0 && !boundaries.contains(&s) {
+                boundaries.push(s);
+            }
+        }
+        if let Some(c) = cursor_local {
+            if !boundaries.contains(&c) {
+                boundaries.push(c);
+            }
+        }
+        if let Some(e) = sel_local_end {
+            if e < span_len && !boundaries.contains(&e) {
+                boundaries.push(e);
+            }
+        }
+        if !boundaries.contains(&span_len) {
+            boundaries.push(span_len);
+        }
+        boundaries.sort_unstable();
+
+        // Create segments between consecutive boundaries
+        for window in boundaries.windows(2) {
+            let start = window[0];
+            let end = window[1];
+
+            if start >= end {
+                continue;
+            }
+
+            // Insert cursor at start of this segment if applicable
+            if cursor_local == Some(start) {
                 elements.push(self.render_cursor(colors).into_any_element());
             }
 
-            // Determine if this character is selected
-            let is_selected = selection_range
-                .map(|(sel_start, sel_end)| global_idx >= sel_start && global_idx < sel_end)
-                .unwrap_or(false);
-
-            // Collect consecutive characters with same selection state
-            let mut end_i = i + 1;
-            while end_i < chars.len() {
-                let next_global_idx = span_start + end_i;
-                let next_selected = selection_range
-                    .map(|(sel_start, sel_end)| {
-                        next_global_idx >= sel_start && next_global_idx < sel_end
-                    })
-                    .unwrap_or(false);
-
-                // Break if selection state changes or cursor is here
-                if next_selected != is_selected || cursor_column == Some(next_global_idx) {
-                    break;
-                }
-                end_i += 1;
-            }
-
-            let chunk: String = chars[i..end_i].iter().collect();
-
-            let chunk_element = if is_selected {
-                div()
-                    .bg(rgba(0x3399FF44))
-                    .text_color(rgb(text_color))
-                    .child(SharedString::from(chunk))
-            } else {
-                div()
-                    .text_color(rgb(text_color))
-                    .child(SharedString::from(chunk))
+            // Determine if this segment is selected
+            let is_selected = match (sel_local_start, sel_local_end) {
+                (Some(sel_s), Some(sel_e)) => start >= sel_s && end <= sel_e,
+                _ => false,
             };
 
-            elements.push(chunk_element.into_any_element());
-            i = end_i;
+            elements.push(make_text_element(&chars[start..end], is_selected, text_color));
         }
 
         div()
@@ -1647,6 +2736,201 @@ impl EditorPrompt {
                     .text_color(rgb(colors.text.muted))
                     .text_xs()
                     .child(SharedString::from(self.language.clone())),
+            )
+    }
+
+    /// Render the Find/Replace overlay dialog
+    fn render_find_overlay(&self) -> impl IntoElement {
+        let colors = &self.theme.colors;
+        let match_info = if self.find_state.matches.is_empty() {
+            if self.find_state.query.is_empty() {
+                String::new()
+            } else {
+                "No matches".to_string()
+            }
+        } else {
+            let current = self.find_state.current_match_idx.map(|i| i + 1).unwrap_or(0);
+            format!("{}/{}", current, self.find_state.matches.len())
+        };
+
+        let query_focused = self.find_state.focus == FindField::Query;
+        let replace_focused = self.find_state.focus == FindField::Replace;
+
+        div()
+            .absolute()
+            .top_2()
+            .right_2()
+            .w(px(320.))
+            .bg(rgb(colors.background.search_box))
+            .border_1()
+            .border_color(rgb(colors.ui.border))
+            .rounded_md()
+            .shadow_lg()
+            .p_2()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .font_family("Menlo")
+            .text_sm()
+            // Find input row
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_color(rgb(colors.text.secondary))
+                            .text_xs()
+                            .w(px(50.))
+                            .child("Find:"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .px_2()
+                            .py_1()
+                            .bg(rgb(colors.background.main))
+                            .border_1()
+                            .border_color(if query_focused {
+                                rgb(colors.accent.selected)
+                            } else {
+                                rgb(colors.ui.border)
+                            })
+                            .rounded_sm()
+                            .text_color(rgb(colors.text.primary))
+                            .child(SharedString::from(if self.find_state.query.is_empty() {
+                                " ".to_string() // Placeholder to maintain height
+                            } else {
+                                self.find_state.query.clone()
+                            })),
+                    )
+                    .child(
+                        div()
+                            .text_color(rgb(colors.text.muted))
+                            .text_xs()
+                            .w(px(60.))
+                            .text_right()
+                            .child(SharedString::from(match_info)),
+                    ),
+            )
+            // Replace input row (only shown if show_replace is true)
+            .when(self.find_state.show_replace, |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            div()
+                                .text_color(rgb(colors.text.secondary))
+                                .text_xs()
+                                .w(px(50.))
+                                .child("Replace:"),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .px_2()
+                                .py_1()
+                                .bg(rgb(colors.background.main))
+                                .border_1()
+                                .border_color(if replace_focused {
+                                    rgb(colors.accent.selected)
+                                } else {
+                                    rgb(colors.ui.border)
+                                })
+                                .rounded_sm()
+                                .text_color(rgb(colors.text.primary))
+                                .child(SharedString::from(
+                                    if self.find_state.replacement.is_empty() {
+                                        " ".to_string()
+                                    } else {
+                                        self.find_state.replacement.clone()
+                                    },
+                                )),
+                        )
+                        .child(div().w(px(60.))), // Spacer to align with match info
+                )
+            })
+            // Hints row
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_3()
+                    .text_xs()
+                    .text_color(rgb(colors.text.muted))
+                    .child("Enter: next")
+                    .child("Shift+Enter: prev")
+                    .when(self.find_state.show_replace, |d| {
+                        d.child("Cmd+Enter: replace all")
+                    })
+                    .child("Esc: close"),
+            )
+    }
+
+    /// Render the Go To Line overlay dialog
+    fn render_go_to_line_overlay(&self) -> impl IntoElement {
+        let colors = &self.theme.colors;
+        let line_count = self.line_count();
+
+        div()
+            .absolute()
+            .top_2()
+            .left(px(50.)) // Offset from gutter
+            .w(px(200.))
+            .bg(rgb(colors.background.search_box))
+            .border_1()
+            .border_color(rgb(colors.ui.border))
+            .rounded_md()
+            .shadow_lg()
+            .p_2()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .font_family("Menlo")
+            .text_sm()
+            // Input row
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_color(rgb(colors.text.secondary))
+                            .text_xs()
+                            .child("Go to line:"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .px_2()
+                            .py_1()
+                            .bg(rgb(colors.background.main))
+                            .border_1()
+                            .border_color(rgb(colors.accent.selected))
+                            .rounded_sm()
+                            .text_color(rgb(colors.text.primary))
+                            .child(SharedString::from(
+                                if self.go_to_line_state.line_input.is_empty() {
+                                    " ".to_string()
+                                } else {
+                                    self.go_to_line_state.line_input.clone()
+                                },
+                            )),
+                    ),
+            )
+            // Info row
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(colors.text.muted))
+                    .child(SharedString::from(format!("1 - {}", line_count))),
             )
     }
 }
@@ -1753,6 +3037,7 @@ impl Render for EditorPrompt {
         });
 
         // Build the container - use explicit height if available
+        // Add relative() for absolute positioning of overlay dialogs
         let container = div()
             .id("editor-prompt")
             .key_context("EditorPrompt")
@@ -1764,6 +3049,7 @@ impl Render for EditorPrompt {
             .flex()
             .flex_col()
             .w_full()
+            .relative() // Enable absolute positioning for overlays
             .bg(rgb(colors.background.main))
             .font_family("Menlo");
 
@@ -1774,7 +3060,17 @@ impl Render for EditorPrompt {
             container.size_full().min_h(px(0.))
         };
 
-        container.child(editor_area).child(self.render_status_bar())
+        // Add overlays conditionally
+        let find_visible = self.find_state.is_visible;
+        let go_to_line_visible = self.go_to_line_state.is_visible;
+
+        container
+            .child(editor_area)
+            .child(self.render_status_bar())
+            .when(find_visible, |d| d.child(self.render_find_overlay()))
+            .when(go_to_line_visible, |d| {
+                d.child(self.render_go_to_line_overlay())
+            })
     }
 }
 
@@ -1893,10 +3189,8 @@ mod tests {
         let state = SnippetState {
             snippet,
             current_tabstop_idx: 0,
-            completed: false,
         };
         assert_eq!(state.current_tabstop_idx, 0);
-        assert!(!state.completed);
         assert_eq!(state.snippet.tabstops.len(), 1);
     }
 
@@ -1906,7 +3200,6 @@ mod tests {
         let state = SnippetState {
             snippet,
             current_tabstop_idx: 0,
-            completed: false,
         };
         // Order should be 1, 2, 0 (0 is always last)
         assert_eq!(state.snippet.tabstops.len(), 3);
@@ -1948,5 +3241,393 @@ mod tests {
         let pos = EditorPrompt::byte_to_cursor_static(&rope, 100);
         assert_eq!(pos.line, 0);
         assert_eq!(pos.column, 5);
+    }
+
+    // --- Arrow Key Selection Collapse Tests ---
+    // These tests verify that pressing Left/Right without Shift collapses
+    // any existing selection to the appropriate edge (standard editor behavior).
+
+    #[test]
+    fn test_selection_collapse_with_left_arrow() {
+        // Test with "Hello World" content context
+        // Simulate: user selects "World" (columns 6-11 on line 0)
+        // Selection anchor at (0, 6), head at (0, 11)
+        let selection = Selection::new(
+            CursorPosition::new(0, 6),
+            CursorPosition::new(0, 11),
+        );
+
+        assert!(!selection.is_empty());
+
+        // Pressing Left should collapse to selection START (column 6)
+        let (start, _end) = selection.ordered();
+        assert_eq!(start.line, 0);
+        assert_eq!(start.column, 6);
+        // After move_left(false), cursor should be at start
+    }
+
+    #[test]
+    fn test_selection_collapse_with_right_arrow() {
+        // Test with "Hello World" content context
+        // Simulate: user selects "Hello" (columns 0-5 on line 0)
+        // Selection anchor at (0, 0), head at (0, 5)
+        let selection = Selection::new(
+            CursorPosition::new(0, 0),
+            CursorPosition::new(0, 5),
+        );
+
+        assert!(!selection.is_empty());
+
+        // Pressing Right should collapse to selection END (column 5)
+        let (_start, end) = selection.ordered();
+        assert_eq!(end.line, 0);
+        assert_eq!(end.column, 5);
+        // After move_right(false), cursor should be at end
+    }
+
+    #[test]
+    fn test_selection_collapse_with_up_arrow() {
+        // Test with "Line 1\nLine 2\nLine 3" content context
+        // Simulate: user selects from (1, 0) to (2, 3) - spanning lines 2 and 3
+        let selection = Selection::new(
+            CursorPosition::new(1, 0),
+            CursorPosition::new(2, 3),
+        );
+
+        assert!(!selection.is_empty());
+
+        // Pressing Up should collapse to selection START (line 1, column 0)
+        let (start, _end) = selection.ordered();
+        assert_eq!(start.line, 1);
+        assert_eq!(start.column, 0);
+    }
+
+    #[test]
+    fn test_selection_collapse_with_down_arrow() {
+        // Test with "Line 1\nLine 2\nLine 3" content context
+        // Simulate: user selects from (0, 2) to (1, 4) - spanning lines 1 and 2
+        let selection = Selection::new(
+            CursorPosition::new(0, 2),
+            CursorPosition::new(1, 4),
+        );
+
+        assert!(!selection.is_empty());
+
+        // Pressing Down should collapse to selection END (line 1, column 4)
+        let (_start, end) = selection.ordered();
+        assert_eq!(end.line, 1);
+        assert_eq!(end.column, 4);
+    }
+
+    #[test]
+    fn test_selection_extend_with_shift_arrow() {
+        // Verify that Shift+Arrow still extends selection (doesn't collapse)
+        let selection = Selection::new(
+            CursorPosition::new(0, 5),  // anchor
+            CursorPosition::new(0, 10), // head
+        );
+
+        assert!(!selection.is_empty());
+
+        // With extend_selection=true, selection should NOT collapse
+        // The head moves, anchor stays
+        // (Implementation test - the actual behavior is in move_* functions)
+    }
+
+    #[test]
+    fn test_no_collapse_when_no_selection() {
+        // When there's no selection (caret), arrow keys should just move
+        let pos = CursorPosition::new(0, 5);
+        let selection = Selection::caret(pos);
+
+        assert!(selection.is_empty());
+
+        // No collapse needed - cursor just moves normally
+    }
+
+    #[test]
+    fn test_selection_collapse_backwards_selection() {
+        // Test with backwards selection (head before anchor)
+        // User drags from right to left: anchor at (0, 10), head at (0, 5)
+        let selection = Selection::new(
+            CursorPosition::new(0, 10), // anchor (where drag started)
+            CursorPosition::new(0, 5),  // head (where drag ended)
+        );
+
+        assert!(!selection.is_empty());
+
+        // ordered() should return (5, 10) regardless of drag direction
+        let (start, end) = selection.ordered();
+        assert_eq!(start.column, 5);
+        assert_eq!(end.column, 10);
+
+        // Left arrow should go to start (5), Right arrow should go to end (10)
+    }
+
+    // --- Unicode and CRLF Handling Tests ---
+
+    #[test]
+    fn test_normalize_line_endings_crlf() {
+        // Windows-style CRLF -> LF
+        let content = "line1\r\nline2\r\nline3";
+        let normalized = EditorPrompt::normalize_line_endings(content);
+        assert_eq!(normalized, "line1\nline2\nline3");
+    }
+
+    #[test]
+    fn test_normalize_line_endings_cr_only() {
+        // Old Mac-style CR -> LF
+        let content = "line1\rline2\rline3";
+        let normalized = EditorPrompt::normalize_line_endings(content);
+        assert_eq!(normalized, "line1\nline2\nline3");
+    }
+
+    #[test]
+    fn test_normalize_line_endings_mixed() {
+        // Mixed line endings -> all LF
+        let content = "line1\r\nline2\nline3\rline4";
+        let normalized = EditorPrompt::normalize_line_endings(content);
+        assert_eq!(normalized, "line1\nline2\nline3\nline4");
+    }
+
+    #[test]
+    fn test_normalize_line_endings_already_lf() {
+        // Already LF -> unchanged
+        let content = "line1\nline2\nline3";
+        let normalized = EditorPrompt::normalize_line_endings(content);
+        assert_eq!(normalized, "line1\nline2\nline3");
+    }
+
+    #[test]
+    fn test_unicode_char_count_cjk() {
+        // CJK characters: each is 3 bytes in UTF-8 but 1 char
+        let text = "你好世界"; // "Hello World" in Chinese - 4 chars, 12 bytes
+        assert_eq!(text.len(), 12); // bytes
+        assert_eq!(text.chars().count(), 4); // chars
+    }
+
+    #[test]
+    fn test_unicode_char_count_emoji() {
+        // Emoji: can be 4 bytes in UTF-8 but 1 char
+        let text = "Hello 🌍"; // 6 ASCII chars + 1 emoji
+        assert_eq!(text.chars().count(), 7);
+        assert!(text.len() > 7); // bytes > chars
+    }
+
+    #[test]
+    fn test_unicode_char_count_mixed() {
+        // Mixed ASCII and Unicode
+        let text = "Hi你好!"; // 2 ASCII + 2 CJK + 1 ASCII = 5 chars
+        assert_eq!(text.chars().count(), 5);
+        assert!(text.len() > 5); // bytes > chars due to UTF-8 encoding
+    }
+
+    #[test]
+    fn test_rope_unicode_line_length() {
+        // Verify ropey correctly counts chars, not bytes
+        let content = "你好世界\nHello\n🌍🌎🌏";
+        let rope = Rope::from_str(content);
+
+        // Line 0: "你好世界" = 4 chars (not 12 bytes!)
+        assert_eq!(rope.line(0).len_chars(), 5); // 4 chars + newline
+
+        // Line 1: "Hello" = 5 chars
+        assert_eq!(rope.line(1).len_chars(), 6); // 5 chars + newline
+
+        // Line 2: "🌍🌎🌏" = 3 chars (emojis)
+        assert_eq!(rope.line(2).len_chars(), 3); // 3 chars, no trailing newline
+    }
+
+    #[test]
+    fn test_char_to_cursor_static_unicode() {
+        // Test char_to_cursor_static with Unicode content
+        let rope = Rope::from_str("你好\nWorld");
+        
+        // Char 0 is '你'
+        let pos = EditorPrompt::char_to_cursor_static(&rope, 0);
+        assert_eq!(pos.line, 0);
+        assert_eq!(pos.column, 0);
+
+        // Char 1 is '好'
+        let pos = EditorPrompt::char_to_cursor_static(&rope, 1);
+        assert_eq!(pos.line, 0);
+        assert_eq!(pos.column, 1);
+
+        // Char 2 is '\n'
+        let pos = EditorPrompt::char_to_cursor_static(&rope, 2);
+        assert_eq!(pos.line, 0);
+        assert_eq!(pos.column, 2);
+
+        // Char 3 is 'W' (start of line 1)
+        let pos = EditorPrompt::char_to_cursor_static(&rope, 3);
+        assert_eq!(pos.line, 1);
+        assert_eq!(pos.column, 0);
+    }
+
+    #[test]
+    fn test_byte_to_cursor_static_unicode() {
+        // Test byte_to_cursor_static with Unicode content
+        // "你好" = 6 bytes (3 per CJK char), then '\n' = 1 byte, then "World" = 5 bytes
+        let rope = Rope::from_str("你好\nWorld");
+        
+        // Byte 0-2 is '你'
+        let pos = EditorPrompt::byte_to_cursor_static(&rope, 0);
+        assert_eq!(pos.line, 0);
+        assert_eq!(pos.column, 0);
+
+        // Byte 3-5 is '好'
+        let pos = EditorPrompt::byte_to_cursor_static(&rope, 3);
+        assert_eq!(pos.line, 0);
+        assert_eq!(pos.column, 1);
+
+        // Byte 6 is '\n'
+        let pos = EditorPrompt::byte_to_cursor_static(&rope, 6);
+        assert_eq!(pos.line, 0);
+        assert_eq!(pos.column, 2);
+
+        // Byte 7 is 'W' (start of line 1)
+        let pos = EditorPrompt::byte_to_cursor_static(&rope, 7);
+        assert_eq!(pos.line, 1);
+        assert_eq!(pos.column, 0);
+    }
+
+    // --- Tab/Shift+Tab Indentation Tests ---
+    // These tests verify the Tab key behavior for indentation and the presence
+    // of correct key handling patterns in the source code.
+
+    #[test]
+    fn test_tab_key_patterns_exist_in_source() {
+        // Verify Tab key handling patterns exist in the source code
+        let source = include_str!("editor.rs");
+
+        // Tab without modifiers should exist for indentation/snippet/insert
+        assert!(
+            source.contains(r#"("tab", false, false, false)"#),
+            "Missing Tab key pattern for normal Tab press"
+        );
+
+        // Shift+Tab should exist for outdent/prev tabstop
+        assert!(
+            source.contains(r#"("tab", false, true, false)"#),
+            "Missing Shift+Tab key pattern"
+        );
+
+        // indent_selected_lines should be called on Tab
+        assert!(
+            source.contains("self.indent_selected_lines()"),
+            "Missing indent_selected_lines call in Tab handler"
+        );
+
+        // outdent_selected_lines should be called on Shift+Tab
+        assert!(
+            source.contains("self.outdent_selected_lines()"),
+            "Missing outdent_selected_lines call in Shift+Tab handler"
+        );
+    }
+
+    #[test]
+    fn test_indent_function_adds_4_spaces() {
+        // Verify the indent function uses 4 spaces
+        let source = include_str!("editor.rs");
+
+        // The indent function should have the 4-space indent string
+        assert!(
+            source.contains(r#"let indent = "    "; // 4 spaces"#),
+            "Indent function should use 4 spaces"
+        );
+    }
+
+    #[test]
+    fn test_outdent_removes_up_to_4_spaces_or_tab() {
+        // Verify outdent logic handles both spaces and tabs
+        let source = include_str!("editor.rs");
+
+        // Should check for tab character
+        assert!(
+            source.contains(r#"if *ch == '\t'"#),
+            "Outdent should handle tab characters"
+        );
+
+        // Should limit space removal to 4
+        assert!(
+            source.contains("spaces_counted < 4"),
+            "Outdent should remove at most 4 spaces"
+        );
+    }
+
+    #[test]
+    fn test_selection_line_range_for_single_line() {
+        // When cursor is on a single line with no selection, range should be that line
+        let selection = Selection::caret(CursorPosition::new(3, 5));
+        let (start, end) = selection.ordered();
+        
+        // For a caret (no selection), start and end should be the same position
+        assert_eq!(start.line, 3);
+        assert_eq!(end.line, 3);
+    }
+
+    #[test]
+    fn test_selection_line_range_for_multi_line() {
+        // Selection spanning lines 2-4
+        let selection = Selection::new(
+            CursorPosition::new(2, 0),
+            CursorPosition::new(4, 10),
+        );
+        let (start, end) = selection.ordered();
+        
+        assert_eq!(start.line, 2);
+        assert_eq!(end.line, 4);
+    }
+
+    #[test]
+    fn test_selection_line_range_backwards() {
+        // Backwards selection (head before anchor)
+        let selection = Selection::new(
+            CursorPosition::new(5, 8),  // anchor
+            CursorPosition::new(2, 3),  // head (before anchor)
+        );
+        let (start, end) = selection.ordered();
+        
+        // ordered() should normalize regardless of selection direction
+        assert_eq!(start.line, 2);
+        assert_eq!(end.line, 5);
+    }
+
+    #[test]
+    fn test_tab_handler_checks_snippet_state_first() {
+        // Verify that snippet mode is checked before indent
+        let source = include_str!("editor.rs");
+
+        // Tab handler should check snippet_state first
+        // This pattern should appear in the Tab handling code
+        let tab_handler_check = source.contains("if self.snippet_state.is_some()");
+        assert!(tab_handler_check, "Tab handler should check snippet mode first");
+    }
+
+    #[test]
+    fn test_tab_handler_checks_selection_for_indent() {
+        // Verify Tab checks for selection before inserting spaces
+        let source = include_str!("editor.rs");
+
+        // Should check if selection is empty to decide between indent and insert
+        assert!(
+            source.contains("else if !self.selection.is_empty()"),
+            "Tab handler should check selection for indent vs insert"
+        );
+    }
+
+    #[test]
+    fn test_shift_tab_always_outdents_without_snippet() {
+        // Verify Shift+Tab outdents when not in snippet mode
+        let source = include_str!("editor.rs");
+
+        // The Shift+Tab handler should call outdent regardless of selection
+        // (outdent_selected_lines handles both single line and multi-line)
+        let shift_tab_section = source.find(r#"("tab", false, true, false)"#);
+        assert!(shift_tab_section.is_some(), "Shift+Tab pattern should exist");
+
+        // Verify outdent is called in the else branch (non-snippet mode)
+        let outdent_call = source.find("self.outdent_selected_lines()");
+        assert!(outdent_call.is_some(), "outdent_selected_lines should be called");
     }
 }

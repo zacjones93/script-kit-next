@@ -66,6 +66,7 @@ impl ParsedSnippet {
     pub fn parse(template: &str) -> Self {
         let mut parts = Vec::new();
         let mut text = String::new();
+        let mut char_count: usize = 0; // Track char count for char-based indices
         let mut chars = template.chars().peekable();
         let mut current_text = String::new();
 
@@ -82,12 +83,13 @@ impl ParsedSnippet {
                         // Flush current text
                         if !current_text.is_empty() {
                             text.push_str(&current_text);
+                            char_count += current_text.chars().count();
                             parts.push(SnippetPart::Text(current_text.clone()));
                             current_text.clear();
                         }
                         chars.next(); // consume '{'
 
-                        let tabstop = Self::parse_braced_tabstop(&mut chars, text.len());
+                        let tabstop = Self::parse_braced_tabstop(&mut chars, char_count);
                         let placeholder_text = tabstop
                             .placeholder
                             .as_deref()
@@ -98,6 +100,7 @@ impl ParsedSnippet {
                             .unwrap_or("");
 
                         text.push_str(placeholder_text);
+                        char_count += placeholder_text.chars().count();
                         parts.push(SnippetPart::Tabstop {
                             index: tabstop.index,
                             placeholder: tabstop.placeholder,
@@ -110,6 +113,7 @@ impl ParsedSnippet {
                         // Flush current text
                         if !current_text.is_empty() {
                             text.push_str(&current_text);
+                            char_count += current_text.chars().count();
                             parts.push(SnippetPart::Text(current_text.clone()));
                             current_text.clear();
                         }
@@ -125,13 +129,12 @@ impl ParsedSnippet {
                         }
 
                         let index: usize = num_str.parse().unwrap_or(0);
-                        let start = text.len();
-                        // Simple tabstop has empty placeholder, so range is (start, start)
+                        // Simple tabstop has empty placeholder, so range is (char_count, char_count)
                         parts.push(SnippetPart::Tabstop {
                             index,
                             placeholder: None,
                             choices: None,
-                            range: (start, start),
+                            range: (char_count, char_count),
                         });
                     }
                     // Just a lone $ at end or followed by non-special char
@@ -161,9 +164,11 @@ impl ParsedSnippet {
     }
 
     /// Parse a braced tabstop: `{1}`, `{1:default}`, or `{1|a,b,c|}`
+    ///
+    /// `char_offset` is the current position in char indices (not bytes).
     fn parse_braced_tabstop(
         chars: &mut std::iter::Peekable<std::str::Chars>,
-        text_offset: usize,
+        char_offset: usize,
     ) -> TabstopParseResult {
         let mut index_str = String::new();
 
@@ -185,7 +190,9 @@ impl ParsedSnippet {
             Some(':') => {
                 chars.next(); // consume ':'
                 let placeholder = Self::parse_until_close_brace(chars);
-                let range = (text_offset, text_offset + placeholder.len());
+                // Use char count, not byte length
+                let placeholder_char_len = placeholder.chars().count();
+                let range = (char_offset, char_offset + placeholder_char_len);
                 TabstopParseResult {
                     index,
                     placeholder: Some(placeholder),
@@ -197,8 +204,9 @@ impl ParsedSnippet {
             Some('|') => {
                 chars.next(); // consume '|'
                 let choices = Self::parse_choices(chars);
-                let first_choice_len = choices.first().map(|s| s.len()).unwrap_or(0);
-                let range = (text_offset, text_offset + first_choice_len);
+                // Use char count of first choice, not byte length
+                let first_choice_char_len = choices.first().map(|s| s.chars().count()).unwrap_or(0);
+                let range = (char_offset, char_offset + first_choice_char_len);
                 TabstopParseResult {
                     index,
                     placeholder: None,
@@ -213,7 +221,7 @@ impl ParsedSnippet {
                     index,
                     placeholder: None,
                     choices: None,
-                    range: (text_offset, text_offset),
+                    range: (char_offset, char_offset),
                 }
             }
             // Unexpected - consume until }
@@ -223,7 +231,7 @@ impl ParsedSnippet {
                     index,
                     placeholder: None,
                     choices: None,
-                    range: (text_offset, text_offset),
+                    range: (char_offset, char_offset),
                 }
             }
         }
@@ -366,6 +374,74 @@ impl ParsedSnippet {
     #[allow(dead_code)]
     pub fn tabstop_order(&self) -> Vec<usize> {
         self.tabstops.iter().map(|t| t.index).collect()
+    }
+
+    /// Update tabstop ranges after an edit operation.
+    ///
+    /// This method adjusts all tabstop ranges to account for text changes in the document.
+    /// Ranges are stored as char indices (not byte offsets) to match editor cursor positions.
+    ///
+    /// # Arguments
+    /// * `current_tabstop_idx` - Index into self.tabstops of the tabstop currently being edited.
+    ///   Ranges within this tabstop that contain the edit point will be resized.
+    ///   Pass `usize::MAX` if editing outside any tabstop.
+    /// * `edit_start` - Char index where the edit begins
+    /// * `old_len` - Number of chars that were removed
+    /// * `new_len` - Number of chars that were inserted
+    ///
+    /// # Behavior
+    /// - Ranges **after** the edit point are shifted by `delta = new_len - old_len`
+    /// - Ranges **containing** the edit point (within current tabstop) are resized by `delta`
+    /// - Ranges **before** the edit point are unchanged
+    pub fn update_tabstops_after_edit(
+        &mut self,
+        current_tabstop_idx: usize,
+        edit_start: usize,
+        old_len: usize,
+        new_len: usize,
+    ) {
+        let delta = new_len as isize - old_len as isize;
+        if delta == 0 {
+            return;
+        }
+
+        let edit_end = edit_start + old_len;
+
+        for (tabstop_idx, tabstop) in self.tabstops.iter_mut().enumerate() {
+            for range in tabstop.ranges.iter_mut() {
+                let (range_start, range_end) = *range;
+
+                // Case 1: Range is entirely before the edit - no change
+                if range_end <= edit_start {
+                    continue;
+                }
+
+                // Case 2: Range is entirely after the edit - shift by delta
+                if range_start > edit_end || (range_start == edit_end && tabstop_idx != current_tabstop_idx) {
+                    *range = (
+                        (range_start as isize + delta) as usize,
+                        (range_end as isize + delta) as usize,
+                    );
+                    continue;
+                }
+
+                // Case 3: Edit is within or at the boundary of this range
+                // For the current tabstop, we resize (keep start, adjust end)
+                // For other tabstops, the edit should not overlap (they're not being edited)
+                if tabstop_idx == current_tabstop_idx {
+                    // Edit is within this range - keep start, resize end
+                    *range = (range_start, (range_end as isize + delta) as usize);
+                } else {
+                    // This range starts at or after the edit point but before edit_end
+                    // This means it overlaps with the edit region
+                    // Shift the entire range by delta
+                    *range = (
+                        (range_start as isize + delta).max(0) as usize,
+                        (range_end as isize + delta).max(0) as usize,
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -593,6 +669,113 @@ mod tests {
             SnippetPart::Text(t) => assert_eq!(t, "test$"),
             _ => panic!("Expected Text"),
         }
+    }
+
+    // --- Tests for update_tabstops_after_edit ---
+
+    #[test]
+    fn test_update_tabstops_after_insert_first_tabstop() {
+        // Template: "${1:hello} ${2:world}"
+        // Initial text: "hello world" (char indices)
+        // Tabstop 1 at (0, 5), Tabstop 2 at (6, 11)
+        //
+        // If we type "XX" at position 0 (replacing "hello" with "XXhello"):
+        // - Tabstop 1 should expand from (0, 5) to (0, 7)
+        // - Tabstop 2 should shift from (6, 11) to (8, 13)
+        let mut snippet = ParsedSnippet::parse("${1:hello} ${2:world}");
+
+        // Verify initial state
+        assert_eq!(snippet.tabstops.len(), 2);
+        assert_eq!(snippet.tabstops[0].ranges, vec![(0, 5)]);
+        assert_eq!(snippet.tabstops[1].ranges, vec![(6, 11)]);
+
+        // Simulate inserting "XX" at position 0, which replaces nothing (old_len=0)
+        // edit_start=0, old_len=0, new_len=2
+        snippet.update_tabstops_after_edit(0, 0, 0, 2);
+
+        // Tabstop 1 was being edited (contains edit point), should expand
+        // Original: (0, 5), +2 chars inserted at start -> still (0, 5+2) = (0, 7)
+        // But the current tabstop (0) is the one being edited, so its end expands
+        assert_eq!(snippet.tabstops[0].ranges, vec![(0, 7)]);
+        // Tabstop 2 should shift right by 2
+        assert_eq!(snippet.tabstops[1].ranges, vec![(8, 13)]);
+    }
+
+    #[test]
+    fn test_update_tabstops_after_delete_in_first_tabstop() {
+        // Template: "${1:hello} ${2:world}"
+        // Initial: Tabstop 1 at (0, 5), Tabstop 2 at (6, 11)
+        //
+        // If we delete "hel" (positions 0-3), leaving "lo":
+        // - Tabstop 1 shrinks from (0, 5) to (0, 2)
+        // - Tabstop 2 shifts from (6, 11) to (3, 8)
+        let mut snippet = ParsedSnippet::parse("${1:hello} ${2:world}");
+
+        // Delete 3 chars at position 0 (old_len=3, new_len=0)
+        snippet.update_tabstops_after_edit(0, 0, 3, 0);
+
+        // Tabstop 1 shrinks by 3 chars
+        assert_eq!(snippet.tabstops[0].ranges, vec![(0, 2)]);
+        // Tabstop 2 shifts left by 3 chars
+        assert_eq!(snippet.tabstops[1].ranges, vec![(3, 8)]);
+    }
+
+    #[test]
+    fn test_update_tabstops_after_replace_in_first_tabstop() {
+        // Template: "${1:hello} ${2:world}"
+        // Initial: Tabstop 1 at (0, 5), Tabstop 2 at (6, 11)
+        //
+        // If we replace "hello" (0-5) with "hi" (delta = 2 - 5 = -3):
+        // - Tabstop 1 shrinks from (0, 5) to (0, 2)
+        // - Tabstop 2 shifts from (6, 11) to (3, 8)
+        let mut snippet = ParsedSnippet::parse("${1:hello} ${2:world}");
+
+        // Replace 5 chars with 2 chars at position 0
+        snippet.update_tabstops_after_edit(0, 0, 5, 2);
+
+        assert_eq!(snippet.tabstops[0].ranges, vec![(0, 2)]);
+        assert_eq!(snippet.tabstops[1].ranges, vec![(3, 8)]);
+    }
+
+    #[test]
+    fn test_update_tabstops_no_change_before_edit() {
+        // Edits before a tabstop should shift it
+        // Template: "prefix ${1:hello}"
+        // Initial: Tabstop 1 at (7, 12)
+        //
+        // If we add "XX" at position 2 (in "prefix"):
+        // - Tabstop 1 shifts from (7, 12) to (9, 14)
+        let mut snippet = ParsedSnippet::parse("prefix ${1:hello}");
+
+        assert_eq!(snippet.tabstops[0].ranges, vec![(7, 12)]);
+
+        // Insert 2 chars at position 2 (inside "prefix")
+        // current_tabstop_idx is irrelevant here since edit is in text, not tabstop
+        // But we need to pass it - use a value that won't affect the tabstop
+        snippet.update_tabstops_after_edit(usize::MAX, 2, 0, 2);
+
+        // Tabstop 1 shifts right by 2
+        assert_eq!(snippet.tabstops[0].ranges, vec![(9, 14)]);
+    }
+
+    #[test]
+    fn test_update_tabstops_linked_tabstops() {
+        // Template: "${1:foo} and ${1:bar}"
+        // This creates a single TabstopInfo with multiple ranges
+        // Initial ranges: [(0, 3), (8, 11)]
+        //
+        // If we edit the first occurrence, both should update appropriately
+        let mut snippet = ParsedSnippet::parse("${1:foo} and ${1:bar}");
+
+        assert_eq!(snippet.tabstops.len(), 1);
+        assert_eq!(snippet.tabstops[0].ranges, vec![(0, 3), (8, 11)]);
+
+        // Insert 2 chars at position 0 (start of first range)
+        // Current tabstop is 0 (the only one)
+        snippet.update_tabstops_after_edit(0, 0, 0, 2);
+
+        // First range expands, second range shifts
+        assert_eq!(snippet.tabstops[0].ranges, vec![(0, 5), (10, 13)]);
     }
 
     #[test]

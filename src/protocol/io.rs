@@ -1,0 +1,423 @@
+//! Protocol I/O for JSONL message parsing and serialization
+//!
+//! This module provides:
+//! - `parse_message` / `parse_message_graceful` for parsing JSON messages
+//! - `serialize_message` for serializing messages to JSON
+//! - `JsonlReader` for streaming JSONL reads
+
+use std::io::{BufRead, BufReader, Read};
+use tracing::{debug, warn};
+
+use super::message::Message;
+
+/// Maximum length for raw JSON in logs (prevents huge base64 data in logs)
+const MAX_RAW_LOG_PREVIEW: usize = 200;
+
+/// Get a truncated preview of raw JSON for logging
+pub fn log_preview(raw: &str) -> (&str, usize) {
+    let len = raw.len();
+    if len > MAX_RAW_LOG_PREVIEW {
+        (&raw[..MAX_RAW_LOG_PREVIEW], len)
+    } else {
+        (raw, len)
+    }
+}
+
+/// Parse a single JSONL message from a string
+///
+/// # Arguments
+/// * `line` - A JSON string (typically one line from JSONL)
+///
+/// # Returns
+/// * `Result<Message, serde_json::Error>` - Parsed message or deserialization error
+pub fn parse_message(line: &str) -> Result<Message, serde_json::Error> {
+    serde_json::from_str(line).map_err(|e| {
+        // Log the raw input and error for debugging
+        warn!(
+            raw_input = %line,
+            error = %e,
+            "Failed to parse JSONL message"
+        );
+        e
+    })
+}
+
+/// Result type for graceful message parsing
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
+pub enum ParseResult {
+    /// Successfully parsed a known message type
+    Ok(Message),
+    /// Message has no "type" field
+    MissingType {
+        /// Truncated raw JSON for debugging
+        raw: String,
+    },
+    /// Unknown message type value - valid JSON with a "type" field we don't recognize
+    UnknownType {
+        /// The unrecognized type value
+        message_type: String,
+        /// Truncated raw JSON for debugging
+        raw: String,
+    },
+    /// Known message type but invalid payload (wrong field types, missing required fields)
+    InvalidPayload {
+        /// The message type that was recognized
+        message_type: String,
+        /// Serde error message describing the problem
+        error: String,
+        /// Truncated raw JSON for debugging
+        raw: String,
+    },
+    /// JSON parsing failed entirely (syntax error)
+    ParseError(serde_json::Error),
+}
+
+/// Parse a message with graceful handling of unknown types
+///
+/// Unlike `parse_message`, this function handles unknown message types
+/// gracefully by returning `ParseResult::UnknownType` instead of failing.
+///
+/// # Classification Logic
+/// - Missing "type" field → `MissingType`
+/// - Unknown type value → `UnknownType`
+/// - Known type with invalid payload → `InvalidPayload`
+/// - Invalid JSON syntax → `ParseError`
+///
+/// # Arguments
+/// * `line` - A JSON string (typically one line from JSONL)
+///
+/// # Returns
+/// * `ParseResult` - Classified parse result
+///
+/// # Performance
+/// This function uses single-parse optimization: it parses to serde_json::Value
+/// first, then converts to Message. This avoids double-parsing on unknown types.
+///
+/// # Security
+/// Raw JSON is truncated to 200 chars in logs to prevent leaking sensitive data
+/// (base64 screenshots, clipboard content, etc.)
+pub fn parse_message_graceful(line: &str) -> ParseResult {
+    let (preview, _raw_len) = log_preview(line);
+
+    // P1-11 FIX: Single parse - parse to Value first, then convert
+    // This avoids double-parsing: previously we tried Message first, then Value on failure
+    let value: serde_json::Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(e) => {
+            // Don't log here - caller (JsonlReader) handles logging
+            return ParseResult::ParseError(e);
+        }
+    };
+
+    // Check for type field and extract it as owned String before consuming value
+    let msg_type: String = match value.get("type").and_then(|t| t.as_str()) {
+        Some(t) => t.to_string(),
+        None => {
+            // Missing type field
+            return ParseResult::MissingType {
+                raw: preview.to_string(),
+            };
+        }
+    };
+
+    // Try to convert Value to Message (consumes value)
+    match serde_json::from_value::<Message>(value) {
+        Ok(msg) => ParseResult::Ok(msg),
+        Err(e) => {
+            let error_str = e.to_string();
+            // Check if this is an "unknown variant" error (unknown type)
+            // vs a field/payload error (known type, bad data)
+            if error_str.contains("unknown variant") {
+                ParseResult::UnknownType {
+                    message_type: msg_type,
+                    raw: preview.to_string(),
+                }
+            } else {
+                // Known type but invalid payload
+                ParseResult::InvalidPayload {
+                    message_type: msg_type,
+                    error: error_str,
+                    raw: preview.to_string(),
+                }
+            }
+        }
+    }
+}
+
+/// Serialize a message to JSONL format
+///
+/// # Arguments
+/// * `msg` - The message to serialize
+///
+/// # Returns
+/// * `Result<String, serde_json::Error>` - JSON string (without newline)
+pub fn serialize_message(msg: &Message) -> Result<String, serde_json::Error> {
+    serde_json::to_string(msg)
+}
+
+/// JSONL reader for streaming/chunked message reads
+///
+/// Provides utilities to read messages one at a time from a reader.
+///
+/// # Performance
+/// Uses a reusable line buffer to avoid allocating a new String per line read.
+/// The buffer is cleared and reused between reads (P1-12 optimization).
+pub struct JsonlReader<R: Read> {
+    reader: BufReader<R>,
+    /// Reusable line buffer - cleared and reused per read to avoid allocations
+    line_buffer: String,
+}
+
+impl<R: Read> JsonlReader<R> {
+    /// Create a new JSONL reader
+    pub fn new(reader: R) -> Self {
+        JsonlReader {
+            reader: BufReader::new(reader),
+            // Pre-allocate reasonable capacity for typical JSON messages
+            line_buffer: String::with_capacity(1024),
+        }
+    }
+
+    /// Read the next message from the stream
+    ///
+    /// # Returns
+    /// * `Ok(Some(Message))` - Successfully parsed message
+    /// * `Ok(None)` - End of stream
+    /// * `Err(e)` - Parse error
+    pub fn next_message(&mut self) -> Result<Option<Message>, Box<dyn std::error::Error>> {
+        // Use loop instead of recursion to prevent stack overflow on many empty lines
+        loop {
+            // P1-12 FIX: Reuse buffer instead of allocating new String each call
+            self.line_buffer.clear();
+            match self.reader.read_line(&mut self.line_buffer)? {
+                0 => {
+                    debug!("Reached end of JSONL stream");
+                    return Ok(None);
+                }
+                bytes_read => {
+                    debug!(bytes_read, "Read line from JSONL stream");
+                    let trimmed = self.line_buffer.trim();
+                    if trimmed.is_empty() {
+                        debug!("Skipping empty line in JSONL stream");
+                        continue; // Skip empty lines (loop instead of recursion)
+                    }
+                    let msg = parse_message(trimmed)?;
+                    return Ok(Some(msg));
+                }
+            }
+        }
+    }
+
+    /// Read the next message with graceful unknown type handling
+    ///
+    /// Unlike `next_message`, this method uses `parse_message_graceful` to
+    /// handle unknown message types without errors. Unknown types are logged
+    /// and skipped, continuing to read the next message.
+    ///
+    /// # Logging
+    /// All logging is consolidated here (reader layer). The parse_message_graceful
+    /// function does not log - it returns structured results for this layer to handle.
+    ///
+    /// # Returns
+    /// * `Ok(Some(Message))` - Successfully parsed known message
+    /// * `Ok(None)` - End of stream
+    /// * `Err(e)` - IO error (not parse errors for unknown types)
+    pub fn next_message_graceful(&mut self) -> Result<Option<Message>, std::io::Error> {
+        loop {
+            // P1-12 FIX: Reuse buffer instead of allocating new String each iteration
+            self.line_buffer.clear();
+            match self.reader.read_line(&mut self.line_buffer)? {
+                0 => {
+                    debug!("Reached end of JSONL stream");
+                    return Ok(None);
+                }
+                _ => {
+                    let trimmed = self.line_buffer.trim();
+                    if trimmed.is_empty() {
+                        debug!("Skipping empty line in JSONL stream");
+                        continue;
+                    }
+
+                    // Get preview for logging (security: truncate large payloads)
+                    let (preview, raw_len) = log_preview(trimmed);
+
+                    match parse_message_graceful(trimmed) {
+                        ParseResult::Ok(msg) => {
+                            debug!(message_id = ?msg.id(), "Successfully parsed message");
+                            return Ok(Some(msg));
+                        }
+                        ParseResult::MissingType { .. } => {
+                            warn!(
+                                raw_preview = %preview,
+                                raw_len = raw_len,
+                                "Skipping message with missing 'type' field"
+                            );
+                            continue;
+                        }
+                        ParseResult::UnknownType { message_type, .. } => {
+                            warn!(
+                                message_type = %message_type,
+                                raw_preview = %preview,
+                                raw_len = raw_len,
+                                "Skipping unknown message type"
+                            );
+                            continue;
+                        }
+                        ParseResult::InvalidPayload {
+                            message_type,
+                            error,
+                            ..
+                        } => {
+                            warn!(
+                                message_type = %message_type,
+                                error = %error,
+                                raw_preview = %preview,
+                                raw_len = raw_len,
+                                "Skipping message with invalid payload"
+                            );
+                            continue;
+                        }
+                        ParseResult::ParseError(e) => {
+                            // Log but continue - graceful degradation
+                            warn!(
+                                error = %e,
+                                raw_preview = %preview,
+                                raw_len = raw_len,
+                                "Skipping malformed JSON message"
+                            );
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_log_preview_truncation() {
+        // Short string - should not be truncated
+        let short = "hello";
+        let (preview, len) = log_preview(short);
+        assert_eq!(preview, "hello");
+        assert_eq!(len, 5);
+
+        // Long string - should be truncated to 200 chars
+        let long = "a".repeat(500);
+        let (preview, len) = log_preview(&long);
+        assert_eq!(preview.len(), 200);
+        assert_eq!(len, 500);
+    }
+
+    #[test]
+    fn test_parse_message_graceful_known_type() {
+        let json = r#"{"type":"arg","id":"1","placeholder":"Pick","choices":[]}"#;
+        match parse_message_graceful(json) {
+            ParseResult::Ok(Message::Arg { id, .. }) => {
+                assert_eq!(id, "1");
+            }
+            _ => panic!("Expected ParseResult::Ok with Arg message"),
+        }
+    }
+
+    #[test]
+    fn test_parse_message_graceful_unknown_type() {
+        let json = r#"{"type":"futureFeature","id":"1","data":"test"}"#;
+        match parse_message_graceful(json) {
+            ParseResult::UnknownType { message_type, raw } => {
+                assert_eq!(message_type, "futureFeature");
+                assert_eq!(raw, json);
+            }
+            _ => panic!("Expected ParseResult::UnknownType"),
+        }
+    }
+
+    #[test]
+    fn test_parse_message_graceful_invalid_json() {
+        let json = "not valid json at all";
+        match parse_message_graceful(json) {
+            ParseResult::ParseError(_) => {}
+            _ => panic!("Expected ParseResult::ParseError"),
+        }
+    }
+
+    #[test]
+    fn test_parse_message_graceful_missing_type_field() {
+        let json = r#"{"id":"1","data":"test"}"#;
+        match parse_message_graceful(json) {
+            ParseResult::MissingType { raw } => {
+                // raw should be truncated preview (but this is short enough to be full)
+                assert!(raw.contains("id"));
+            }
+            other => panic!("Expected ParseResult::MissingType, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_message_graceful_invalid_payload() {
+        // Known type "arg" but missing required "placeholder" field
+        let json = r#"{"type":"arg","id":"1"}"#;
+        match parse_message_graceful(json) {
+            ParseResult::InvalidPayload {
+                message_type,
+                error,
+                ..
+            } => {
+                assert_eq!(message_type, "arg");
+                assert!(error.contains("placeholder")); // should mention missing field
+            }
+            other => panic!("Expected ParseResult::InvalidPayload, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_jsonl_reader_skips_empty_lines() {
+        use std::io::Cursor;
+
+        let jsonl = "\n{\"type\":\"beep\"}\n\n{\"type\":\"show\"}\n";
+        let cursor = Cursor::new(jsonl);
+        let mut reader = JsonlReader::new(cursor);
+
+        // First message should be beep (skipping initial empty line)
+        let msg1 = reader.next_message().unwrap();
+        assert!(matches!(msg1, Some(Message::Beep {})));
+
+        // Second message should be show (skipping intermediate empty lines)
+        let msg2 = reader.next_message().unwrap();
+        assert!(matches!(msg2, Some(Message::Show {})));
+
+        // Should be EOF
+        let msg3 = reader.next_message().unwrap();
+        assert!(msg3.is_none());
+    }
+
+    #[test]
+    fn test_jsonl_reader_graceful_skips_unknown() {
+        use std::io::Cursor;
+
+        let jsonl = r#"{"type":"unknownType","id":"1"}
+{"type":"beep"}
+{"type":"anotherUnknown","data":"test"}
+{"type":"show"}
+"#;
+        let cursor = Cursor::new(jsonl);
+        let mut reader = JsonlReader::new(cursor);
+
+        // Should skip unknownType and return beep
+        let msg1 = reader.next_message_graceful().unwrap();
+        assert!(matches!(msg1, Some(Message::Beep {})));
+
+        // Should skip anotherUnknown and return show
+        let msg2 = reader.next_message_graceful().unwrap();
+        assert!(matches!(msg2, Some(Message::Show {})));
+
+        // Should be EOF
+        let msg3 = reader.next_message_graceful().unwrap();
+        assert!(msg3.is_none());
+    }
+}
