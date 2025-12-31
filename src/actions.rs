@@ -1152,11 +1152,14 @@ impl Render for ActionsDialog {
         // Calculate dynamic height based on number of items
         // Each item is ACTION_ITEM_HEIGHT, plus search box height (~44px), plus padding
         // When hide_search is true, we don't include the search box height
+        // NOTE: Add 2px for border (1px top + 1px bottom from .border_1()) to prevent
+        // content from being clipped and causing unnecessary scrolling
         let num_items = self.filtered_actions.len();
         let search_box_height = if self.hide_search { 0.0 } else { 60.0 };
+        let border_height = 2.0; // 1px top + 1px bottom border
         let items_height =
             (num_items as f32 * ACTION_ITEM_HEIGHT).min(POPUP_MAX_HEIGHT - search_box_height);
-        let total_height = items_height + search_box_height; // search box height (if shown) + padding
+        let total_height = items_height + search_box_height + border_height;
 
         // Main overlay popup container
         // Fixed width, dynamic height based on content, rounded corners, shadow, semi-transparent bg
