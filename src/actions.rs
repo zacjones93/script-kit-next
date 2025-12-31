@@ -431,18 +431,24 @@ impl ActionsDialog {
     /// Set actions from SDK (replaces built-in actions)
     ///
     /// Converts `ProtocolAction` items to internal `Action` format and updates
-    /// the actions list. The `has_action` field on each action determines routing:
+    /// the actions list. Filters out actions with `visible: false`.
+    /// The `has_action` field on each action determines routing:
     /// - `has_action=true`: Send ActionTriggered back to SDK
     /// - `has_action=false`: Submit value directly
     pub fn set_sdk_actions(&mut self, actions: Vec<ProtocolAction>) {
-        let converted: Vec<Action> = actions
+        let total_count = actions.len();
+        let visible_actions: Vec<&ProtocolAction> =
+            actions.iter().filter(|a| a.is_visible()).collect();
+        let visible_count = visible_actions.len();
+
+        let converted: Vec<Action> = visible_actions
             .iter()
             .map(|pa| Action {
                 id: pa.name.clone(),
                 title: pa.name.clone(),
                 description: pa.description.clone(),
                 category: ActionCategory::ScriptContext,
-                shortcut: pa.shortcut.clone(),
+                shortcut: pa.shortcut.as_ref().map(|s| Self::format_shortcut_hint(s)),
                 has_action: pa.has_action,
                 value: pa.value.clone(),
             })
@@ -450,7 +456,10 @@ impl ActionsDialog {
 
         logging::log(
             "ACTIONS",
-            &format!("SDK actions set: {} actions", converted.len()),
+            &format!(
+                "SDK actions set: {} visible of {} total",
+                visible_count, total_count
+            ),
         );
 
         self.actions = converted;
@@ -458,6 +467,46 @@ impl ActionsDialog {
         self.selected_index = 0;
         self.search_text.clear();
         self.sdk_actions = Some(actions);
+    }
+
+    /// Format a keyboard shortcut for display (e.g., "cmd+c" → "⌘C")
+    fn format_shortcut_hint(shortcut: &str) -> String {
+        let mut result = String::new();
+        let parts: Vec<&str> = shortcut.split('+').collect();
+
+        for (i, part) in parts.iter().enumerate() {
+            let part_lower = part.trim().to_lowercase();
+            let formatted = match part_lower.as_str() {
+                // Modifier keys → symbols
+                "cmd" | "command" | "meta" | "super" => "⌘",
+                "ctrl" | "control" => "⌃",
+                "alt" | "opt" | "option" => "⌥",
+                "shift" => "⇧",
+                // Special keys
+                "enter" | "return" => "↵",
+                "escape" | "esc" => "⎋",
+                "tab" => "⇥",
+                "backspace" | "delete" => "⌫",
+                "space" => "␣",
+                "up" | "arrowup" => "↑",
+                "down" | "arrowdown" => "↓",
+                "left" | "arrowleft" => "←",
+                "right" | "arrowright" => "→",
+                // Regular letters/numbers → uppercase
+                _ => {
+                    // Check if it's the last part (the actual key)
+                    if i == parts.len() - 1 {
+                        // Uppercase single characters, keep others as-is
+                        result.push_str(&part.trim().to_uppercase());
+                        continue;
+                    }
+                    part.trim()
+                }
+            };
+            result.push_str(formatted);
+        }
+
+        result
     }
 
     /// Clear SDK actions and restore built-in actions
@@ -509,37 +558,129 @@ impl ActionsDialog {
         self.refilter();
     }
 
-    /// Refilter actions based on current search_text using fuzzy matching
+    /// Refilter actions based on current search_text using ranked fuzzy matching.
+    ///
+    /// Scoring system:
+    /// - Prefix match on title: +100 (strongest signal)
+    /// - Fuzzy match on title: +50 + character bonus
+    /// - Contains match on description: +25
+    /// - Results are sorted by score (descending)
     fn refilter(&mut self) {
+        // Preserve selection if possible (track which action was selected)
+        let previously_selected = self
+            .filtered_actions
+            .get(self.selected_index)
+            .and_then(|&idx| self.actions.get(idx).map(|a| a.id.clone()));
+
         if self.search_text.is_empty() {
             self.filtered_actions = (0..self.actions.len()).collect();
         } else {
             let search_lower = self.search_text.to_lowercase();
-            self.filtered_actions = self
+
+            // Score each action and collect (index, score) pairs
+            let mut scored: Vec<(usize, i32)> = self
                 .actions
                 .iter()
                 .enumerate()
-                .filter(|(_, action)| {
-                    let title_match = action.title.to_lowercase().contains(&search_lower);
-                    let desc_match = action
-                        .description
-                        .as_ref()
-                        .map(|d| d.to_lowercase().contains(&search_lower))
-                        .unwrap_or(false);
-                    title_match || desc_match
+                .filter_map(|(idx, action)| {
+                    let score = Self::score_action(action, &search_lower);
+                    if score > 0 {
+                        Some((idx, score))
+                    } else {
+                        None
+                    }
                 })
-                .map(|(idx, _)| idx)
                 .collect();
+
+            // Sort by score descending
+            scored.sort_by(|a, b| b.1.cmp(&a.1));
+
+            // Extract just the indices
+            self.filtered_actions = scored.into_iter().map(|(idx, _)| idx).collect();
         }
-        self.selected_index = 0; // Reset selection when filtering
-        self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
+
+        // Preserve selection if the same action is still in results
+        if let Some(prev_id) = previously_selected {
+            if let Some(new_idx) = self.filtered_actions.iter().position(|&idx| {
+                self.actions
+                    .get(idx)
+                    .map(|a| a.id == prev_id)
+                    .unwrap_or(false)
+            }) {
+                self.selected_index = new_idx;
+            } else {
+                self.selected_index = 0;
+            }
+        } else {
+            self.selected_index = 0;
+        }
+
+        // Only scroll if we have results
+        if !self.filtered_actions.is_empty() {
+            self.scroll_handle
+                .scroll_to_item(self.selected_index, ScrollStrategy::Nearest);
+        }
+
         logging::log_debug(
             "ACTIONS_SCROLL",
             &format!(
-                "Filter changed: reset to top, {} results",
-                self.filtered_actions.len()
+                "Filter changed: {} results, selected={}",
+                self.filtered_actions.len(),
+                self.selected_index
             ),
         );
+    }
+
+    /// Score an action against a search query.
+    /// Returns 0 if no match, higher scores for better matches.
+    fn score_action(action: &Action, search_lower: &str) -> i32 {
+        let title_lower = action.title.to_lowercase();
+        let mut score = 0;
+
+        // Prefix match on title (strongest)
+        if title_lower.starts_with(search_lower) {
+            score += 100;
+        }
+        // Contains match on title
+        else if title_lower.contains(search_lower) {
+            score += 50;
+        }
+        // Fuzzy match on title (character-by-character subsequence)
+        else if Self::fuzzy_match(&title_lower, search_lower) {
+            score += 25;
+        }
+
+        // Description match (bonus)
+        if let Some(ref desc) = action.description {
+            let desc_lower = desc.to_lowercase();
+            if desc_lower.contains(search_lower) {
+                score += 15;
+            }
+        }
+
+        // Shortcut match (bonus)
+        if let Some(ref shortcut) = action.shortcut {
+            if shortcut.to_lowercase().contains(search_lower) {
+                score += 10;
+            }
+        }
+
+        score
+    }
+
+    /// Simple fuzzy matching: check if all characters in needle appear in haystack in order.
+    fn fuzzy_match(haystack: &str, needle: &str) -> bool {
+        let mut haystack_chars = haystack.chars();
+        for needle_char in needle.chars() {
+            loop {
+                match haystack_chars.next() {
+                    Some(h) if h == needle_char => break,
+                    Some(_) => continue,
+                    None => return false,
+                }
+            }
+        }
+        true
     }
 
     /// Handle character input
@@ -594,6 +735,29 @@ impl ActionsDialog {
             }
         }
         None
+    }
+
+    /// Get the currently selected ProtocolAction (for checking close behavior)
+    /// Returns the original ProtocolAction from sdk_actions if this is an SDK action,
+    /// or None for built-in actions.
+    pub fn get_selected_protocol_action(&self) -> Option<&ProtocolAction> {
+        let action_id = self.get_selected_action_id()?;
+        self.sdk_actions
+            .as_ref()?
+            .iter()
+            .find(|a| a.name == action_id)
+    }
+
+    /// Check if the currently selected action should close the dialog
+    /// Returns true if the action has close: true (or no close field, which defaults to true)
+    /// Returns true for built-in actions (they always close)
+    pub fn selected_action_should_close(&self) -> bool {
+        if let Some(protocol_action) = self.get_selected_protocol_action() {
+            protocol_action.should_close()
+        } else {
+            // Built-in actions always close
+            true
+        }
     }
 
     /// Submit the selected action
