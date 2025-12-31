@@ -733,6 +733,15 @@ pub enum Message {
         /// Optional actions for the actions panel (Cmd+K to open)
         #[serde(default, skip_serializing_if = "Option::is_none")]
         actions: Option<Vec<ProtocolAction>>,
+        /// Container background color: "transparent", "#RRGGBB", "#RRGGBBAA", or Tailwind color name
+        #[serde(rename = "containerBg", skip_serializing_if = "Option::is_none")]
+        container_bg: Option<String>,
+        /// Container padding in pixels, or "none" to disable
+        #[serde(rename = "containerPadding", skip_serializing_if = "Option::is_none")]
+        container_padding: Option<serde_json::Value>,
+        /// Container opacity (0-100)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        opacity: Option<u8>,
     },
 
     /// App responds with submission (selected value or null)
@@ -1500,6 +1509,9 @@ impl Message {
             html,
             tailwind: None,
             actions: None,
+            container_bg: None,
+            container_padding: None,
+            opacity: None,
         }
     }
 
@@ -1510,6 +1522,9 @@ impl Message {
             html,
             tailwind: Some(tailwind),
             actions: None,
+            container_bg: None,
+            container_padding: None,
+            opacity: None,
         }
     }
 

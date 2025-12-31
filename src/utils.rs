@@ -905,7 +905,7 @@ fn parse_spacing_value(value: &str) -> Option<f32> {
 }
 
 /// Parse Tailwind color names to hex values
-fn parse_color(color_name: &str) -> Option<u32> {
+pub fn parse_color(color_name: &str) -> Option<u32> {
     // Basic colors
     match color_name {
         "white" => return Some(0xFFFFFF),

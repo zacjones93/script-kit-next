@@ -126,6 +126,38 @@ export interface WindowBounds {
 }
 
 // =============================================================================
+// Div Prompt Options
+// =============================================================================
+
+/**
+ * Options for customizing the div() container appearance
+ */
+export interface DivOptions {
+  /**
+   * Container background color.
+   * Can be:
+   * - "transparent" - fully transparent background
+   * - "#RGB" or "#RRGGBB" - hex color (e.g., "#f00", "#ff0000")
+   * - "#RRGGBBAA" - hex color with alpha (e.g., "#ff000080" for 50% opacity red)
+   * - Tailwind color name (e.g., "blue-500", "gray-900")
+   */
+  containerBg?: string;
+  
+  /**
+   * Container padding in pixels, or "none" to disable padding.
+   * Default is theme-based padding (~16px).
+   */
+  containerPadding?: number | "none";
+  
+  /**
+   * Container opacity (0-100).
+   * Applied to the entire container including the background.
+   * Default is 100 (fully opaque).
+   */
+  opacity?: number;
+}
+
+// =============================================================================
 // Clipboard History Types
 // =============================================================================
 
@@ -965,6 +997,12 @@ interface DivMessage {
   html: string;
   tailwind?: string;
   actions?: SerializableAction[];
+  /** Container background color */
+  containerBg?: string;
+  /** Container padding in pixels, or "none" */
+  containerPadding?: number | "none";
+  /** Container opacity (0-100) */
+  opacity?: number;
 }
 
 interface EditorMessage {
@@ -1602,8 +1640,38 @@ declare global {
   
   /**
    * Display HTML content to user
+   * 
+   * @param html - HTML content to display (supports Tailwind classes in elements)
+   * @param tailwindOrOptions - Either Tailwind classes for root element, or DivOptions
+   * @param options - Container options when tailwind is also provided
+   * 
+   * @example
+   * // Basic usage
+   * await div("<h1>Hello</h1>");
+   * 
+   * @example
+   * // With tailwind classes on root
+   * await div("<h1>Hello</h1>", "p-4 bg-blue-500");
+   * 
+   * @example
+   * // With container options
+   * await div("<h1>Hello</h1>", { containerBg: "transparent" });
+   * 
+   * @example
+   * // Transparent background with custom HTML background
+   * await div('<div class="bg-gradient-to-r from-purple-500 to-pink-500 p-8 h-full">Content</div>', {
+   *   containerBg: "transparent",
+   *   containerPadding: "none"
+   * });
+   * 
+   * @example
+   * // Semi-transparent container
+   * await div("<h1>Hello</h1>", { containerBg: "#00000080" }); // 50% black
+   * await div("<h1>Hello</h1>", { opacity: 50 }); // 50% opacity on theme bg
    */
   function div(html: string, tailwind?: string): Promise<void>;
+  function div(html: string, options?: DivOptions): Promise<void>;
+  function div(html: string, tailwind?: string, options?: DivOptions): Promise<void>;
   
   /**
    * Convert Markdown to HTML
@@ -2351,8 +2419,39 @@ globalThis.arg = async function arg(
   });
 };
 
-globalThis.div = async function div(html: string, tailwind?: string, actionsInput?: Action[]): Promise<void> {
+/**
+ * Display HTML content with optional styling and container customization.
+ * 
+ * Signature overloads:
+ * - div(html) - basic HTML display
+ * - div(html, tailwind) - with tailwind classes on root
+ * - div(html, options) - with container options
+ * - div(html, tailwind, options) - with both
+ */
+globalThis.div = async function div(
+  html: string,
+  tailwindOrOptions?: string | DivOptions,
+  optionsOrActions?: DivOptions | Action[]
+): Promise<void> {
   const id = nextId();
+  
+  // Parse arguments to handle overloaded signatures
+  let tailwind: string | undefined;
+  let options: DivOptions | undefined;
+  let actionsInput: Action[] | undefined;
+  
+  if (typeof tailwindOrOptions === 'string') {
+    // div(html, tailwind) or div(html, tailwind, options)
+    tailwind = tailwindOrOptions;
+    if (optionsOrActions && !Array.isArray(optionsOrActions)) {
+      options = optionsOrActions as DivOptions;
+    } else if (Array.isArray(optionsOrActions)) {
+      actionsInput = optionsOrActions;
+    }
+  } else if (typeof tailwindOrOptions === 'object' && tailwindOrOptions !== null) {
+    // div(html, options)
+    options = tailwindOrOptions as DivOptions;
+  }
   
   // Process actions: store handlers and create serializable actions
   let serializedActions: SerializableAction[] | undefined;
@@ -2387,6 +2486,9 @@ globalThis.div = async function div(html: string, tailwind?: string, actionsInpu
       html,
       tailwind,
       actions: serializedActions,
+      containerBg: options?.containerBg,
+      containerPadding: options?.containerPadding,
+      opacity: options?.opacity,
     };
     
     send(message);
@@ -4672,6 +4774,8 @@ declare global {
   // Core prompt functions
   function arg(placeholderOrConfig?: string | ArgConfig, choices?: ChoicesInput, actions?: Action[]): Promise<string>;
   function div(html: string, tailwind?: string): Promise<void>;
+  function div(html: string, options?: DivOptions): Promise<void>;
+  function div(html: string, tailwind?: string, options?: DivOptions): Promise<void>;
   function md(markdown: string): string;
   function editor(content?: string, language?: string, actions?: Action[]): Promise<string>;
   function mini(placeholderOrConfig?: string | ArgConfig, choices?: ChoicesInput): Promise<string>;

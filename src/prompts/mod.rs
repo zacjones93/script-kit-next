@@ -15,7 +15,7 @@
 #![allow(dead_code)]
 
 mod arg;
-mod div;
+pub mod div;
 mod drop;
 mod env;
 mod path;
@@ -27,7 +27,7 @@ mod template;
 // 1. Create Entity<PromptType> in main.rs
 // 2. Switch from inline rendering to entity-based rendering
 // pub use arg::ArgPrompt;
-pub use div::DivPrompt;
+pub use div::{ContainerOptions, ContainerPadding, DivPrompt};
 
 // These exports are ready for use in main.rs when AppView variants are added
 // The #[allow(unused_imports)] is temporary until main.rs integrations are complete

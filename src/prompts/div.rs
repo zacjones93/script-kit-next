@@ -7,7 +7,7 @@
 //! - Simple keyboard: Enter or Escape to submit
 
 use gpui::{
-    div, prelude::*, px, rgb, rgba, Context, Div, FocusHandle, Focusable, FontWeight, Render,
+    div, prelude::*, px, rgb, rgba, Context, Div, FocusHandle, Focusable, FontWeight, Hsla, Render,
     Window,
 };
 use std::sync::Arc;
@@ -15,9 +15,102 @@ use std::sync::Arc;
 use crate::designs::{get_tokens, DesignVariant};
 use crate::logging;
 use crate::theme;
-use crate::utils::{parse_html, HtmlElement, TailwindStyles};
+use crate::utils::{parse_color, parse_html, HtmlElement, TailwindStyles};
 
 use super::SubmitCallback;
+
+/// Options for customizing the div container appearance
+#[derive(Debug, Clone, Default)]
+pub struct ContainerOptions {
+    /// Background color: "transparent", "#RRGGBB", "#RRGGBBAA", or Tailwind color name
+    pub background: Option<String>,
+    /// Padding in pixels, or None to use default
+    pub padding: Option<ContainerPadding>,
+    /// Opacity (0-100), applies to entire container
+    pub opacity: Option<u8>,
+}
+
+/// Padding options for the container
+#[derive(Debug, Clone)]
+pub enum ContainerPadding {
+    /// No padding
+    None,
+    /// Custom padding in pixels
+    Pixels(f32),
+}
+
+impl ContainerOptions {
+    /// Parse container background to GPUI color
+    pub fn parse_background(&self) -> Option<Hsla> {
+        let bg = self.background.as_ref()?;
+        
+        // Handle "transparent"
+        if bg == "transparent" {
+            return Some(Hsla::transparent_black());
+        }
+        
+        // Handle hex colors: #RGB, #RRGGBB, #RRGGBBAA
+        if bg.starts_with('#') {
+            return parse_hex_color(bg);
+        }
+        
+        // Handle Tailwind color names (e.g., "blue-500", "gray-900")
+        if let Some(color) = parse_color(bg) {
+            return Some(rgb_to_hsla(color, self.opacity));
+        }
+        
+        None
+    }
+    
+    /// Get padding value
+    pub fn get_padding(&self, default: f32) -> f32 {
+        match &self.padding {
+            Some(ContainerPadding::None) => 0.0,
+            Some(ContainerPadding::Pixels(px)) => *px,
+            None => default,
+        }
+    }
+}
+
+/// Parse hex color string to GPUI Hsla
+fn parse_hex_color(hex: &str) -> Option<Hsla> {
+    let hex = hex.trim_start_matches('#');
+    
+    match hex.len() {
+        // #RGB -> #RRGGBB
+        3 => {
+            let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
+            let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
+            let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
+            Some(Hsla::from(gpui::Rgba { r: r as f32 / 255.0, g: g as f32 / 255.0, b: b as f32 / 255.0, a: 1.0 }))
+        }
+        // #RRGGBB
+        6 => {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            Some(Hsla::from(gpui::Rgba { r: r as f32 / 255.0, g: g as f32 / 255.0, b: b as f32 / 255.0, a: 1.0 }))
+        }
+        // #RRGGBBAA
+        8 => {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
+            Some(Hsla::from(gpui::Rgba { r: r as f32 / 255.0, g: g as f32 / 255.0, b: b as f32 / 255.0, a: a as f32 / 255.0 }))
+        }
+        _ => None,
+    }
+}
+
+/// Convert RGB u32 to Hsla with optional opacity
+fn rgb_to_hsla(color: u32, opacity: Option<u8>) -> Hsla {
+    let r = ((color >> 16) & 0xFF) as f32 / 255.0;
+    let g = ((color >> 8) & 0xFF) as f32 / 255.0;
+    let b = (color & 0xFF) as f32 / 255.0;
+    let a = opacity.map(|o| o as f32 / 100.0).unwrap_or(1.0);
+    Hsla::from(gpui::Rgba { r, g, b, a })
+}
 
 /// DivPrompt - HTML content display
 ///
@@ -35,6 +128,8 @@ pub struct DivPrompt {
     pub theme: Arc<theme::Theme>,
     /// Design variant for styling (defaults to Default for theme-based styling)
     pub design_variant: DesignVariant,
+    /// Container customization options
+    pub container_options: ContainerOptions,
 }
 
 impl DivPrompt {
@@ -46,7 +141,7 @@ impl DivPrompt {
         on_submit: SubmitCallback,
         theme: Arc<theme::Theme>,
     ) -> Self {
-        Self::with_design(
+        Self::with_options(
             id,
             html,
             tailwind,
@@ -54,6 +149,7 @@ impl DivPrompt {
             on_submit,
             theme,
             DesignVariant::Default,
+            ContainerOptions::default(),
         )
     }
 
@@ -66,11 +162,34 @@ impl DivPrompt {
         theme: Arc<theme::Theme>,
         design_variant: DesignVariant,
     ) -> Self {
+        Self::with_options(
+            id,
+            html,
+            tailwind,
+            focus_handle,
+            on_submit,
+            theme,
+            design_variant,
+            ContainerOptions::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_options(
+        id: String,
+        html: String,
+        tailwind: Option<String>,
+        focus_handle: FocusHandle,
+        on_submit: SubmitCallback,
+        theme: Arc<theme::Theme>,
+        design_variant: DesignVariant,
+        container_options: ContainerOptions,
+    ) -> Self {
         logging::log(
             "PROMPTS",
             &format!(
-                "DivPrompt::new with theme colors: bg={:#x}, text={:#x}, design: {:?}",
-                theme.colors.background.main, theme.colors.text.primary, design_variant
+                "DivPrompt::new with theme colors: bg={:#x}, text={:#x}, design: {:?}, container_opts: {:?}",
+                theme.colors.background.main, theme.colors.text.primary, design_variant, container_options
             ),
         );
         DivPrompt {
@@ -81,6 +200,7 @@ impl DivPrompt {
             on_submit,
             theme,
             design_variant,
+            container_options,
         }
     }
 
@@ -659,12 +779,27 @@ impl Render for DivPrompt {
             }
         };
 
-        // Use design tokens for colors (with theme fallback for Default variant)
-        let main_bg = if self.design_variant == DesignVariant::Default {
-            rgb(self.theme.colors.background.main)
+        // Determine container background:
+        // 1. If container_options.background is set, use that
+        // 2. Otherwise fall back to design tokens / theme
+        let container_bg = if let Some(custom_bg) = self.container_options.parse_background() {
+            custom_bg
+        } else if self.design_variant == DesignVariant::Default {
+            // Apply opacity if specified
+            let base_color = self.theme.colors.background.main;
+            if let Some(opacity) = self.container_options.opacity {
+                rgb_to_hsla(base_color, Some(opacity))
+            } else {
+                Hsla::from(rgb(base_color))
+            }
+        } else if let Some(opacity) = self.container_options.opacity {
+            rgb_to_hsla(colors.background, Some(opacity))
         } else {
-            rgb(colors.background)
+            Hsla::from(rgb(colors.background))
         };
+
+        // Determine container padding
+        let container_padding = self.container_options.get_padding(spacing.padding_lg);
 
         // Generate semantic IDs for div prompt elements
         let panel_semantic_id = format!("panel:content-{}", self.id);
@@ -688,8 +823,8 @@ impl Render for DivPrompt {
             .w_full()
             .h_full() // Fill container height completely
             .min_h(px(0.)) // Allow proper flex behavior
-            .bg(main_bg)
-            .p(px(spacing.padding_lg))
+            .bg(container_bg)
+            .p(px(container_padding))
             .key_context("div_prompt")
             .track_focus(&self.focus_handle)
             .on_key_down(handle_key)

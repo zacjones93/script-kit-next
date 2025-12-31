@@ -111,7 +111,10 @@ mod mcp_streaming;
 use crate::components::toast::{Toast, ToastAction, ToastColors};
 use crate::toast_manager::ToastManager;
 use editor::EditorPrompt;
-use prompts::{DivPrompt, DropPrompt, EnvPrompt, PathInfo, PathPrompt, SelectPrompt, TemplatePrompt};
+use prompts::{
+    ContainerOptions, ContainerPadding, DivPrompt, DropPrompt, EnvPrompt, PathInfo, PathPrompt,
+    SelectPrompt, TemplatePrompt,
+};
 use tray::{TrayManager, TrayMenuAction};
 use window_resize::{
     defer_resize_to_view, height_for_view, initial_window_height, reset_resize_debounce,
@@ -1231,6 +1234,12 @@ enum PromptMessage {
         html: String,
         tailwind: Option<String>,
         actions: Option<Vec<ProtocolAction>>,
+        /// Container background color
+        container_bg: Option<String>,
+        /// Container padding (number or "none")
+        container_padding: Option<serde_json::Value>,
+        /// Container opacity (0-100)
+        opacity: Option<u8>,
     },
     ShowForm {
         id: String,
@@ -4510,8 +4519,8 @@ impl ScriptListApp {
                                         choices,
                                         actions,
                                     }),
-                                    Message::Div { id, html, tailwind, actions } => {
-                                        Some(PromptMessage::ShowDiv { id, html, tailwind, actions })
+                                    Message::Div { id, html, tailwind, actions, container_bg, container_padding, opacity } => {
+                                        Some(PromptMessage::ShowDiv { id, html, tailwind, actions, container_bg, container_padding, opacity })
                                     }
                                     Message::Form { id, html, actions } => {
                                         Some(PromptMessage::ShowForm { id, html, actions })
@@ -5196,7 +5205,15 @@ impl ScriptListApp {
                 defer_resize_to_view(view_type, choice_count, cx);
                 cx.notify();
             }
-            PromptMessage::ShowDiv { id, html, tailwind, actions } => {
+            PromptMessage::ShowDiv {
+                id,
+                html,
+                tailwind,
+                actions,
+                container_bg,
+                container_padding,
+                opacity,
+            } => {
                 logging::log("UI", &format!("Showing div prompt: {}", id));
                 // Store SDK actions for the actions panel (Cmd+K)
                 self.sdk_actions = actions;
@@ -5219,14 +5236,31 @@ impl ScriptListApp {
                 // Create focus handle for div prompt
                 let div_focus_handle = cx.focus_handle();
 
+                // Build container options from protocol message
+                let container_options = ContainerOptions {
+                    background: container_bg,
+                    padding: container_padding.and_then(|v| {
+                        if v.is_string() && v.as_str() == Some("none") {
+                            Some(ContainerPadding::None)
+                        } else if let Some(n) = v.as_f64() {
+                            Some(ContainerPadding::Pixels(n as f32))
+                        } else {
+                            v.as_i64().map(|n| ContainerPadding::Pixels(n as f32))
+                        }
+                    }),
+                    opacity,
+                };
+
                 // Create DivPrompt entity with proper HTML rendering
-                let div_prompt = DivPrompt::new(
+                let div_prompt = DivPrompt::with_options(
                     id.clone(),
                     html,
                     tailwind,
                     div_focus_handle,
                     submit_callback,
                     std::sync::Arc::new(self.theme.clone()),
+                    crate::designs::DesignVariant::Default,
+                    container_options,
                 );
 
                 let entity = cx.new(|_| div_prompt);
