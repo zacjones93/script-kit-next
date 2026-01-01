@@ -9,6 +9,7 @@ use gpui::{
 };
 
 // gpui-component Root wrapper for theme and context provision
+use gpui_component::notification::{Notification, NotificationType};
 use gpui_component::Root;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -122,14 +123,15 @@ mod mcp_streaming;
 mod notes;
 
 use crate::components::text_input::TextInputState;
-use crate::components::toast::{Toast, ToastAction, ToastColors};
+use crate::components::toast::{Toast, ToastAction};
 use crate::error::ErrorSeverity;
 use crate::filter_coalescer::FilterCoalescer;
 use crate::form_prompt::FormPromptState;
 // TODO: Re-enable when hotkey_pollers.rs is updated for Root wrapper
 // use crate::hotkey_pollers::start_hotkey_event_handler;
 use crate::navigation::{NavCoalescer, NavDirection, NavRecord};
-use crate::toast_manager::ToastManager;
+use crate::toast_manager::{PendingToast, ToastManager};
+use components::ToastVariant;
 use editor::EditorPrompt;
 use prompts::{
     ContainerOptions, ContainerPadding, DivPrompt, DropPrompt, EnvPrompt, PathInfo, PathPrompt,
@@ -176,6 +178,44 @@ static WINDOW_VISIBLE: AtomicBool = AtomicBool::new(false); // Track window visi
 static NEEDS_RESET: AtomicBool = AtomicBool::new(false); // Track if window needs reset to script list on next show
 static PANEL_CONFIGURED: AtomicBool = AtomicBool::new(false); // Track if floating panel has been configured (one-time setup on first show)
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false); // Track if shutdown signal received (prevents new script spawns)
+
+/// Convert our ToastVariant to gpui-component's NotificationType
+fn toast_variant_to_notification_type(variant: ToastVariant) -> NotificationType {
+    match variant {
+        ToastVariant::Success => NotificationType::Success,
+        ToastVariant::Warning => NotificationType::Warning,
+        ToastVariant::Error => NotificationType::Error,
+        ToastVariant::Info => NotificationType::Info,
+    }
+}
+
+/// Convert a PendingToast to a gpui-component Notification
+fn pending_toast_to_notification(toast: &PendingToast) -> Notification {
+    let notification_type = toast_variant_to_notification_type(toast.variant);
+
+    let mut notification = Notification::new()
+        .message(&toast.message)
+        .with_type(notification_type);
+
+    // Add title for errors/warnings (makes them stand out more)
+    match toast.variant {
+        ToastVariant::Error => {
+            notification = notification.title("Error");
+        }
+        ToastVariant::Warning => {
+            notification = notification.title("Warning");
+        }
+        _ => {}
+    }
+
+    // Note: gpui-component Notification has fixed 5s autohide
+    // For persistent toasts, set autohide(false)
+    if toast.duration_ms.is_none() {
+        notification = notification.autohide(false);
+    }
+
+    notification
+}
 
 /// Check if shutdown has been requested (prevents new script spawns during shutdown)
 #[allow(dead_code)]
@@ -587,6 +627,10 @@ impl Focusable for ScriptListApp {
 
 impl Render for ScriptListApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Flush any pending toasts to gpui-component's NotificationList
+        // This is needed because toast push sites don't have window access
+        self.flush_pending_toasts(window, cx);
+
         // P0-4: Focus handling using reference match (avoids clone for focus check)
         // Focus handling depends on the view:
         // - For EditorPrompt: Use its own focus handle (not the parent's)
@@ -1031,10 +1075,69 @@ fn main() {
         // WINDOW_VISIBLE is already false by default (static initializer)
         logging::log("HOTKEY", "Window created but not shown (use hotkey to show)");
 
-        // TODO: start_hotkey_event_handler needs to be updated to work with Root wrapper
-        // This requires changes to hotkey_pollers.rs to accept Entity<ScriptListApp> instead of WindowHandle<ScriptListApp>
-        // start_hotkey_event_handler(cx, window, app_entity.clone());
-        logging::log("APP", "WARN: Main hotkey event handler temporarily disabled during Root wrapper integration");
+        // Main window hotkey listener - uses Entity<ScriptListApp> instead of WindowHandle
+        let app_entity_for_hotkey = app_entity.clone();
+        let window_for_hotkey = window;
+        cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+            logging::log("HOTKEY", "Main hotkey listener started");
+            while let Ok(()) = hotkeys::hotkey_channel().1.recv().await {
+                logging::log("VISIBILITY", "");
+                logging::log("VISIBILITY", "╔════════════════════════════════════════════════════════════╗");
+                logging::log("VISIBILITY", "║  HOTKEY TRIGGERED - TOGGLE WINDOW                          ║");
+                logging::log("VISIBILITY", "╚════════════════════════════════════════════════════════════╝");
+
+                let is_visible = WINDOW_VISIBLE.load(std::sync::atomic::Ordering::SeqCst);
+                logging::log("VISIBILITY", &format!("State: WINDOW_VISIBLE={}", is_visible));
+
+                let app_entity_inner = app_entity_for_hotkey.clone();
+                let window_inner = window_for_hotkey;
+
+                if is_visible {
+                    logging::log("VISIBILITY", "Decision: HIDE");
+                    WINDOW_VISIBLE.store(false, std::sync::atomic::Ordering::SeqCst);
+
+                    let _ = cx.update(move |cx: &mut gpui::App| {
+                        // Cancel any active prompt and reset UI
+                        app_entity_inner.update(cx, |view, ctx| {
+                            if view.is_in_prompt() {
+                                logging::log("HOTKEY", "Canceling prompt before hiding");
+                                view.cancel_script_execution(ctx);
+                            }
+                            view.reset_to_script_list(ctx);
+                        });
+                        cx.hide();
+                        logging::log("HOTKEY", "Window hidden");
+                    });
+                } else {
+                    logging::log("VISIBILITY", "Decision: SHOW");
+                    WINDOW_VISIBLE.store(true, std::sync::atomic::Ordering::SeqCst);
+
+                    let _ = cx.update(move |cx: &mut gpui::App| {
+                        // Position window on mouse display at eye-line
+                        platform::ensure_move_to_active_space();
+                        
+                        let window_size = gpui::size(px(750.), initial_window_height());
+                        let bounds = platform::calculate_eye_line_bounds_on_mouse_display(window_size);
+                        platform::move_first_window_to_bounds(&bounds);
+
+                        // Configure as floating panel on first show
+                        if !PANEL_CONFIGURED.load(std::sync::atomic::Ordering::SeqCst) {
+                            platform::configure_as_floating_panel();
+                            PANEL_CONFIGURED.store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
+
+                        // Activate window
+                        cx.activate(true);
+                        let _ = window_inner.update(cx, |_root, window, _cx| {
+                            window.activate_window();
+                        });
+
+                        logging::log("HOTKEY", "Window shown and activated");
+                    });
+                }
+            }
+            logging::log("HOTKEY", "Main hotkey listener exiting");
+        }).detach();
 
         // Notes hotkey listener - spawns independently, doesn't need window handle
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {

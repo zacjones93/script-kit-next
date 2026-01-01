@@ -26,60 +26,9 @@ impl ScriptListApp {
         }
     }
 
-    /// Render toast notifications from the toast manager
-    ///
-    /// Toasts are positioned in the top-right corner and stack vertically.
-    /// Each toast has its own dismiss callback that removes it from the manager.
-    fn render_toasts(&mut self, _cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        // Tick the manager to handle auto-dismiss
-        self.toast_manager.tick();
-
-        // Clean up dismissed toasts
-        self.toast_manager.cleanup();
-
-        // Check if toasts need update (consume the flag to prevent repeated checks)
-        // Note: We don't call cx.notify() here as it's an anti-pattern during render.
-        // Toast updates are handled by timer-based refresh mechanisms.
-        let _ = self.toast_manager.take_needs_notify();
-
-        let visible = self.toast_manager.visible_toasts();
-        if visible.is_empty() {
-            return None;
-        }
-
-        // Use design tokens for consistent spacing
-        let tokens = get_tokens(self.current_design);
-        let spacing = tokens.spacing();
-
-        // Build toast container (positioned in top-right via absolute positioning)
-        let mut toast_container = div()
-            .absolute()
-            .top(px(spacing.padding_lg))
-            .right(px(spacing.padding_lg))
-            .flex()
-            .flex_col()
-            .gap(px(spacing.gap_sm))
-            .w(px(380.0)); // Fixed width for toasts
-
-        // Add each visible toast
-        for notification in visible {
-            // Clone the toast for rendering - unfortunately we need to recreate it
-            // since Toast::render consumes self
-            let toast_colors =
-                ToastColors::from_theme(&self.theme, notification.toast.get_variant());
-            let toast = Toast::new(notification.toast.get_message().clone(), toast_colors)
-                .variant(notification.toast.get_variant())
-                .duration_ms(notification.toast.get_duration_ms())
-                .dismissible(true);
-
-            // Add details if the toast has them
-            let toast = toast.details_opt(notification.toast.get_details().cloned());
-
-            toast_container = toast_container.child(toast);
-        }
-
-        Some(toast_container)
-    }
+    // NOTE: render_toasts() removed - now using gpui-component's NotificationList
+    // via the Root wrapper. Toasts are flushed via flush_pending_toasts() in render().
+    // See toast_manager.rs for the queue and main.rs for the flush logic.
 
     /// Render the preview panel showing details of the selected script/scriptlet
     fn render_preview_panel(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {

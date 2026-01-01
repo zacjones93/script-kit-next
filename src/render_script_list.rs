@@ -1059,16 +1059,11 @@ impl ScriptListApp {
             main_div = main_div.child(panel);
         }
 
-        // Wrap in relative container for toast overlay positioning
-        let mut container = div().relative().w_full().h_full().child(main_div);
-
-        // Add toast notifications overlay (top-right)
-        if let Some(toasts) = self.render_toasts(cx) {
-            container = container.child(toasts);
-        }
+        // Note: Toast notifications are now handled by gpui-component's NotificationList
+        // via the Root wrapper. Toasts are flushed in render() via flush_pending_toasts().
 
         // Note: HUD overlay is added at the top-level render() method for all views
 
-        container.into_any_element()
+        main_div.into_any_element()
     }
 }

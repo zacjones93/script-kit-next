@@ -1581,6 +1581,21 @@ impl ScriptListApp {
         logging::log("EXEC", "=== Script cancellation complete ===");
     }
 
+    /// Flush pending toasts from ToastManager to gpui-component's NotificationList
+    ///
+    /// This should be called at the start of render() where we have window access.
+    /// The ToastManager acts as a staging queue for toasts pushed from callbacks
+    /// that don't have window access.
+    fn flush_pending_toasts(&mut self, window: &mut gpui::Window, cx: &mut gpui::App) {
+        use gpui_component::WindowExt;
+
+        let pending = self.toast_manager.drain_pending();
+        for toast in pending {
+            let notification = pending_toast_to_notification(&toast);
+            window.push_notification(notification, cx);
+        }
+    }
+
     /// Close window and reset to default state (Cmd+W global handler)
     ///
     /// This method handles the global Cmd+W shortcut which should work

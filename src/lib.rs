@@ -136,3 +136,7 @@ pub mod stdin_commands;
 // Notes - Raycast Notes feature parity
 // Separate floating window for note-taking with gpui-component
 pub mod notes;
+
+// AI Chat - Separate floating window for AI conversations
+// BYOK (Bring Your Own Key) with SQLite storage at ~/.kenv/ai-chats.db
+pub mod ai;
