@@ -676,6 +676,9 @@ include!("render_builtins.rs");
 // Prompt render methods (arg, div, form, term, editor, etc.)
 include!("render_prompts.rs");
 
+// Script list render method
+include!("render_script_list.rs");
+
 fn main() {
     logging::init();
 
