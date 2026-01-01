@@ -16,7 +16,10 @@ use std::sync::Arc;
 
 use crate::designs::{get_tokens, DesignVariant};
 use crate::logging;
-use crate::panel::{CURSOR_GAP_X, CURSOR_HEIGHT_LG, CURSOR_MARGIN_Y, CURSOR_WIDTH};
+use crate::panel::{
+    CURSOR_GAP_X, CURSOR_HEIGHT_LG, CURSOR_MARGIN_Y, CURSOR_WIDTH, HEADER_GAP, HEADER_PADDING_X,
+    HEADER_PADDING_Y,
+};
 use crate::theme;
 
 use super::SubmitCallback;
@@ -220,7 +223,6 @@ impl Render for EnvPrompt {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = get_tokens(self.design_variant);
         let design_colors = tokens.colors();
-        let design_spacing = tokens.spacing();
         let design_typography = tokens.typography();
 
         let handle_key = cx.listener(
@@ -298,17 +300,17 @@ impl Render for EnvPrompt {
             .key_context("env_prompt")
             .track_focus(&self.focus_handle)
             .on_key_down(handle_key)
-            // Single header row (matches ArgPrompt exactly)
+            // Single header row - uses shared header constants for visual consistency with main menu
             .child(
                 div()
                     .w_full()
-                    .px(px(design_spacing.padding_lg))
-                    .py(px(design_spacing.padding_md))
+                    .px(px(HEADER_PADDING_X))
+                    .py(px(HEADER_PADDING_Y))
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap_3()
-                    // Input area with cursor (same pattern as ArgPrompt)
+                    .gap(px(HEADER_GAP))
+                    // Input area with cursor (same pattern as main menu)
                     .child(
                         div()
                             .flex_1()

@@ -44,6 +44,24 @@ impl WindowVibrancy {
 }
 
 // ============================================================================
+// Header Layout Constants (Reference: Main Menu)
+// ============================================================================
+// These constants define the canonical header layout used by the main script list.
+// All prompts (ArgPrompt, EnvPrompt, etc.) should use these exact values to ensure
+// visual consistency with the main menu search input.
+
+/// Header horizontal padding (px) - matches main menu
+pub const HEADER_PADDING_X: f32 = 16.0;
+
+/// Header vertical padding (px) - matches main menu
+/// NOTE: This is 8px, NOT 12px (design_spacing.padding_md). The main menu uses
+/// a tighter vertical padding for a more compact header appearance.
+pub const HEADER_PADDING_Y: f32 = 8.0;
+
+/// Header gap between input and buttons (px) - matches main menu
+pub const HEADER_GAP: f32 = 12.0;
+
+// ============================================================================
 // Input Placeholder Configuration
 // ============================================================================
 

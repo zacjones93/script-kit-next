@@ -290,16 +290,16 @@ impl ScriptListApp {
             .key_context("arg_prompt")
             .track_focus(&self.focus_handle)
             .on_key_down(handle_key)
-            // Header with input
+            // Header with input - uses shared header constants for visual consistency with main menu
             .child(
                 div()
                     .w_full()
-                    .px(px(design_spacing.padding_lg))
-                    .py(px(design_spacing.padding_md))
+                    .px(px(HEADER_PADDING_X))
+                    .py(px(HEADER_PADDING_Y))
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap_3()
+                    .gap(px(HEADER_GAP))
                     // Search input with blinking cursor (same as main menu)
                     // Cursor appears at LEFT when input is empty (before placeholder text)
                     .child(

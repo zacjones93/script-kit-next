@@ -567,21 +567,21 @@ impl ScriptListApp {
             .track_focus(&self.focus_handle)
             .on_key_down(handle_key)
             // Header: Search Input + Run + Actions + Logo
-            // Use design tokens for spacing and colors
+            // Use shared header layout constants for consistency with all prompts
             .child({
-                // Design token values for header
+                // Use shared header constants for default design, design tokens for others
                 let header_padding_x = if is_default_design {
-                    16.0
+                    HEADER_PADDING_X
                 } else {
                     design_spacing.padding_lg
                 };
                 let header_padding_y = if is_default_design {
-                    8.0
+                    HEADER_PADDING_Y
                 } else {
                     design_spacing.padding_sm
                 };
                 let header_gap = if is_default_design {
-                    12.0
+                    HEADER_GAP
                 } else {
                     design_spacing.gap_md
                 };

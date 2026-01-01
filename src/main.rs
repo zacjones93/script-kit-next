@@ -145,7 +145,10 @@ use scripts::get_grouped_results;
 // strip_html_tags removed - DivPrompt now renders HTML properly
 
 use actions::{ActionsDialog, ScriptInfo};
-use panel::{CURSOR_GAP_X, CURSOR_HEIGHT_LG, CURSOR_MARGIN_Y, CURSOR_WIDTH, DEFAULT_PLACEHOLDER};
+use panel::{
+    CURSOR_GAP_X, CURSOR_HEIGHT_LG, CURSOR_MARGIN_Y, CURSOR_WIDTH, DEFAULT_PLACEHOLDER,
+    HEADER_GAP, HEADER_PADDING_X, HEADER_PADDING_Y,
+};
 use parking_lot::Mutex as ParkingMutex;
 use protocol::{Choice, Message, ProtocolAction};
 use std::sync::{mpsc, Arc, Mutex};
