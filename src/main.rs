@@ -548,6 +548,9 @@ enum AliasMatch {
 // Core ScriptListApp implementation extracted to app_impl.rs
 include!("app_impl.rs");
 
+// Script execution logic (execute_interactive) extracted
+include!("execute_script.rs");
+
 impl Focusable for ScriptListApp {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
