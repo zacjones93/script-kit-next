@@ -685,8 +685,17 @@ impl Render for NotesApp {
     }
 }
 
+/// Initialize gpui-component theme if not already initialized
+fn ensure_theme_initialized(cx: &mut App) {
+    // gpui_component::init handles theme initialization idempotently
+    gpui_component::init(cx);
+}
+
 /// Open the notes window (or focus it if already open)
 pub fn open_notes_window(cx: &mut App) -> Result<()> {
+    // Ensure gpui-component theme is initialized before opening window
+    ensure_theme_initialized(cx);
+
     let window_handle = NOTES_WINDOW.get_or_init(|| std::sync::Mutex::new(None));
     let mut guard = window_handle.lock().unwrap();
 

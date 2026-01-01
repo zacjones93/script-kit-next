@@ -54,6 +54,8 @@ pub enum ExternalCommand {
         #[serde(default)]
         modifiers: Vec<String>,
     },
+    /// Open the Notes window (for testing)
+    OpenNotes,
 }
 
 /// Start a thread that listens on stdin for external JSONL commands.
