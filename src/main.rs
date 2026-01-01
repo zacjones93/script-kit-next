@@ -669,6 +669,9 @@ impl Render for ScriptListApp {
 // Render methods extracted to app_render.rs for maintainability
 include!("app_render.rs");
 
+// Builtin view render methods (clipboard, app launcher, window switcher)
+include!("render_builtins.rs");
+
 
 fn main() {
     logging::init();
