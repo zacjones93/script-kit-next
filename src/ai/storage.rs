@@ -648,6 +648,171 @@ fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<Message> {
     })
 }
 
+// ============================================================================
+// Mock Data for Testing
+// ============================================================================
+
+/// Insert mock chat data for visual testing.
+/// Creates sample chats with messages to verify the UI layout.
+pub fn insert_mock_data() -> Result<()> {
+    use chrono::Duration;
+
+    // First, ensure the database is initialized
+    // (init_ai_db is idempotent via OnceLock)
+    if AI_DB.get().is_none() {
+        init_ai_db()?;
+    }
+
+    let now = Utc::now();
+    let yesterday = now - Duration::days(1);
+    let last_week = now - Duration::days(5);
+
+    // Chat 1: "Hello World Example" (Today)
+    let chat1_id = ChatId::new();
+    let chat1 = Chat {
+        id: chat1_id,
+        title: "Hello World Example".to_string(),
+        created_at: now - Duration::hours(1),
+        updated_at: now,
+        deleted_at: None,
+        model_id: "claude-3-5-sonnet-20241022".to_string(),
+        provider: "anthropic".to_string(),
+    };
+    create_chat(&chat1)?;
+
+    // Messages for Chat 1
+    let msg1_1 = Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_id: chat1_id,
+        role: MessageRole::User,
+        content: "Hello! Can you help me write a hello world program?".to_string(),
+        created_at: now - Duration::minutes(30),
+        tokens_used: Some(15),
+    };
+    save_message(&msg1_1)?;
+
+    let msg1_2 = Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_id: chat1_id,
+        role: MessageRole::Assistant,
+        content: "Of course! Here's a simple hello world program in Python:\n\n```python\nprint('Hello, World!')\n```\n\nThis is the most basic Python program. Would you like me to explain how it works?".to_string(),
+        created_at: now - Duration::minutes(29),
+        tokens_used: Some(45),
+    };
+    save_message(&msg1_2)?;
+
+    let msg1_3 = Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_id: chat1_id,
+        role: MessageRole::User,
+        content: "Yes please".to_string(),
+        created_at: now - Duration::minutes(28),
+        tokens_used: Some(5),
+    };
+    save_message(&msg1_3)?;
+
+    let msg1_4 = Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_id: chat1_id,
+        role: MessageRole::Assistant,
+        content: "The `print()` function outputs text to the console. The string 'Hello, World!' is passed as an argument, and Python displays it. This is typically the first program you write when learning a new language!\n\nHere are some variations you might find interesting:\n\n**Multiple lines:**\n```python\nprint('Hello,')\nprint('World!')\n```\n\n**Using f-strings:**\n```python\nname = 'World'\nprint(f'Hello, {name}!')\n```\n\nWould you like to try any other languages?".to_string(),
+        created_at: now - Duration::minutes(27),
+        tokens_used: Some(120),
+    };
+    save_message(&msg1_4)?;
+
+    // Chat 2: "Code Review" (Yesterday)
+    let chat2_id = ChatId::new();
+    let chat2 = Chat {
+        id: chat2_id,
+        title: "Code Review Request".to_string(),
+        created_at: yesterday - Duration::hours(2),
+        updated_at: yesterday,
+        deleted_at: None,
+        model_id: "gpt-4o".to_string(),
+        provider: "openai".to_string(),
+    };
+    create_chat(&chat2)?;
+
+    let msg2_1 = Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_id: chat2_id,
+        role: MessageRole::User,
+        content: "Can you review this code?".to_string(),
+        created_at: yesterday - Duration::minutes(30),
+        tokens_used: Some(8),
+    };
+    save_message(&msg2_1)?;
+
+    let msg2_2 = Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_id: chat2_id,
+        role: MessageRole::Assistant,
+        content: "I'd be happy to review your code. Please share it and I'll provide feedback on structure, best practices, and potential improvements.".to_string(),
+        created_at: yesterday - Duration::minutes(29),
+        tokens_used: Some(35),
+    };
+    save_message(&msg2_2)?;
+
+    // Chat 3: "Longer Discussion" (This Week - 5 days ago)
+    let chat3_id = ChatId::new();
+    let chat3 = Chat {
+        id: chat3_id,
+        title: "Understanding Rust Lifetimes".to_string(),
+        created_at: last_week - Duration::hours(3),
+        updated_at: last_week,
+        deleted_at: None,
+        model_id: "claude-3-5-sonnet-20241022".to_string(),
+        provider: "anthropic".to_string(),
+    };
+    create_chat(&chat3)?;
+
+    let msg3_1 = Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_id: chat3_id,
+        role: MessageRole::User,
+        content: "I'm confused about Rust lifetimes. Can you explain them in simple terms?"
+            .to_string(),
+        created_at: last_week - Duration::minutes(45),
+        tokens_used: Some(18),
+    };
+    save_message(&msg3_1)?;
+
+    let msg3_2 = Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_id: chat3_id,
+        role: MessageRole::Assistant,
+        content: "Absolutely! Think of lifetimes as Rust's way of tracking how long references are valid.\n\n## The Core Idea\n\nWhen you create a reference to some data, Rust needs to ensure that:\n1. The reference doesn't outlive the data it points to\n2. You don't have mutable and immutable references at the same time\n\n## A Simple Example\n\n```rust\nfn main() {\n    let r;                // ---------+-- 'a\n    {                     //          |\n        let x = 5;        // -+-- 'b  |\n        r = &x;           //  |       |\n    }                     // -+       |\n    println!(\"{}\", r);   //          |\n}                         // ---------+\n```\n\nThis won't compile because `r` (lifetime 'a) would reference `x` (lifetime 'b) after `x` is dropped.\n\n## When You Need Annotations\n\nUsually Rust infers lifetimes, but sometimes you need to be explicit:\n\n```rust\nfn longest<'a>(x: &'a str, y: &'a str) -> &'a str {\n    if x.len() > y.len() { x } else { y }\n}\n```\n\nThis tells Rust: \"the returned reference will live as long as the shorter of the two input references.\"\n\nWant me to show more examples?".to_string(),
+        created_at: last_week - Duration::minutes(43),
+        tokens_used: Some(280),
+    };
+    save_message(&msg3_2)?;
+
+    info!(
+        chat_count = 3,
+        message_count = 8,
+        "Mock data inserted for AI visual testing"
+    );
+
+    Ok(())
+}
+
+/// Clear all mock data (for test cleanup)
+pub fn clear_all_chats() -> Result<()> {
+    let db = get_db()?;
+    let conn = db
+        .lock()
+        .map_err(|e| anyhow::anyhow!("DB lock error: {}", e))?;
+
+    conn.execute("DELETE FROM messages", [])
+        .context("Failed to delete all messages")?;
+    conn.execute("DELETE FROM chats", [])
+        .context("Failed to delete all chats")?;
+
+    info!("All chats and messages cleared");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

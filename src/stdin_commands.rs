@@ -58,6 +58,9 @@ pub enum ExternalCommand {
     OpenNotes,
     /// Open the AI Chat window (for testing)
     OpenAi,
+    /// Open the AI Chat window with mock data (for visual testing)
+    /// This inserts sample conversations to test the UI layout
+    OpenAiWithMockData,
     /// Capture a screenshot of a window by title pattern and save to file (for testing)
     /// title: Title pattern to match (e.g., "Script Kit AI" for the AI window)
     /// path: File path to save the PNG screenshot
@@ -243,6 +246,13 @@ mod tests {
         let json = r#"{"type": "openAi"}"#;
         let cmd: ExternalCommand = serde_json::from_str(json).unwrap();
         assert!(matches!(cmd, ExternalCommand::OpenAi));
+    }
+
+    #[test]
+    fn test_external_command_open_ai_with_mock_data_deserialization() {
+        let json = r#"{"type": "openAiWithMockData"}"#;
+        let cmd: ExternalCommand = serde_json::from_str(json).unwrap();
+        assert!(matches!(cmd, ExternalCommand::OpenAiWithMockData));
     }
 
     #[test]

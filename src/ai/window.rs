@@ -651,6 +651,7 @@ impl AiApp {
             .flex_col()
             .w(px(240.))
             .h_full()
+            .pt(px(28.)) // Leave space for macOS traffic light buttons
             .bg(cx.theme().sidebar)
             .border_r_1()
             .border_color(cx.theme().sidebar_border)
@@ -1166,11 +1167,12 @@ fn map_scriptkit_to_gpui_theme(sk_theme: &crate::theme::Theme) -> ThemeColor {
     theme_color.sidebar_primary = hex_to_hsla(colors.accent.selected);
     theme_color.sidebar_primary_foreground = hex_to_hsla(colors.text.primary);
 
-    // Primary (accent-colored buttons)
+    // Primary (accent-colored buttons) - yellow/gold background with dark text/icons
+    // Use explicit black (0x000000) for foreground to ensure icon visibility against yellow
     theme_color.primary = hex_to_hsla(colors.accent.selected);
-    theme_color.primary_foreground = hex_to_hsla(colors.background.main);
-    theme_color.primary_hover = hex_to_hsla(colors.accent.selected);
-    theme_color.primary_active = hex_to_hsla(colors.accent.selected);
+    theme_color.primary_foreground = hex_to_hsla(0x000000); // Black for maximum contrast
+    theme_color.primary_hover = hex_to_hsla(colors.accent.selected).opacity(0.9);
+    theme_color.primary_active = hex_to_hsla(colors.accent.selected).opacity(0.8);
 
     // Secondary (muted buttons)
     theme_color.secondary = hex_to_hsla(colors.background.search_box);

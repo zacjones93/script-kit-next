@@ -1639,6 +1639,19 @@ fn main() {
                                     logging::log("STDIN", &format!("Failed to open AI window: {}", e));
                                 }
                             }
+                            ExternalCommand::OpenAiWithMockData => {
+                                logging::log("STDIN", "Opening AI window with mock data via stdin command");
+                                // First insert mock data
+                                if let Err(e) = ai::insert_mock_data() {
+                                    logging::log("STDIN", &format!("Failed to insert mock data: {}", e));
+                                } else {
+                                    logging::log("STDIN", "Mock data inserted successfully");
+                                }
+                                // Then open the window
+                                if let Err(e) = ai::open_ai_window(ctx) {
+                                    logging::log("STDIN", &format!("Failed to open AI window: {}", e));
+                                }
+                            }
                             ExternalCommand::CaptureWindow { title, path } => {
                                 logging::log("STDIN", &format!("Capturing window with title '{}' to '{}'", title, path));
                                 match capture_window_by_title(&title, false) {
