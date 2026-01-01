@@ -1,5 +1,6 @@
 use gpui::{px, size, App, AppContext as _, AsyncApp, Context, Focusable, Window, WindowHandle};
 
+use crate::ai;
 use crate::hotkeys;
 use crate::notes;
 use crate::platform::{calculate_eye_line_bounds_on_mouse_display, move_first_window_to_bounds};
@@ -250,6 +251,35 @@ impl NotesHotkeyPoller {
     }
 }
 
+/// A model that listens for AI hotkey triggers via async_channel.
+#[allow(dead_code)]
+pub struct AiHotkeyPoller;
+
+impl AiHotkeyPoller {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn start_listening(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |_this, cx: &mut AsyncApp| {
+            logging::log("HOTKEY", "AI hotkey listener started");
+
+            while let Ok(()) = hotkeys::ai_hotkey_channel().1.recv().await {
+                logging::log("HOTKEY", "AI hotkey triggered - opening AI window");
+
+                let _ = cx.update(move |cx: &mut App| {
+                    if let Err(e) = ai::open_ai_window(cx) {
+                        logging::log("HOTKEY", &format!("Failed to open AI window: {}", e));
+                    }
+                });
+            }
+
+            logging::log("HOTKEY", "AI hotkey listener exiting");
+        })
+        .detach();
+    }
+}
+
 #[allow(dead_code)]
 pub(crate) fn start_hotkey_event_handler(cx: &mut App, window: WindowHandle<ScriptListApp>) {
     // Start main hotkey listener (for app show/hide toggle)
@@ -267,6 +297,12 @@ pub(crate) fn start_hotkey_event_handler(cx: &mut App, window: WindowHandle<Scri
     // Start notes hotkey listener (for opening notes window)
     let notes_handler = cx.new(|_| NotesHotkeyPoller::new());
     notes_handler.update(cx, |p, cx| {
+        p.start_listening(cx);
+    });
+
+    // Start AI hotkey listener (for opening AI window)
+    let ai_handler = cx.new(|_| AiHotkeyPoller::new());
+    ai_handler.update(cx, |p, cx| {
         p.start_listening(cx);
     });
 }

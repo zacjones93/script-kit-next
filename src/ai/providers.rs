@@ -20,8 +20,9 @@
 //! }
 //! ```
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 
 use super::config::{default_models, DetectedKeys, ModelInfo, ProviderConfig};
@@ -114,10 +115,13 @@ pub trait AiProvider: Send + Sync {
     ) -> Result<()>;
 }
 
-/// OpenAI provider implementation.
+/// OpenAI provider implementation with real API calls.
 pub struct OpenAiProvider {
     config: ProviderConfig,
 }
+
+/// OpenAI API constants
+const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
 
 impl OpenAiProvider {
     /// Create a new OpenAI provider with the given API key.
@@ -132,6 +136,64 @@ impl OpenAiProvider {
         Self {
             config: ProviderConfig::new("openai", "OpenAI", api_key).with_base_url(base_url),
         }
+    }
+
+    /// Get the API URL (uses custom base_url if set)
+    fn api_url(&self) -> &str {
+        self.config.base_url.as_deref().unwrap_or(OPENAI_API_URL)
+    }
+
+    /// Build the request body for OpenAI API
+    fn build_request_body(
+        &self,
+        messages: &[ProviderMessage],
+        model_id: &str,
+        stream: bool,
+    ) -> serde_json::Value {
+        let api_messages: Vec<serde_json::Value> = messages
+            .iter()
+            .map(|m| {
+                serde_json::json!({
+                    "role": m.role,
+                    "content": m.content
+                })
+            })
+            .collect();
+
+        serde_json::json!({
+            "model": model_id,
+            "stream": stream,
+            "messages": api_messages
+        })
+    }
+
+    /// Parse an SSE line and extract content delta (OpenAI format)
+    fn parse_sse_line(line: &str) -> Option<String> {
+        // SSE format: "data: {json}"
+        if !line.starts_with("data: ") {
+            return None;
+        }
+
+        let json_str = &line[6..]; // Skip "data: "
+
+        // Check for stream end
+        if json_str == "[DONE]" {
+            return None;
+        }
+
+        // Parse the JSON
+        let parsed: serde_json::Value = serde_json::from_str(json_str).ok()?;
+
+        // OpenAI streaming format:
+        // {"choices": [{"delta": {"content": "..."}}]}
+        parsed
+            .get("choices")?
+            .as_array()?
+            .first()?
+            .get("delta")?
+            .get("content")?
+            .as_str()
+            .map(|s| s.to_string())
     }
 }
 
@@ -149,21 +211,46 @@ impl AiProvider for OpenAiProvider {
     }
 
     fn send_message(&self, messages: &[ProviderMessage], model_id: &str) -> Result<String> {
-        // TODO: Implement real API call when HTTP client is added
-        // For now, return a mock response
-        let last_user_msg = messages
-            .iter()
-            .rev()
-            .find(|m| m.role == "user")
-            .map(|m| m.content.as_str())
-            .unwrap_or("(no message)");
+        let body = self.build_request_body(messages, model_id, false);
 
-        Ok(format!(
-            "[Mock OpenAI Response]\nModel: {}\nProvider: {}\n\nI received your message: \"{}\"",
-            model_id,
-            self.display_name(),
-            last_user_msg
-        ))
+        tracing::debug!(
+            model = model_id,
+            message_count = messages.len(),
+            "Sending non-streaming request to OpenAI"
+        );
+
+        let response = ureq::post(self.api_url())
+            .header("Content-Type", "application/json")
+            .header(
+                "Authorization",
+                &format!("Bearer {}", self.config.api_key()),
+            )
+            .send_json(&body)
+            .context("Failed to send request to OpenAI API")?;
+
+        let response_json: serde_json::Value = response
+            .into_body()
+            .read_json()
+            .context("Failed to parse OpenAI response")?;
+
+        // Extract content from response
+        // Response format: {"choices": [{"message": {"content": "..."}}]}
+        let content = response_json
+            .get("choices")
+            .and_then(|c| c.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|choice| choice.get("message"))
+            .and_then(|msg| msg.get("content"))
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        tracing::debug!(
+            content_len = content.len(),
+            "Received non-streaming response from OpenAI"
+        );
+
+        Ok(content)
     }
 
     fn stream_message(
@@ -172,23 +259,56 @@ impl AiProvider for OpenAiProvider {
         model_id: &str,
         on_chunk: StreamCallback,
     ) -> Result<()> {
-        // TODO: Implement real streaming when HTTP client is added
-        // For now, simulate streaming by sending chunks
-        let response = self.send_message(messages, model_id)?;
+        let body = self.build_request_body(messages, model_id, true);
 
-        // Simulate streaming by splitting response into words
-        for word in response.split_whitespace() {
-            on_chunk(format!("{} ", word));
+        tracing::debug!(
+            model = model_id,
+            message_count = messages.len(),
+            "Starting streaming request to OpenAI"
+        );
+
+        let response = ureq::post(self.api_url())
+            .header("Content-Type", "application/json")
+            .header(
+                "Authorization",
+                &format!("Bearer {}", self.config.api_key()),
+            )
+            .header("Accept", "text/event-stream")
+            .send_json(&body)
+            .context("Failed to send streaming request to OpenAI API")?;
+
+        // Read the SSE stream
+        let reader = BufReader::new(response.into_body().into_reader());
+
+        for line in reader.lines() {
+            let line = line.context("Failed to read SSE line")?;
+
+            // Skip empty lines
+            if line.is_empty() {
+                continue;
+            }
+
+            // Parse and extract content delta
+            if let Some(text) = Self::parse_sse_line(&line) {
+                on_chunk(text);
+            }
         }
+
+        tracing::debug!("Completed streaming response from OpenAI");
 
         Ok(())
     }
 }
 
-/// Anthropic provider implementation.
+/// Anthropic provider implementation with real API calls.
 pub struct AnthropicProvider {
     config: ProviderConfig,
 }
+
+/// Anthropic API constants
+const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+const DEFAULT_MAX_TOKENS: u32 = 4096;
 
 impl AnthropicProvider {
     /// Create a new Anthropic provider with the given API key.
@@ -196,6 +316,76 @@ impl AnthropicProvider {
         Self {
             config: ProviderConfig::new("anthropic", "Anthropic", api_key),
         }
+    }
+
+    /// Build the request body for Anthropic API
+    fn build_request_body(
+        &self,
+        messages: &[ProviderMessage],
+        model_id: &str,
+        stream: bool,
+    ) -> serde_json::Value {
+        // Separate system message from conversation messages
+        let system_msg = messages
+            .iter()
+            .find(|m| m.role == "system")
+            .map(|m| m.content.clone());
+
+        // Filter out system messages for the messages array
+        let api_messages: Vec<serde_json::Value> = messages
+            .iter()
+            .filter(|m| m.role != "system")
+            .map(|m| {
+                serde_json::json!({
+                    "role": m.role,
+                    "content": m.content
+                })
+            })
+            .collect();
+
+        let mut body = serde_json::json!({
+            "model": model_id,
+            "max_tokens": DEFAULT_MAX_TOKENS,
+            "stream": stream,
+            "messages": api_messages
+        });
+
+        // Add system message if present
+        if let Some(system) = system_msg {
+            body["system"] = serde_json::Value::String(system);
+        }
+
+        body
+    }
+
+    /// Parse an SSE line and extract content delta
+    fn parse_sse_line(line: &str) -> Option<String> {
+        // SSE format: "data: {json}"
+        if !line.starts_with("data: ") {
+            return None;
+        }
+
+        let json_str = &line[6..]; // Skip "data: "
+
+        // Check for stream end
+        if json_str == "[DONE]" {
+            return None;
+        }
+
+        // Parse the JSON
+        let parsed: serde_json::Value = serde_json::from_str(json_str).ok()?;
+
+        // Anthropic streaming format:
+        // - content_block_delta events contain: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "..."}}
+        if parsed.get("type")?.as_str()? == "content_block_delta" {
+            if let Some(delta) = parsed.get("delta") {
+                if delta.get("type")?.as_str()? == "text_delta" {
+                    return delta.get("text")?.as_str().map(|s| s.to_string());
+                }
+            }
+        }
+
+        None
     }
 }
 
@@ -213,20 +403,43 @@ impl AiProvider for AnthropicProvider {
     }
 
     fn send_message(&self, messages: &[ProviderMessage], model_id: &str) -> Result<String> {
-        // TODO: Implement real API call when HTTP client is added
-        let last_user_msg = messages
-            .iter()
-            .rev()
-            .find(|m| m.role == "user")
-            .map(|m| m.content.as_str())
-            .unwrap_or("(no message)");
+        let body = self.build_request_body(messages, model_id, false);
 
-        Ok(format!(
-            "[Mock Anthropic Response]\nModel: {}\nProvider: {}\n\nI received your message: \"{}\"",
-            model_id,
-            self.display_name(),
-            last_user_msg
-        ))
+        tracing::debug!(
+            model = model_id,
+            message_count = messages.len(),
+            "Sending non-streaming request to Anthropic"
+        );
+
+        let response = ureq::post(ANTHROPIC_API_URL)
+            .header("Content-Type", "application/json")
+            .header("x-api-key", self.config.api_key())
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .send_json(&body)
+            .context("Failed to send request to Anthropic API")?;
+
+        let response_json: serde_json::Value = response
+            .into_body()
+            .read_json()
+            .context("Failed to parse Anthropic response")?;
+
+        // Extract content from response
+        // Response format: {"content": [{"type": "text", "text": "..."}], ...}
+        let content = response_json
+            .get("content")
+            .and_then(|c| c.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|block| block.get("text"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        tracing::debug!(
+            content_len = content.len(),
+            "Received non-streaming response from Anthropic"
+        );
+
+        Ok(content)
     }
 
     fn stream_message(
@@ -235,11 +448,40 @@ impl AiProvider for AnthropicProvider {
         model_id: &str,
         on_chunk: StreamCallback,
     ) -> Result<()> {
-        let response = self.send_message(messages, model_id)?;
+        let body = self.build_request_body(messages, model_id, true);
 
-        for word in response.split_whitespace() {
-            on_chunk(format!("{} ", word));
+        tracing::debug!(
+            model = model_id,
+            message_count = messages.len(),
+            "Starting streaming request to Anthropic"
+        );
+
+        let response = ureq::post(ANTHROPIC_API_URL)
+            .header("Content-Type", "application/json")
+            .header("x-api-key", self.config.api_key())
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("Accept", "text/event-stream")
+            .send_json(&body)
+            .context("Failed to send streaming request to Anthropic API")?;
+
+        // Read the SSE stream
+        let reader = BufReader::new(response.into_body().into_reader());
+
+        for line in reader.lines() {
+            let line = line.context("Failed to read SSE line")?;
+
+            // Skip empty lines (SSE uses blank lines as event separators)
+            if line.is_empty() {
+                continue;
+            }
+
+            // Parse and extract content delta
+            if let Some(text) = Self::parse_sse_line(&line) {
+                on_chunk(text);
+            }
         }
+
+        tracing::debug!("Completed streaming response from Anthropic");
 
         Ok(())
     }
@@ -509,23 +751,32 @@ mod tests {
         assert!(!models.is_empty());
     }
 
+    /// Test send_message with real API calls (requires API key)
+    /// Run with: cargo test --features system-tests test_send_message_real -- --ignored
     #[test]
-    fn test_send_message_mock() {
-        let provider = OpenAiProvider::new("test-key");
+    #[ignore = "Requires real API key - run with SCRIPT_KIT_OPENAI_API_KEY set"]
+    fn test_send_message_real() {
+        let api_key = std::env::var("SCRIPT_KIT_OPENAI_API_KEY")
+            .expect("SCRIPT_KIT_OPENAI_API_KEY must be set for this test");
+        let provider = OpenAiProvider::new(api_key);
         let messages = vec![
             ProviderMessage::system("You are helpful"),
-            ProviderMessage::user("Hello, world!"),
+            ProviderMessage::user("Say hello"),
         ];
 
-        let response = provider.send_message(&messages, "gpt-4o").unwrap();
-        assert!(response.contains("Hello, world!"));
-        assert!(response.contains("OpenAI"));
+        let response = provider.send_message(&messages, "gpt-4o-mini").unwrap();
+        assert!(!response.is_empty());
     }
 
+    /// Test stream_message with real API calls (requires API key)
+    /// Run with: cargo test --features system-tests test_stream_message_real -- --ignored
     #[test]
-    fn test_stream_message_mock() {
-        let provider = OpenAiProvider::new("test-key");
-        let messages = vec![ProviderMessage::user("Test")];
+    #[ignore = "Requires real API key - run with SCRIPT_KIT_OPENAI_API_KEY set"]
+    fn test_stream_message_real() {
+        let api_key = std::env::var("SCRIPT_KIT_OPENAI_API_KEY")
+            .expect("SCRIPT_KIT_OPENAI_API_KEY must be set for this test");
+        let provider = OpenAiProvider::new(api_key);
+        let messages = vec![ProviderMessage::user("Say hello")];
 
         let chunks = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let chunks_clone = chunks.clone();
@@ -533,7 +784,7 @@ mod tests {
         provider
             .stream_message(
                 &messages,
-                "gpt-4o",
+                "gpt-4o-mini",
                 Box::new(move |chunk| {
                     chunks_clone.lock().unwrap().push(chunk);
                 }),
@@ -542,6 +793,80 @@ mod tests {
 
         let collected = chunks.lock().unwrap();
         assert!(!collected.is_empty());
+    }
+
+    #[test]
+    fn test_request_body_construction() {
+        let provider = OpenAiProvider::new("test-key");
+        let messages = vec![
+            ProviderMessage::system("You are helpful"),
+            ProviderMessage::user("Hello"),
+        ];
+
+        let body = provider.build_request_body(&messages, "gpt-4o", false);
+
+        assert_eq!(body["model"], "gpt-4o");
+        assert_eq!(body["stream"], false);
+        assert!(body["messages"].is_array());
+        assert_eq!(body["messages"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_anthropic_request_body_construction() {
+        let provider = AnthropicProvider::new("test-key");
+        let messages = vec![
+            ProviderMessage::system("You are helpful"),
+            ProviderMessage::user("Hello"),
+        ];
+
+        let body = provider.build_request_body(&messages, "claude-3-5-sonnet-20241022", true);
+
+        assert_eq!(body["model"], "claude-3-5-sonnet-20241022");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["system"], "You are helpful");
+        // Messages array should NOT contain the system message
+        assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_sse_parsing_openai() {
+        // Test OpenAI SSE format
+        let line = r#"data: {"choices": [{"delta": {"content": "Hello"}}]}"#;
+        let result = OpenAiProvider::parse_sse_line(line);
+        assert_eq!(result, Some("Hello".to_string()));
+
+        // Empty delta
+        let line = r#"data: {"choices": [{"delta": {}}]}"#;
+        let result = OpenAiProvider::parse_sse_line(line);
+        assert_eq!(result, None);
+
+        // [DONE] marker
+        let line = "data: [DONE]";
+        let result = OpenAiProvider::parse_sse_line(line);
+        assert_eq!(result, None);
+
+        // Non-data line
+        let line = "event: message";
+        let result = OpenAiProvider::parse_sse_line(line);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_sse_parsing_anthropic() {
+        // Test Anthropic SSE format
+        let line = r#"data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "World"}}"#;
+        let result = AnthropicProvider::parse_sse_line(line);
+        assert_eq!(result, Some("World".to_string()));
+
+        // Other event types should be ignored
+        let line = r#"data: {"type": "message_start", "message": {}}"#;
+        let result = AnthropicProvider::parse_sse_line(line);
+        assert_eq!(result, None);
+
+        // [DONE] marker
+        let line = "data: [DONE]";
+        let result = AnthropicProvider::parse_sse_line(line);
+        assert_eq!(result, None);
     }
 
     #[test]

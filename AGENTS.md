@@ -64,6 +64,7 @@ cargo check && cargo clippy --all-targets -- -D warnings && cargo test
 | **AI Log Mode** | Set `SCRIPT_KIT_AI_LOG=1` for token-efficient compact logs (see below) |
 | **Config Settings** | Font sizes and padding are configurable via `~/.kenv/config.ts` - use `config.get_*()` helpers |
 | **Notes Window** | Separate floating window in `src/notes/`; test via `{"type": "openNotes"}` stdin command |
+| **AI Window** | BYOK chat in `src/ai/`; test via `{"type": "openAi"}` stdin command |
 
 ---
 
@@ -909,6 +910,13 @@ src/
     window.rs   # NotesApp view, open/close/quick_capture functions
     storage.rs  # SQLite persistence layer
     model.rs    # Note data model (NoteId, Note struct, ExportFormat)
+  ai/           # AI chat window module (separate floating window)
+    mod.rs      # Module exports and documentation
+    window.rs   # AiApp view, open/close functions
+    storage.rs  # SQLite persistence (ai-chats.db)
+    model.rs    # Chat, Message, ChatId, MessageRole
+    providers.rs # Provider trait, Anthropic/OpenAI implementations
+    config.rs   # Environment detection for API keys
 ```
 
 ### Log File Location
@@ -1148,6 +1156,101 @@ static NOTES_WINDOW: std::sync::OnceLock<std::sync::Mutex<Option<gpui::WindowHan
     std::sync::OnceLock::new();
 
 // open_notes_window() checks if window exists and focuses it, or creates new
+```
+
+### AI Window (Secondary Window)
+
+The AI feature is a **BYOK (Bring Your Own Key) chat window** - a separate floating window for AI conversations. It follows the same architectural patterns as the Notes window.
+
+#### Architecture
+
+| Aspect | Details |
+|--------|---------|
+| **Location** | `src/ai/` module |
+| **UI Framework** | gpui-component library (Input, Button, markdown rendering) |
+| **Window Type** | Floating panel (`NSFloatingWindowLevel` on macOS) |
+| **Storage** | SQLite database at `~/.kenv/ai-chats.db` |
+| **Theme** | Syncs with Script Kit's `~/.kenv/theme.json` |
+| **Model** | BYOK - uses user's own API keys |
+
+#### File Structure
+
+```
+src/ai/
+  mod.rs       # Module exports, feature documentation
+  window.rs    # AiApp view, open_ai_window(), close_ai_window()
+  storage.rs   # SQLite persistence (chats, messages)
+  model.rs     # Chat, Message, ChatId, MessageRole structs
+  providers.rs # Provider trait, Anthropic/OpenAI implementations
+  config.rs    # Environment detection for API keys
+```
+
+#### Key Features
+
+- **Streaming responses** with real-time token display
+- **Markdown rendering** for formatted AI responses
+- **Model picker** dropdown for selecting AI models
+- **Chat history** with sidebar navigation
+- **Multi-provider support** (Anthropic Claude, OpenAI GPT)
+- **BYOK architecture** - no built-in API keys, user provides their own
+
+#### API Key Setup
+
+The AI window requires API keys set as environment variables:
+
+| Provider | Environment Variable | Example |
+|----------|---------------------|---------|
+| Anthropic | `SCRIPT_KIT_ANTHROPIC_API_KEY` | `sk-ant-...` |
+| OpenAI | `SCRIPT_KIT_OPENAI_API_KEY` | `sk-...` |
+
+Keys can be set in:
+- Shell profile (`~/.zshrc`, `~/.bashrc`)
+- `~/.kenv/.env` file
+- System environment variables
+
+#### Testing the AI Window
+
+Use the stdin JSON protocol to open the AI window for testing:
+
+```bash
+# Open the AI window via stdin command
+echo '{"type": "openAi"}' | SCRIPT_KIT_AI_LOG=1 ./target/debug/script-kit-gpui 2>&1
+
+# The OpenAi command is defined in src/stdin_commands.rs
+```
+
+**Available stdin commands for AI:**
+
+| Command | Purpose |
+|---------|---------|
+| `{"type": "openAi"}` | Open or focus the AI window |
+
+**Log filtering for AI:**
+
+```bash
+# Filter for AI-related logs
+echo '{"type": "openAi"}' | SCRIPT_KIT_AI_LOG=1 ./target/debug/script-kit-gpui 2>&1 | grep -i 'ai\|chat\|PANEL'
+```
+
+#### Hotkey Integration
+
+The AI window can be opened via:
+
+| Method | Details |
+|--------|---------|
+| **Hotkey** | `Cmd+Shift+Space` (configurable via `config.ts` `aiHotkey`) |
+| **Tray menu** | "AI Chat" menu item |
+| **Stdin command** | `{"type": "openAi"}` |
+
+#### Global Window Handle
+
+Like the Notes window, the AI window uses a global `OnceLock` for single-instance management:
+
+```rust
+static AI_WINDOW: std::sync::OnceLock<std::sync::Mutex<Option<gpui::WindowHandle<Root>>>> =
+    std::sync::OnceLock::new();
+
+// open_ai_window() checks if window exists and focuses it, or creates new
 ```
 
 ---

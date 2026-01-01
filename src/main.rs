@@ -26,6 +26,7 @@ use platform::{
 extern crate objc;
 
 mod actions;
+mod ai;
 mod components;
 mod config;
 mod designs;
@@ -1631,6 +1632,12 @@ fn main() {
                                     logging::log("STDIN", &format!("Failed to open notes window: {}", e));
                                 }
                             }
+                            ExternalCommand::OpenAi => {
+                                logging::log("STDIN", "Opening AI window via stdin command");
+                                if let Err(e) = ai::open_ai_window(ctx) {
+                                    logging::log("STDIN", &format!("Failed to open AI window: {}", e));
+                                }
+                            }
                         }
                         ctx.notify();
                         }); // close app_entity_inner.update
@@ -1716,6 +1723,17 @@ fn main() {
                                         logging::log(
                                             "TRAY",
                                             &format!("Failed to quick capture note: {}", e),
+                                        );
+                                    }
+                                });
+                            }
+                            Some(TrayMenuAction::OpenAiChat) => {
+                                logging::log("TRAY", "AI Chat menu item clicked");
+                                let _ = cx.update(|cx| {
+                                    if let Err(e) = ai::open_ai_window(cx) {
+                                        logging::log(
+                                            "TRAY",
+                                            &format!("Failed to open AI window: {}", e),
                                         );
                                     }
                                 });

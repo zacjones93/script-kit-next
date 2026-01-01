@@ -54,10 +54,15 @@
 //! - **Token Tracking**: Optional token usage tracking per message
 //! - **Auto-Pruning**: Old deleted chats can be automatically pruned
 
+// Allow unused for now - these are for future use by other modules
+#![allow(unused_imports)]
+#![allow(dead_code)]
+
 pub mod config;
 pub mod model;
 pub mod providers;
 pub mod storage;
+pub mod window;
 
 // Re-export commonly used types
 pub use model::{Chat, ChatId, Message, MessageRole};
@@ -69,3 +74,6 @@ pub use storage::{
 // Re-export provider types
 pub use config::{DetectedKeys, ModelInfo, ProviderConfig};
 pub use providers::{AiProvider, ProviderMessage, ProviderRegistry};
+
+// Re-export window functions
+pub use window::{close_ai_window, open_ai_window};

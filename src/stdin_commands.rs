@@ -56,6 +56,8 @@ pub enum ExternalCommand {
     },
     /// Open the Notes window (for testing)
     OpenNotes,
+    /// Open the AI Chat window (for testing)
+    OpenAi,
 }
 
 /// Start a thread that listens on stdin for external JSONL commands.
@@ -223,5 +225,19 @@ mod tests {
         let cmd = ExternalCommand::Show;
         let debug_str = format!("{:?}", cmd);
         assert!(debug_str.contains("Show"));
+    }
+
+    #[test]
+    fn test_external_command_open_notes_deserialization() {
+        let json = r#"{"type": "openNotes"}"#;
+        let cmd: ExternalCommand = serde_json::from_str(json).unwrap();
+        assert!(matches!(cmd, ExternalCommand::OpenNotes));
+    }
+
+    #[test]
+    fn test_external_command_open_ai_deserialization() {
+        let json = r#"{"type": "openAi"}"#;
+        let cmd: ExternalCommand = serde_json::from_str(json).unwrap();
+        assert!(matches!(cmd, ExternalCommand::OpenAi));
     }
 }

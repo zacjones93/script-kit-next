@@ -22,6 +22,7 @@ pub enum TrayMenuAction {
     OpenScriptKit,
     OpenNotes,
     NewNote,
+    OpenAiChat,
     Settings,
     Quit,
 }
@@ -33,6 +34,7 @@ pub struct TrayManager {
     open_script_kit_id: String,
     open_notes_id: String,
     new_note_id: String,
+    open_ai_chat_id: String,
     settings_id: String,
     quit_id: String,
 }
@@ -47,7 +49,7 @@ impl TrayManager {
     /// - Tray icon creation fails
     pub fn new() -> Result<Self> {
         let icon = Self::create_icon_from_svg()?;
-        let (menu, open_id, open_notes_id, new_note_id, settings_id, quit_id) =
+        let (menu, open_id, open_notes_id, new_note_id, open_ai_chat_id, settings_id, quit_id) =
             Self::create_menu()?;
 
         let tray_icon = TrayIconBuilder::new()
@@ -63,6 +65,7 @@ impl TrayManager {
             open_script_kit_id: open_id,
             open_notes_id,
             new_note_id,
+            open_ai_chat_id,
             settings_id,
             quit_id,
         })
@@ -95,13 +98,14 @@ impl TrayManager {
     }
 
     /// Creates the tray menu with standard items
-    fn create_menu() -> Result<(Menu, String, String, String, String, String)> {
+    fn create_menu() -> Result<(Menu, String, String, String, String, String, String)> {
         let menu = Menu::new();
 
         // Create menu items
         let open_item = MenuItem::new("Open Script Kit", true, None);
         let open_notes_item = MenuItem::new("Notes", true, None);
         let new_note_item = MenuItem::new("New Note", true, None);
+        let open_ai_chat_item = MenuItem::new("AI Chat", true, None);
         let settings_item = MenuItem::new("Settings", true, None);
         let quit_item = MenuItem::new("Quit", true, None);
 
@@ -109,6 +113,7 @@ impl TrayManager {
         let open_id = open_item.id().0.clone();
         let open_notes_id = open_notes_item.id().0.clone();
         let new_note_id = new_note_item.id().0.clone();
+        let open_ai_chat_id = open_ai_chat_item.id().0.clone();
         let settings_id = settings_item.id().0.clone();
         let quit_id = quit_item.id().0.clone();
 
@@ -120,6 +125,8 @@ impl TrayManager {
             .context("Failed to add Notes item")?;
         menu.append(&new_note_item)
             .context("Failed to add New Note item")?;
+        menu.append(&open_ai_chat_item)
+            .context("Failed to add AI Chat item")?;
         menu.append(&PredefinedMenuItem::separator())
             .context("Failed to add separator")?;
         menu.append(&settings_item)
@@ -133,6 +140,7 @@ impl TrayManager {
             open_id,
             open_notes_id,
             new_note_id,
+            open_ai_chat_id,
             settings_id,
             quit_id,
         ))
@@ -167,6 +175,8 @@ impl TrayManager {
             Some(TrayMenuAction::OpenNotes)
         } else if id == &self.new_note_id {
             Some(TrayMenuAction::NewNote)
+        } else if id == &self.open_ai_chat_id {
+            Some(TrayMenuAction::OpenAiChat)
         } else if id == &self.settings_id {
             Some(TrayMenuAction::Settings)
         } else if id == &self.quit_id {

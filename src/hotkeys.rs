@@ -47,6 +47,18 @@ pub(crate) fn notes_hotkey_channel(
     NOTES_HOTKEY_CHANNEL.get_or_init(|| async_channel::bounded(10))
 }
 
+// AI_HOTKEY_CHANNEL: Channel for AI hotkey events
+#[allow(dead_code)]
+static AI_HOTKEY_CHANNEL: OnceLock<(async_channel::Sender<()>, async_channel::Receiver<()>)> =
+    OnceLock::new();
+
+/// Get the AI hotkey channel, initializing it on first access.
+#[allow(dead_code)]
+pub(crate) fn ai_hotkey_channel(
+) -> &'static (async_channel::Sender<()>, async_channel::Receiver<()>) {
+    AI_HOTKEY_CHANNEL.get_or_init(|| async_channel::bounded(10))
+}
+
 #[allow(dead_code)]
 static HOTKEY_TRIGGER_COUNT: AtomicU64 = AtomicU64::new(0);
 
@@ -219,6 +231,51 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
             );
         }
 
+        // Register AI hotkey (Cmd+Shift+Space by default)
+        let ai_config = config.get_ai_hotkey();
+        let ai_code = match ai_config.key.as_str() {
+            "Space" => Code::Space,
+            "KeyA" => Code::KeyA,
+            "KeyI" => Code::KeyI,
+            _ => Code::Space, // Default to Space
+        };
+
+        let mut ai_modifiers = Modifiers::empty();
+        for modifier in &ai_config.modifiers {
+            match modifier.as_str() {
+                "meta" => ai_modifiers |= Modifiers::META,
+                "ctrl" => ai_modifiers |= Modifiers::CONTROL,
+                "alt" => ai_modifiers |= Modifiers::ALT,
+                "shift" => ai_modifiers |= Modifiers::SHIFT,
+                _ => {}
+            }
+        }
+
+        let ai_hotkey = HotKey::new(Some(ai_modifiers), ai_code);
+        let ai_hotkey_id = ai_hotkey.id();
+
+        let ai_display = format!(
+            "{}{}",
+            ai_config.modifiers.join("+"),
+            if ai_config.modifiers.is_empty() {
+                String::new()
+            } else {
+                "+".to_string()
+            }
+        ) + &ai_config.key;
+
+        if let Err(e) = manager.register(ai_hotkey) {
+            logging::log(
+                "HOTKEY",
+                &format!("Failed to register AI hotkey {}: {}", ai_display, e),
+            );
+        } else {
+            logging::log(
+                "HOTKEY",
+                &format!("Registered AI hotkey {} (id: {})", ai_display, ai_hotkey_id),
+            );
+        }
+
         // Register script shortcuts
         // Map from hotkey ID to script path
         let mut script_hotkey_map: std::collections::HashMap<u32, String> =
@@ -341,6 +398,13 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
                     logging::log("HOTKEY", &format!("{} pressed (notes)", notes_display));
                     if notes_hotkey_channel().0.send_blocking(()).is_err() {
                         logging::log("HOTKEY", "Notes hotkey channel closed, cannot send");
+                    }
+                }
+                // Check if it's the AI hotkey
+                else if event.id == ai_hotkey_id {
+                    logging::log("HOTKEY", &format!("{} pressed (AI)", ai_display));
+                    if ai_hotkey_channel().0.send_blocking(()).is_err() {
+                        logging::log("HOTKEY", "AI hotkey channel closed, cannot send");
                     }
                 }
                 // Check if it's a script shortcut

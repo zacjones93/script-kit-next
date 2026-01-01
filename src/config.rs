@@ -216,6 +216,9 @@ pub struct Config {
         rename = "notesHotkey"
     )]
     pub notes_hotkey: Option<HotkeyConfig>,
+    /// Hotkey for opening AI Chat window (default: Cmd+Shift+Space)
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "aiHotkey")]
+    pub ai_hotkey: Option<HotkeyConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,6 +233,14 @@ impl HotkeyConfig {
         HotkeyConfig {
             modifiers: vec!["meta".to_string(), "shift".to_string()],
             key: "KeyN".to_string(),
+        }
+    }
+
+    /// Create a default AI hotkey (Cmd+Shift+Space)
+    pub fn default_ai_hotkey() -> Self {
+        HotkeyConfig {
+            modifiers: vec!["meta".to_string(), "shift".to_string()],
+            key: "Space".to_string(),
         }
     }
 }
@@ -252,6 +263,7 @@ impl Default for Config {
             clipboard_history_max_text_length: None, // Will use default via getter
             frecency: None,           // Will use FrecencyConfig::default() via getter
             notes_hotkey: None,       // Will use HotkeyConfig::default_notes_hotkey() via getter
+            ai_hotkey: None,          // Will use HotkeyConfig::default_ai_hotkey() via getter
         }
     }
 }
@@ -322,6 +334,14 @@ impl Config {
         self.notes_hotkey
             .clone()
             .unwrap_or_else(HotkeyConfig::default_notes_hotkey)
+    }
+
+    /// Returns the AI hotkey configuration, or default (Cmd+Shift+Space) if not configured
+    #[allow(dead_code)]
+    pub fn get_ai_hotkey(&self) -> HotkeyConfig {
+        self.ai_hotkey
+            .clone()
+            .unwrap_or_else(HotkeyConfig::default_ai_hotkey)
     }
 }
 
@@ -466,6 +486,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -506,6 +527,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
         assert_eq!(config.bun_path, Some("/custom/path/bun".to_string()));
     }
@@ -528,6 +550,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
         assert_eq!(config.bun_path, None);
     }
@@ -550,6 +573,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -577,6 +601,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -671,6 +696,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         assert_eq!(config.hotkey.modifiers.len(), 0);
@@ -699,6 +725,7 @@ mod tests {
                 clipboard_history_max_text_length: None,
                 frecency: None,
                 notes_hotkey: None,
+                ai_hotkey: None,
             };
 
             let json = serde_json::to_string(&config).unwrap();
@@ -726,6 +753,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -753,6 +781,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -781,6 +810,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         // Config editor takes precedence
@@ -811,6 +841,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         // Should fall back to EDITOR env var
@@ -847,6 +878,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         // Should fall back to "code" default
@@ -883,6 +915,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         // Config editor should win
@@ -988,6 +1021,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         let padding = config.get_padding();
@@ -1020,6 +1054,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         assert_eq!(config.get_editor_font_size(), 16.0);
@@ -1049,6 +1084,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         assert_eq!(config.get_terminal_font_size(), 12.0);
@@ -1078,6 +1114,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         assert_eq!(config.get_ui_scale(), 1.5);
@@ -1168,6 +1205,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -1266,6 +1304,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         let builtins = config.get_builtins();
@@ -1356,6 +1395,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -1497,6 +1537,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         let limits = config.get_process_limits();
@@ -1593,6 +1634,7 @@ mod tests {
             clipboard_history_max_text_length: None,
             frecency: None,
             notes_hotkey: None,
+            ai_hotkey: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
