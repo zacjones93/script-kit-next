@@ -7,6 +7,9 @@ use gpui::{
     UniformListScrollHandle, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
     WindowOptions,
 };
+
+// gpui-component Root wrapper for theme and context provision
+use gpui_component::Root;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 mod process_manager;
@@ -30,6 +33,7 @@ mod error;
 mod executor;
 mod filter_coalescer;
 mod form_prompt;
+#[allow(dead_code)] // TODO: Re-enable once hotkey_pollers is updated for Root wrapper
 mod hotkey_pollers;
 mod hotkeys;
 mod list_item;
@@ -122,7 +126,8 @@ use crate::components::toast::{Toast, ToastAction, ToastColors};
 use crate::error::ErrorSeverity;
 use crate::filter_coalescer::FilterCoalescer;
 use crate::form_prompt::FormPromptState;
-use crate::hotkey_pollers::start_hotkey_event_handler;
+// TODO: Re-enable when hotkey_pollers.rs is updated for Root wrapper
+// use crate::hotkey_pollers::start_hotkey_event_handler;
 use crate::navigation::{NavCoalescer, NavDirection, NavRecord};
 use crate::toast_manager::ToastManager;
 use editor::EditorPrompt;
@@ -953,6 +958,10 @@ fn main() {
     Application::new().run(move |cx: &mut App| {
         logging::log("APP", "GPUI Application starting");
 
+        // Initialize gpui-component (theme, context providers)
+        // Must be called before opening windows that use Root wrapper
+        gpui_component::init(cx);
+
         // Initialize tray icon and menu
         // MUST be done after Application::new() creates the NSApplication
         let tray_manager = match TrayManager::new() {
@@ -970,7 +979,11 @@ fn main() {
         let window_size = size(px(750.), initial_window_height());
         let bounds = calculate_eye_line_bounds_on_mouse_display(window_size);
 
-        let window: WindowHandle<ScriptListApp> = cx.open_window(
+        // Store the ScriptListApp entity for direct access (needed since Root wraps the view)
+        let app_entity_holder: Arc<Mutex<Option<Entity<ScriptListApp>>>> = Arc::new(Mutex::new(None));
+        let app_entity_for_closure = app_entity_holder.clone();
+
+        let window: WindowHandle<Root> = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: None,
@@ -978,18 +991,29 @@ fn main() {
                 window_background: WindowBackgroundAppearance::Blurred,
                 ..Default::default()
             },
-            |_, cx| {
-                logging::log("APP", "Window opened, creating ScriptListApp");
-                cx.new(|cx| ScriptListApp::new(config_for_app, cx))
+            |window, cx| {
+                logging::log("APP", "Window opened, creating ScriptListApp wrapped in Root");
+                let view = cx.new(|cx| ScriptListApp::new(config_for_app, cx));
+                // Store the entity for external access
+                *app_entity_for_closure.lock().unwrap() = Some(view.clone());
+                cx.new(|cx| Root::new(view, window, cx))
             },
         )
         .unwrap();
 
+        // Extract the app entity for use in callbacks
+        let app_entity = app_entity_holder.lock().unwrap().clone().expect("App entity should be set");
+
+        // Set initial focus via the Root window
+        // We access the app entity within the window context to properly focus it
+        let app_entity_for_focus = app_entity.clone();
         window
-            .update(cx, |view: &mut ScriptListApp, window: &mut Window, cx: &mut Context<ScriptListApp>| {
-                let focus_handle = view.focus_handle(cx);
-                window.focus(&focus_handle, cx);
-                logging::log("APP", "Focus set on ScriptListApp");
+            .update(cx, |_root, win, root_cx| {
+                app_entity_for_focus.update(root_cx, |view, ctx| {
+                    let focus_handle = view.focus_handle(ctx);
+                    win.focus(&focus_handle, ctx);
+                    logging::log("APP", "Focus set on ScriptListApp via Root");
+                });
             })
             .unwrap();
 
@@ -1003,16 +1027,19 @@ fn main() {
         // WINDOW_VISIBLE is already false by default (static initializer)
         logging::log("HOTKEY", "Window created but not shown (use hotkey to show)");
 
-        start_hotkey_event_handler(cx, window);
+        // TODO: start_hotkey_event_handler needs to be updated to work with Root wrapper
+        // This requires changes to hotkey_pollers.rs to accept Entity<ScriptListApp> instead of WindowHandle<ScriptListApp>
+        // start_hotkey_event_handler(cx, window, app_entity.clone());
+        logging::log("APP", "WARN: Hotkey event handler temporarily disabled during Root wrapper integration");
 
         // Appearance change watcher - event-driven with async_channel
-        let window_for_appearance = window;
+        let app_entity_for_appearance = app_entity.clone();
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {
             // Event-driven: blocks until appearance change event received
             while let Ok(_event) = appearance_rx.recv().await {
                 logging::log("APP", "System appearance changed, updating theme");
                 let _ = cx.update(|cx| {
-                    let _ = window_for_appearance.update(cx, |view: &mut ScriptListApp, _window: &mut Window, ctx: &mut Context<ScriptListApp>| {
+                    app_entity_for_appearance.update(cx, |view, ctx| {
                         view.update_theme(ctx);
                     });
                 });
@@ -1021,7 +1048,7 @@ fn main() {
         }).detach();
 
         // Config reload watcher - watches ~/.kenv/config.ts for changes
-        let window_for_config = window;
+        let app_entity_for_config = app_entity.clone();
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {
             loop {
                 Timer::after(std::time::Duration::from_millis(200)).await;
@@ -1029,7 +1056,7 @@ fn main() {
                 if config_rx.try_recv().is_ok() {
                     logging::log("APP", "Config file changed, reloading");
                     let _ = cx.update(|cx| {
-                        let _ = window_for_config.update(cx, |view: &mut ScriptListApp, _window: &mut Window, ctx: &mut Context<ScriptListApp>| {
+                        app_entity_for_config.update(cx, |view, ctx| {
                             view.update_config(ctx);
                         });
                     });
@@ -1039,7 +1066,7 @@ fn main() {
 
         // Script/scriptlets reload watcher - watches ~/.kenv/scripts/ and ~/.kenv/scriptlets/
         // Also re-scans for scheduled scripts to pick up new/modified schedules
-        let window_for_scripts = window;
+        let app_entity_for_scripts = app_entity.clone();
         let scheduler_for_scripts = scheduler.clone();
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {
             loop {
@@ -1057,7 +1084,7 @@ fn main() {
                     }
 
                     let _ = cx.update(|cx| {
-                        let _ = window_for_scripts.update(cx, |view: &mut ScriptListApp, _window: &mut Window, ctx: &mut Context<ScriptListApp>| {
+                        app_entity_for_scripts.update(cx, |view, ctx| {
                             view.refresh_scripts(ctx);
                         });
                     });
@@ -1166,7 +1193,7 @@ fn main() {
         });
 
         // Test command file watcher - allows smoke tests to trigger script execution
-        let window_for_test = window;
+        let app_entity_for_test = app_entity.clone();
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {
             let cmd_file = std::path::PathBuf::from("/tmp/script-kit-gpui-cmd.txt");
             loop {
@@ -1182,8 +1209,9 @@ fn main() {
                                 logging::log("TEST", &format!("Test command: run script '{}'", script_name));
 
                                 let script_name_owned = script_name.to_string();
+                                let app_entity_inner = app_entity_for_test.clone();
                                 let _ = cx.update(|cx| {
-                                    let _ = window_for_test.update(cx, |view: &mut ScriptListApp, _window: &mut Window, ctx: &mut Context<ScriptListApp>| {
+                                    app_entity_inner.update(cx, |view, ctx| {
                                         // Find and run the script interactively
                                         if let Some(script) = view.scripts.iter().find(|s| s.name == script_name_owned || s.path.to_string_lossy().contains(&script_name_owned)).cloned() {
                                             logging::log("TEST", &format!("Found script: {}", script.name));
@@ -1203,6 +1231,7 @@ fn main() {
         // External command listener - receives commands via stdin (event-driven, no polling)
         let stdin_rx = start_stdin_listener();
         let window_for_stdin = window;
+        let app_entity_for_stdin = app_entity.clone();
 
         // Track if we've received any stdin commands (for timeout warning)
         static STDIN_RECEIVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1234,8 +1263,13 @@ fn main() {
                 STDIN_RECEIVED.store(true, std::sync::atomic::Ordering::SeqCst);
                 logging::log("STDIN", &format!("Processing external command: {:?}", cmd));
 
+                let app_entity_inner = app_entity_for_stdin.clone();
                 let _ = cx.update(|cx| {
-                    let _ = window_for_stdin.update(cx, |view: &mut ScriptListApp, window: &mut Window, ctx: &mut Context<ScriptListApp>| {
+                    // Use the Root window to get Window reference, then update the app entity
+                    let _ = window_for_stdin.update(cx, |_root, window, root_cx| {
+                        app_entity_inner.update(root_cx, |view, ctx| {
+                            // Note: We have both `window` from Root and `view` from entity here
+                            // ctx is Context<ScriptListApp>, window is &mut Window
                         match cmd {
                             ExternalCommand::Run { ref path } => {
                                 logging::log("STDIN", &format!("Executing script: {}", path));
@@ -1475,8 +1509,9 @@ fn main() {
                             }
                         }
                         ctx.notify();
-                    });
-                });
+                        }); // close app_entity_inner.update
+                    }); // close window_for_stdin.update
+                }); // close cx.update
             }
 
             logging::log("STDIN", "Async stdin command handler exiting");
@@ -1487,6 +1522,7 @@ fn main() {
         let config_for_tray = config::load_config();
         if let Some(tray_mgr) = tray_manager {
             let window_for_tray = window;
+            let app_entity_for_tray = app_entity.clone();
             cx.spawn(async move |cx: &mut gpui::AsyncApp| {
                 logging::log("TRAY", "Tray menu event handler started");
 
@@ -1499,6 +1535,7 @@ fn main() {
                         match tray_mgr.match_menu_event(&event) {
                             Some(TrayMenuAction::OpenScriptKit) => {
                                 logging::log("TRAY", "Open Script Kit menu item clicked");
+                                let app_entity_inner = app_entity_for_tray.clone();
                                 let _ = cx.update(|cx| {
                                     // Show and focus window (same logic as hotkey handler)
                                     WINDOW_VISIBLE.store(true, Ordering::SeqCst);
@@ -1518,20 +1555,22 @@ fn main() {
                                         platform::configure_as_floating_panel();
                                     }
 
-                                    // Focus the window
-                                    let _ = window_for_tray.update(cx, |view: &mut ScriptListApp, win: &mut Window, ctx: &mut Context<ScriptListApp>| {
+                                    // Focus the window via Root, then update app entity
+                                    let _ = window_for_tray.update(cx, |_root, win, root_cx| {
                                         win.activate_window();
-                                        let focus_handle = view.focus_handle(ctx);
-                                        win.focus(&focus_handle, ctx);
+                                        app_entity_inner.update(root_cx, |view, ctx| {
+                                            let focus_handle = view.focus_handle(ctx);
+                                            win.focus(&focus_handle, ctx);
 
-                                        // Reset if needed and ensure proper sizing
-                                        reset_resize_debounce();
+                                            // Reset if needed and ensure proper sizing
+                                            reset_resize_debounce();
 
-                                        if NEEDS_RESET.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-                                            view.reset_to_script_list(ctx);
-                                        } else {
-                                            view.update_window_size();
-                                        }
+                                            if NEEDS_RESET.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+                                                view.reset_to_script_list(ctx);
+                                            } else {
+                                                view.update_window_size();
+                                            }
+                                        });
                                     });
                                 });
                             }

@@ -5,18 +5,18 @@
 
 use anyhow::Result;
 use gpui::{
-    div, prelude::*, px, size, App, Context, Entity, FocusHandle, Focusable, IntoElement,
-    KeyDownEvent, ParentElement, Render, SharedString, Styled, Subscription, Window, WindowBounds,
-    WindowOptions,
+    div, prelude::*, px, rgb, size, App, Context, Entity, FocusHandle, Focusable, Hsla,
+    IntoElement, KeyDownEvent, ParentElement, Render, SharedString, Styled, Subscription, Window,
+    WindowBounds, WindowOptions,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
     input::{Input, InputEvent, InputState},
     sidebar::{Sidebar, SidebarGroup, SidebarMenu, SidebarMenuItem},
-    theme::ActiveTheme,
+    theme::{ActiveTheme, Theme as GpuiTheme, ThemeColor, ThemeMode},
     IconName, Root, Sizable,
 };
-use tracing::info;
+use tracing::{debug, info};
 
 use super::model::{ExportFormat, Note, NoteId};
 use super::storage;
@@ -685,10 +685,129 @@ impl Render for NotesApp {
     }
 }
 
-/// Initialize gpui-component theme if not already initialized
+/// Convert a u32 hex color to Hsla
+#[inline]
+fn hex_to_hsla(hex: u32) -> Hsla {
+    rgb(hex).into()
+}
+
+/// Map Script Kit's ColorScheme to gpui-component's ThemeColor
+fn map_scriptkit_to_gpui_theme(sk_theme: &crate::theme::Theme) -> ThemeColor {
+    let colors = &sk_theme.colors;
+
+    // Get default dark theme as base and override with Script Kit colors
+    let mut theme_color = *ThemeColor::dark();
+
+    // Main background and foreground
+    theme_color.background = hex_to_hsla(colors.background.main);
+    theme_color.foreground = hex_to_hsla(colors.text.primary);
+
+    // Accent colors (Script Kit yellow/gold)
+    theme_color.accent = hex_to_hsla(colors.accent.selected);
+    theme_color.accent_foreground = hex_to_hsla(colors.text.primary);
+
+    // Border
+    theme_color.border = hex_to_hsla(colors.ui.border);
+    theme_color.input = hex_to_hsla(colors.ui.border);
+
+    // List/sidebar colors
+    theme_color.list = hex_to_hsla(colors.background.main);
+    theme_color.list_active = hex_to_hsla(colors.accent.selected_subtle);
+    theme_color.list_active_border = hex_to_hsla(colors.accent.selected);
+    theme_color.list_hover = hex_to_hsla(colors.accent.selected_subtle);
+    theme_color.list_even = hex_to_hsla(colors.background.main);
+    theme_color.list_head = hex_to_hsla(colors.background.title_bar);
+
+    // Sidebar (use slightly lighter background)
+    theme_color.sidebar = hex_to_hsla(colors.background.title_bar);
+    theme_color.sidebar_foreground = hex_to_hsla(colors.text.primary);
+    theme_color.sidebar_border = hex_to_hsla(colors.ui.border);
+    theme_color.sidebar_accent = hex_to_hsla(colors.accent.selected_subtle);
+    theme_color.sidebar_accent_foreground = hex_to_hsla(colors.text.primary);
+    theme_color.sidebar_primary = hex_to_hsla(colors.accent.selected);
+    theme_color.sidebar_primary_foreground = hex_to_hsla(colors.text.primary);
+
+    // Primary (accent-colored buttons)
+    theme_color.primary = hex_to_hsla(colors.accent.selected);
+    theme_color.primary_foreground = hex_to_hsla(colors.background.main);
+    theme_color.primary_hover = hex_to_hsla(colors.accent.selected);
+    theme_color.primary_active = hex_to_hsla(colors.accent.selected);
+
+    // Secondary (muted buttons)
+    theme_color.secondary = hex_to_hsla(colors.background.search_box);
+    theme_color.secondary_foreground = hex_to_hsla(colors.text.primary);
+    theme_color.secondary_hover = hex_to_hsla(colors.background.title_bar);
+    theme_color.secondary_active = hex_to_hsla(colors.background.title_bar);
+
+    // Muted (disabled states, subtle elements)
+    theme_color.muted = hex_to_hsla(colors.background.search_box);
+    theme_color.muted_foreground = hex_to_hsla(colors.text.muted);
+
+    // Title bar
+    theme_color.title_bar = hex_to_hsla(colors.background.title_bar);
+    theme_color.title_bar_border = hex_to_hsla(colors.ui.border);
+
+    // Popover
+    theme_color.popover = hex_to_hsla(colors.background.main);
+    theme_color.popover_foreground = hex_to_hsla(colors.text.primary);
+
+    // Status colors
+    theme_color.success = hex_to_hsla(colors.ui.success);
+    theme_color.success_foreground = hex_to_hsla(colors.text.primary);
+    theme_color.danger = hex_to_hsla(colors.ui.error);
+    theme_color.danger_foreground = hex_to_hsla(colors.text.primary);
+    theme_color.warning = hex_to_hsla(colors.ui.warning);
+    theme_color.warning_foreground = hex_to_hsla(colors.text.primary);
+    theme_color.info = hex_to_hsla(colors.ui.info);
+    theme_color.info_foreground = hex_to_hsla(colors.text.primary);
+
+    // Scrollbar
+    theme_color.scrollbar = hex_to_hsla(colors.background.main);
+    theme_color.scrollbar_thumb = hex_to_hsla(colors.text.dimmed);
+    theme_color.scrollbar_thumb_hover = hex_to_hsla(colors.text.muted);
+
+    // Caret (cursor) - cyan by default
+    theme_color.caret = hex_to_hsla(0x00ffff);
+
+    // Selection
+    theme_color.selection = hex_to_hsla(colors.accent.selected_subtle);
+
+    // Ring (focus ring)
+    theme_color.ring = hex_to_hsla(colors.accent.selected);
+
+    // Tab colors
+    theme_color.tab = hex_to_hsla(colors.background.main);
+    theme_color.tab_active = hex_to_hsla(colors.background.search_box);
+    theme_color.tab_active_foreground = hex_to_hsla(colors.text.primary);
+    theme_color.tab_foreground = hex_to_hsla(colors.text.secondary);
+    theme_color.tab_bar = hex_to_hsla(colors.background.title_bar);
+
+    debug!(
+        background = format!("#{:06x}", colors.background.main),
+        accent = format!("#{:06x}", colors.accent.selected),
+        "Script Kit theme mapped to gpui-component"
+    );
+
+    theme_color
+}
+
+/// Initialize gpui-component theme and sync with Script Kit theme
 fn ensure_theme_initialized(cx: &mut App) {
-    // gpui_component::init handles theme initialization idempotently
+    // First, initialize gpui-component (this sets up the default theme)
     gpui_component::init(cx);
+
+    // Load Script Kit's theme
+    let sk_theme = crate::theme::load_theme();
+
+    // Map Script Kit colors to gpui-component ThemeColor
+    let custom_colors = map_scriptkit_to_gpui_theme(&sk_theme);
+
+    // Apply the custom colors to the global theme
+    let theme = GpuiTheme::global_mut(cx);
+    theme.colors = custom_colors;
+    theme.mode = ThemeMode::Dark; // Script Kit uses dark mode by default
+
+    info!("Notes window theme synchronized with Script Kit");
 }
 
 /// Open the notes window (or focus it if already open)

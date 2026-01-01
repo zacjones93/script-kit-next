@@ -1469,6 +1469,7 @@ impl ScriptListApp {
 
     /// Execute a script or scriptlet by its file path
     /// Used by global shortcuts to directly invoke scripts
+    #[allow(dead_code)]
     fn execute_script_by_path(&mut self, path: &str, cx: &mut Context<Self>) {
         logging::log("EXEC", &format!("Executing script by path: {}", path));
 

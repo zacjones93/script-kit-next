@@ -7,6 +7,7 @@ use crate::window_resize::{initial_window_height, reset_resize_debounce};
 use crate::{logging, platform, ScriptListApp, NEEDS_RESET, PANEL_CONFIGURED, WINDOW_VISIBLE};
 
 /// A simple model that listens for hotkey triggers via async_channel (event-driven).
+#[allow(dead_code)]
 pub struct HotkeyPoller {
     window: WindowHandle<ScriptListApp>,
 }
@@ -179,6 +180,7 @@ impl HotkeyPoller {
 }
 
 /// A model that listens for script hotkey triggers via async_channel.
+#[allow(dead_code)]
 pub struct ScriptHotkeyPoller {
     window: WindowHandle<ScriptListApp>,
 }
@@ -220,6 +222,7 @@ impl ScriptHotkeyPoller {
 }
 
 /// A model that listens for notes hotkey triggers via async_channel.
+#[allow(dead_code)]
 pub struct NotesHotkeyPoller;
 
 impl NotesHotkeyPoller {
@@ -247,6 +250,7 @@ impl NotesHotkeyPoller {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn start_hotkey_event_handler(cx: &mut App, window: WindowHandle<ScriptListApp>) {
     // Start main hotkey listener (for app show/hide toggle)
     let handler = cx.new(|_| HotkeyPoller::new(window));

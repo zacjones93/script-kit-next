@@ -51,6 +51,7 @@ use crate::window_manager;
 ///
 /// Uses Objective-C message sending internally on macOS.
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 pub fn ensure_move_to_active_space() {
     unsafe {
         // Use WindowManager to get the main window (not keyWindow, which may not exist yet)
