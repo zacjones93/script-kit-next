@@ -1143,18 +1143,47 @@ fn main() {
             logging::log("HOTKEY", "Main hotkey listener exiting");
         }).detach();
 
-        // Notes hotkey listener - spawns independently, doesn't need window handle
+        // Notes hotkey listener - uses polling pattern to ensure it runs even before main window activates.
+        // This fixes the bug where Notes window only opened after main window was shown first.
+        // NOTE: This loop runs for the entire application lifetime - it terminates when the app exits.
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {
-            logging::log("HOTKEY", "Notes hotkey listener started");
-            while let Ok(()) = hotkeys::notes_hotkey_channel().1.recv().await {
-                logging::log("HOTKEY", "Notes hotkey triggered - opening notes window");
-                let _ = cx.update(|cx: &mut gpui::App| {
-                    if let Err(e) = notes::open_notes_window(cx) {
-                        logging::log("HOTKEY", &format!("Failed to open notes window: {}", e));
-                    }
-                });
+            logging::log("HOTKEY", "Notes hotkey listener started (poll-based)");
+            // Application-lifetime loop: polls for hotkey events until app terminates
+            loop {
+                // Poll every 50ms - responsive but not CPU-intensive
+                Timer::after(std::time::Duration::from_millis(50)).await;
+                
+                // Process all pending hotkey events (non-blocking)
+                while let Ok(()) = hotkeys::notes_hotkey_channel().1.try_recv() {
+                    logging::log("HOTKEY", "Notes hotkey triggered - opening notes window");
+                    let _ = cx.update(|cx: &mut gpui::App| {
+                        if let Err(e) = notes::open_notes_window(cx) {
+                            logging::log("HOTKEY", &format!("Failed to open notes window: {}", e));
+                        }
+                    });
+                }
             }
-            logging::log("HOTKEY", "Notes hotkey listener exiting");
+        }).detach();
+
+        // AI hotkey listener - uses polling pattern like Notes hotkey.
+        // NOTE: This loop runs for the entire application lifetime - it terminates when the app exits.
+        cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+            logging::log("HOTKEY", "AI hotkey listener started (poll-based)");
+            // Application-lifetime loop: polls for hotkey events until app terminates
+            loop {
+                // Poll every 50ms - responsive but not CPU-intensive
+                Timer::after(std::time::Duration::from_millis(50)).await;
+                
+                // Process all pending hotkey events (non-blocking)
+                while let Ok(()) = hotkeys::ai_hotkey_channel().1.try_recv() {
+                    logging::log("HOTKEY", "AI hotkey triggered - opening AI window");
+                    let _ = cx.update(|cx: &mut gpui::App| {
+                        if let Err(e) = ai::open_ai_window(cx) {
+                            logging::log("HOTKEY", &format!("Failed to open AI window: {}", e));
+                        }
+                    });
+                }
+            }
         }).detach();
 
         // Appearance change watcher - event-driven with async_channel
