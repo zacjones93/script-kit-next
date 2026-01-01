@@ -3,6 +3,23 @@
 //! This module provides a theme-aware toast notification component with multiple variants
 //! (Success, Warning, Error, Info) and support for auto-dismiss, action buttons, and
 //! expandable details.
+//!
+//! # Transitions
+//!
+//! Toasts support appear/dismiss transitions via the `AppearTransition` type:
+//!
+//! ```ignore
+//! use crate::transitions::{AppearTransition, Opacity, SlideOffset, Lerp, ease_out_quad};
+//!
+//! // Create toast with initial hidden state
+//! let mut toast = Toast::success("Saved!", &theme)
+//!     .with_transition(AppearTransition::hidden());
+//!
+//! // Animate to visible (caller manages timing)
+//! let t = ease_out_quad(progress); // 0.0 to 1.0
+//! let current = AppearTransition::hidden().lerp(&AppearTransition::visible(), t);
+//! toast = toast.with_transition(current);
+//! ```
 
 #![allow(dead_code)]
 
@@ -10,6 +27,7 @@ use gpui::*;
 use std::rc::Rc;
 
 use crate::error::ErrorSeverity;
+use crate::transitions::{AppearTransition, Opacity};
 
 /// Toast variant determines the visual style and icon
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -169,6 +187,7 @@ pub type ToastDismissCallback = Box<dyn Fn(&mut Window, &mut App) + 'static>;
 /// - Dismissible mode with X button
 /// - Expandable details section
 /// - Action buttons (e.g., "Copy Error", "View Details")
+/// - Appear/dismiss transitions via `AppearTransition`
 ///
 /// # Example
 /// ```ignore
@@ -178,6 +197,16 @@ pub type ToastDismissCallback = Box<dyn Fn(&mut Window, &mut App) + 'static>;
 ///     .details("Stack trace here...")
 ///     .dismissible(true)
 ///     .action(ToastAction::new("Copy", Box::new(|_, _, _| { /* copy to clipboard */ })))
+/// ```
+///
+/// # Transitions Example
+/// ```ignore
+/// // Create with hidden state for animation
+/// let toast = Toast::success("Done!", &theme)
+///     .with_transition(AppearTransition::hidden());
+///
+/// // Later, animate to visible:
+/// let toast = toast.with_transition(current_transition_state);
 /// ```
 #[derive(IntoElement)]
 pub struct Toast {
@@ -199,6 +228,8 @@ pub struct Toast {
     actions: Vec<ToastAction>,
     /// Callback when toast is dismissed
     on_dismiss: Option<Rc<ToastDismissCallback>>,
+    /// Transition state for appear/dismiss animations
+    transition: AppearTransition,
 }
 
 impl Toast {
@@ -214,6 +245,7 @@ impl Toast {
             details_expanded: false,
             actions: Vec::new(),
             on_dismiss: None,
+            transition: AppearTransition::visible(), // Default to fully visible
         }
     }
 
@@ -272,6 +304,40 @@ impl Toast {
         self
     }
 
+    /// Set the transition state for appear/dismiss animations
+    ///
+    /// Use this to animate the toast by interpolating between states:
+    /// - `AppearTransition::hidden()` - Initial state (invisible, offset down)
+    /// - `AppearTransition::visible()` - Fully visible state
+    /// - `AppearTransition::dismissed()` - Dismiss state (invisible, offset up)
+    ///
+    /// # Example
+    /// ```ignore
+    /// use crate::transitions::{AppearTransition, Lerp, ease_out_quad};
+    ///
+    /// // Animate from hidden to visible
+    /// let progress = ease_out_quad(animation_progress); // 0.0 to 1.0
+    /// let state = AppearTransition::hidden().lerp(&AppearTransition::visible(), progress);
+    /// let toast = Toast::success("Done!", &theme).with_transition(state);
+    /// ```
+    pub fn with_transition(mut self, transition: AppearTransition) -> Self {
+        self.transition = transition;
+        self
+    }
+
+    /// Set just the opacity (convenience for simple fade effects)
+    ///
+    /// This sets the opacity without affecting slide offset.
+    pub fn with_opacity(mut self, opacity: Opacity) -> Self {
+        self.transition.opacity = opacity;
+        self
+    }
+
+    /// Get the current transition state
+    pub fn get_transition(&self) -> &AppearTransition {
+        &self.transition
+    }
+
     /// Get the auto-dismiss duration
     pub fn get_duration_ms(&self) -> Option<u64> {
         self.duration_ms
@@ -300,8 +366,9 @@ impl RenderOnce for Toast {
         let on_dismiss_callback = self.on_dismiss;
         let has_details = self.details.is_some();
         let details_expanded = self.details_expanded;
+        let transition = self.transition;
 
-        // Main toast container
+        // Main toast container with transition support
         let mut toast = div()
             .id(ElementId::Name(SharedString::from(format!(
                 "toast-{}",
@@ -316,7 +383,11 @@ impl RenderOnce for Toast {
             .border_color(rgb(colors.border))
             .rounded(px(8.))
             .shadow_md()
-            .overflow_hidden();
+            .overflow_hidden()
+            // Apply transition opacity
+            .opacity(transition.opacity.value())
+            // Apply transition offset via top margin (positive y = down, negative = up)
+            .mt(px(transition.offset.y));
 
         // Content row (icon, message, actions, dismiss)
         let content_row = div()

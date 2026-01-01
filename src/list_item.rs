@@ -548,18 +548,24 @@ impl RenderOnce for ListItem {
 
         // Determine background color based on selection/hover state
         // Priority: selected (full focus styling) > hovered (subtle feedback) > transparent
+        // Note: For non-selected items, we ALSO apply GPUI's .hover() modifier for instant feedback
         let bg_color = if self.selected {
             selected_bg // 50% opacity - full focus styling
         } else if self.hovered {
-            hover_bg // 25% opacity - subtle hover feedback
+            hover_bg // 25% opacity - subtle hover feedback (state-based)
         } else {
             rgba(0x00000000) // transparent
         };
 
         // Build the inner content div with all styling
         // Horizontal padding px(12.) and vertical padding py(6.) for comfortable spacing
-        // NOTE: We manage hover state explicitly via is_hovered, not CSS .hover() pseudo-state
-        let inner_content = div()
+        //
+        // HOVER TRANSITIONS: We use GPUI's built-in .hover() modifier for instant visual
+        // feedback on non-selected items. This provides CSS-like instant hover effects
+        // without waiting for state updates via cx.notify().
+        //
+        // For selected items, we don't apply hover styles (they already have full focus styling).
+        let mut inner_content = div()
             .w_full()
             .h_full()
             .px(px(12.))
@@ -586,6 +592,12 @@ impl RenderOnce for ListItem {
                     .flex_shrink_0()
                     .child(shortcut_element),
             );
+
+        // Apply instant hover effect for non-selected items
+        // This provides immediate visual feedback without state updates
+        if !self.selected {
+            inner_content = inner_content.hover(move |s| s.bg(hover_bg));
+        }
 
         // Use semantic_id for element ID if available, otherwise fall back to index
         // This allows AI agents to target elements by their semantic meaning

@@ -57,7 +57,9 @@ mod syntax;
 mod term_prompt;
 mod terminal;
 mod theme;
+mod transitions;
 mod tray;
+mod login_item;
 mod utils;
 mod watcher;
 mod window_manager;
@@ -1767,6 +1769,10 @@ fn main() {
                                         );
                                     }
                                 });
+                            }
+                            Some(TrayMenuAction::LaunchAtLogin) => {
+                                // Toggle is handled inside match_menu_event
+                                logging::log("TRAY", "Launch at Login toggled");
                             }
                             Some(TrayMenuAction::Settings) => {
                                 logging::log("TRAY", "Settings menu item clicked");

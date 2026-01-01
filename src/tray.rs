@@ -6,9 +6,11 @@
 
 use anyhow::{Context, Result};
 use tray_icon::{
-    menu::{Menu, MenuEvent, MenuEventReceiver, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuEvent, MenuEventReceiver, MenuItem, PredefinedMenuItem},
     Icon, TrayIcon, TrayIconBuilder,
 };
+
+use crate::login_item;
 
 /// SVG logo for Script Kit (32x32, monochrome)
 /// This will be rendered as a template image on macOS for light/dark mode adaptation
@@ -23,6 +25,7 @@ pub enum TrayMenuAction {
     OpenNotes,
     NewNote,
     OpenAiChat,
+    LaunchAtLogin,
     Settings,
     Quit,
 }
@@ -35,6 +38,7 @@ pub struct TrayManager {
     open_notes_id: String,
     new_note_id: String,
     open_ai_chat_id: String,
+    launch_at_login_item: CheckMenuItem,
     settings_id: String,
     quit_id: String,
 }
@@ -49,8 +53,16 @@ impl TrayManager {
     /// - Tray icon creation fails
     pub fn new() -> Result<Self> {
         let icon = Self::create_icon_from_svg()?;
-        let (menu, open_id, open_notes_id, new_note_id, open_ai_chat_id, settings_id, quit_id) =
-            Self::create_menu()?;
+        let (
+            menu,
+            open_id,
+            open_notes_id,
+            new_note_id,
+            open_ai_chat_id,
+            launch_at_login_item,
+            settings_id,
+            quit_id,
+        ) = Self::create_menu()?;
 
         let tray_icon = TrayIconBuilder::new()
             .with_icon(icon)
@@ -66,6 +78,7 @@ impl TrayManager {
             open_notes_id,
             new_note_id,
             open_ai_chat_id,
+            launch_at_login_item,
             settings_id,
             quit_id,
         })
@@ -98,7 +111,17 @@ impl TrayManager {
     }
 
     /// Creates the tray menu with standard items
-    fn create_menu() -> Result<(Menu, String, String, String, String, String, String)> {
+    #[allow(clippy::type_complexity)]
+    fn create_menu() -> Result<(
+        Menu,
+        String,
+        String,
+        String,
+        String,
+        CheckMenuItem,
+        String,
+        String,
+    )> {
         let menu = Menu::new();
 
         // Create menu items
@@ -106,6 +129,15 @@ impl TrayManager {
         let open_notes_item = MenuItem::new("Notes", true, None);
         let new_note_item = MenuItem::new("New Note", true, None);
         let open_ai_chat_item = MenuItem::new("AI Chat", true, None);
+
+        // Create check menu item for Launch at Login with current state
+        let launch_at_login_item = CheckMenuItem::new(
+            "Launch at Login",
+            true, // enabled
+            login_item::is_login_item_enabled(),
+            None, // no accelerator
+        );
+
         let settings_item = MenuItem::new("Settings", true, None);
         let quit_item = MenuItem::new("Quit", true, None);
 
@@ -129,6 +161,8 @@ impl TrayManager {
             .context("Failed to add AI Chat item")?;
         menu.append(&PredefinedMenuItem::separator())
             .context("Failed to add separator")?;
+        menu.append(&launch_at_login_item)
+            .context("Failed to add Launch at Login item")?;
         menu.append(&settings_item)
             .context("Failed to add Settings item")?;
         menu.append(&PredefinedMenuItem::separator())
@@ -141,6 +175,7 @@ impl TrayManager {
             open_notes_id,
             new_note_id,
             open_ai_chat_id,
+            launch_at_login_item,
             settings_id,
             quit_id,
         ))
@@ -177,6 +212,12 @@ impl TrayManager {
             Some(TrayMenuAction::NewNote)
         } else if id == &self.open_ai_chat_id {
             Some(TrayMenuAction::OpenAiChat)
+        } else if id == &self.launch_at_login_item.id().0 {
+            // Toggle login item and update checkmark
+            if let Ok(new_state) = login_item::toggle_login_item() {
+                self.launch_at_login_item.set_checked(new_state);
+            }
+            Some(TrayMenuAction::LaunchAtLogin)
         } else if id == &self.settings_id {
             Some(TrayMenuAction::Settings)
         } else if id == &self.quit_id {
