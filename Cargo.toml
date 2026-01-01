@@ -99,6 +99,9 @@ open = "5"
 inventory = "0.3"  # Compile-time story registration (same pattern as Zed)
 clap = { version = "4", features = ["derive"] }  # CLI argument parsing
 
+# Note: We tried gpui-component for its Input widget but it requires complex Root 
+# wrapper initialization. Our custom TextInputState is simpler and meets our needs.
+
 # Core Foundation for CFRunLoop (keyboard monitoring)
 core-foundation = "0.10"
 foreign-types = "0.5"

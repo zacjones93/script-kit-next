@@ -5,15 +5,17 @@
 //! - Secure storage via system keyring (keychain on macOS)
 //! - Mask input for secret values
 //! - Remember values for future sessions
+//! - Full text selection and clipboard support (cmd+c/v/x, shift+arrows)
 //!
 //! Design: Matches ArgPrompt-no-choices (single input line, minimal height)
 
 use gpui::{
-    div, prelude::*, px, rgb, rgba, svg, Context, FocusHandle, Focusable, Render, SharedString,
-    Window,
+    div, prelude::*, px, rgb, rgba, svg, Context, Div, FocusHandle, Focusable, Render,
+    SharedString, Window,
 };
 use std::sync::Arc;
 
+use crate::components::TextInputState;
 use crate::designs::{get_tokens, DesignVariant};
 use crate::logging;
 use crate::panel::{
@@ -98,8 +100,8 @@ pub struct EnvPrompt {
     pub prompt: Option<String>,
     /// Whether to mask input (for secrets)
     pub secret: bool,
-    /// Current input value
-    pub input_text: String,
+    /// Text input state with selection and clipboard support
+    input: TextInputState,
     /// Focus handle for keyboard input
     pub focus_handle: FocusHandle,
     /// Callback when user submits a value
@@ -132,7 +134,7 @@ impl EnvPrompt {
             key,
             prompt,
             secret,
-            input_text: String::new(),
+            input: TextInputState::new(),
             focus_handle,
             on_submit,
             theme,
@@ -163,24 +165,25 @@ impl EnvPrompt {
 
     /// Submit the entered value
     fn submit(&mut self) {
-        if !self.input_text.is_empty() {
+        let text = self.input.text();
+        if !text.is_empty() {
             // Store in keyring if this is a secret
             if self.secret {
-                if let Err(e) = set_secret(&self.key, &self.input_text) {
+                if let Err(e) = set_secret(&self.key, text) {
                     logging::log("ERROR", &format!("Failed to store secret: {}", e));
                 }
             }
-            (self.on_submit)(self.id.clone(), Some(self.input_text.clone()));
+            (self.on_submit)(self.id.clone(), Some(text.to_string()));
         }
     }
 
     /// Set the input text programmatically
     pub fn set_input(&mut self, text: String, cx: &mut Context<Self>) {
-        if self.input_text == text {
+        if self.input.text() == text {
             return;
         }
 
-        self.input_text = text;
+        self.input.set_text(text);
         cx.notify();
     }
 
@@ -189,26 +192,68 @@ impl EnvPrompt {
         (self.on_submit)(self.id.clone(), None);
     }
 
-    /// Handle character input
-    fn handle_char(&mut self, ch: char, cx: &mut Context<Self>) {
-        self.input_text.push(ch);
-        cx.notify();
-    }
-
-    /// Handle backspace
-    fn handle_backspace(&mut self, cx: &mut Context<Self>) {
-        if !self.input_text.is_empty() {
-            self.input_text.pop();
-            cx.notify();
-        }
-    }
-
     /// Get display text (masked if secret)
     fn display_text(&self) -> String {
-        if self.secret && !self.input_text.is_empty() {
-            "•".repeat(self.input_text.len())
+        self.input.display_text(self.secret)
+    }
+
+    /// Render the text input with cursor and selection
+    fn render_input_text(&self, text_primary: u32, accent_color: u32) -> Div {
+        let text = self.display_text();
+        let chars: Vec<char> = text.chars().collect();
+        let cursor_pos = self.input.cursor();
+        let has_selection = self.input.has_selection();
+
+        if text.is_empty() {
+            // Empty - just show cursor
+            return div().flex().flex_row().items_center().child(
+                div()
+                    .w(px(CURSOR_WIDTH))
+                    .h(px(CURSOR_HEIGHT_LG))
+                    .bg(rgb(text_primary)),
+            );
+        }
+
+        if has_selection {
+            // With selection: before | selected | after
+            let selection = self.input.selection();
+            let (start, end) = selection.range();
+
+            let before: String = chars[..start].iter().collect();
+            let selected: String = chars[start..end].iter().collect();
+            let after: String = chars[end..].iter().collect();
+
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .overflow_x_hidden()
+                .when(!before.is_empty(), |d: Div| d.child(div().child(before)))
+                .child(
+                    div()
+                        .bg(rgba((accent_color << 8) | 0x60))
+                        .text_color(rgb(0xffffff))
+                        .child(selected),
+                )
+                .when(!after.is_empty(), |d: Div| d.child(div().child(after)))
         } else {
-            self.input_text.clone()
+            // No selection: before cursor | cursor | after cursor
+            let before: String = chars[..cursor_pos].iter().collect();
+            let after: String = chars[cursor_pos..].iter().collect();
+
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .overflow_x_hidden()
+                .when(!before.is_empty(), |d: Div| d.child(div().child(before)))
+                .child(
+                    div()
+                        .w(px(CURSOR_WIDTH))
+                        .h(px(CURSOR_HEIGHT_LG))
+                        .bg(rgb(text_primary)),
+                )
+                .when(!after.is_empty(), |d: Div| d.child(div().child(after)))
         }
     }
 }
@@ -231,20 +276,34 @@ impl Render for EnvPrompt {
              _window: &mut Window,
              cx: &mut Context<Self>| {
                 let key_str = event.keystroke.key.to_lowercase();
+                let modifiers = &event.keystroke.modifiers;
 
+                // Handle submit/cancel first
                 match key_str.as_str() {
-                    "enter" => this.submit(),
-                    "escape" => this.submit_cancel(),
-                    "backspace" => this.handle_backspace(cx),
-                    _ => {
-                        if let Some(ref key_char) = event.keystroke.key_char {
-                            if let Some(ch) = key_char.chars().next() {
-                                if !ch.is_control() {
-                                    this.handle_char(ch, cx);
-                                }
-                            }
-                        }
+                    "enter" => {
+                        this.submit();
+                        return;
                     }
+                    "escape" => {
+                        this.submit_cancel();
+                        return;
+                    }
+                    _ => {}
+                }
+
+                // Delegate all other keys to TextInputState
+                let key_char = event.keystroke.key_char.as_deref();
+                let handled = this.input.handle_key(
+                    &key_str,
+                    key_char,
+                    modifiers.platform, // On macOS, platform = Cmd key
+                    modifiers.alt,
+                    modifiers.shift,
+                    cx,
+                );
+
+                if handled {
+                    cx.notify();
                 }
             },
         );
@@ -275,17 +334,7 @@ impl Render for EnvPrompt {
             })
             .into();
 
-        let display_text = self.display_text();
-        let input_is_empty = display_text.is_empty();
-
-        let input_display: SharedString = if input_is_empty {
-            placeholder
-        } else {
-            display_text.into()
-        };
-
-        // Cursor visibility (always visible for now, can add blink timer later)
-        let cursor_visible = true;
+        let input_is_empty = self.input.is_empty();
 
         // Main container - matches ArgPrompt-no-choices layout exactly
         // Single row with: input area + Submit button + logo
@@ -310,7 +359,7 @@ impl Render for EnvPrompt {
                     .flex_row()
                     .items_center()
                     .gap(px(HEADER_GAP))
-                    // Input area with cursor (same pattern as main menu)
+                    // Input area with cursor and selection
                     .child(
                         div()
                             .flex_1()
@@ -323,36 +372,21 @@ impl Render for EnvPrompt {
                             } else {
                                 rgb(text_primary)
                             })
-                            // When empty: cursor LEFT (before placeholder)
-                            .when(input_is_empty, |d| {
+                            // When empty: show cursor + placeholder
+                            .when(input_is_empty, |d: Div| {
                                 d.child(
                                     div()
                                         .w(px(CURSOR_WIDTH))
                                         .h(px(CURSOR_HEIGHT_LG))
                                         .my(px(CURSOR_MARGIN_Y))
                                         .mr(px(CURSOR_GAP_X))
-                                        .when(cursor_visible, |d| d.bg(rgb(text_primary))),
+                                        .bg(rgb(text_primary)),
                                 )
+                                .child(div().child(placeholder.clone()))
                             })
-                            // Display text - with negative margin for placeholder alignment
-                            .when(input_is_empty, |d| {
-                                d.child(
-                                    div()
-                                        .ml(px(-(CURSOR_WIDTH + CURSOR_GAP_X)))
-                                        .child(input_display.clone()),
-                                )
-                            })
-                            .when(!input_is_empty, |d| d.child(input_display.clone()))
-                            // When typing: cursor RIGHT (after text)
-                            .when(!input_is_empty, |d| {
-                                d.child(
-                                    div()
-                                        .w(px(CURSOR_WIDTH))
-                                        .h(px(CURSOR_HEIGHT_LG))
-                                        .my(px(CURSOR_MARGIN_Y))
-                                        .ml(px(CURSOR_GAP_X))
-                                        .when(cursor_visible, |d| d.bg(rgb(text_primary))),
-                                )
+                            // When has text: show text with cursor/selection
+                            .when(!input_is_empty, |d: Div| {
+                                d.child(self.render_input_text(text_primary, accent_color))
                             }),
                     )
                     // Submit button area (matches ArgPrompt style)

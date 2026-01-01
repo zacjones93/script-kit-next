@@ -142,7 +142,7 @@ impl ScriptListApp {
             builtin_entries,
             apps,
             selected_index: 0,
-            filter_text: String::new(),
+            filter_input: TextInputState::new(),
             last_output: None,
             focus_handle: cx.focus_handle(),
             show_logs: false,
@@ -153,7 +153,7 @@ impl ScriptListApp {
             last_scroll_time: None,
             current_view: AppView::ScriptList,
             script_session: Arc::new(ParkingMutex::new(None)),
-            arg_input_text: String::new(),
+            arg_input: TextInputState::new(),
             arg_selected_index: 0,
             prompt_receiver: None,
             response_sender: None,
@@ -333,13 +333,19 @@ impl ScriptListApp {
     }
 
     /// Get unified filtered results combining scripts and scriptlets
+    /// Helper to get filter text as string (for compatibility with existing code)
+    fn filter_text(&self) -> &str {
+        self.filter_input.text()
+    }
+
     /// P1: Now uses caching - invalidates only when filter_text changes
     fn filtered_results(&self) -> Vec<scripts::SearchResult> {
+        let filter_text = self.filter_text();
         // P1: Return cached results if filter hasn't changed
-        if self.filter_text == self.filter_cache_key {
+        if filter_text == self.filter_cache_key {
             logging::log_debug(
                 "CACHE",
-                &format!("Filter cache HIT for '{}'", self.filter_text),
+                &format!("Filter cache HIT for '{}'", filter_text),
             );
             return self.cached_filtered_results.clone();
         }
@@ -349,23 +355,23 @@ impl ScriptListApp {
             "CACHE",
             &format!(
                 "Filter cache MISS - need recompute for '{}' (cached key: '{}')",
-                self.filter_text, self.filter_cache_key
+                filter_text, self.filter_cache_key
             ),
         );
 
         // PERF: Measure search time (only log when actually filtering)
         let search_start = std::time::Instant::now();
         let results =
-            scripts::fuzzy_search_unified(&self.scripts, &self.scriptlets, &self.filter_text);
+            scripts::fuzzy_search_unified(&self.scripts, &self.scriptlets, filter_text);
         let search_elapsed = search_start.elapsed();
 
         // Only log search performance when there's an active filter
-        if !self.filter_text.is_empty() {
+        if !filter_text.is_empty() {
             logging::log(
                 "PERF",
                 &format!(
                     "Search '{}' took {:.2}ms ({} results from {} total)",
-                    self.filter_text,
+                    filter_text,
                     search_elapsed.as_secs_f64() * 1000.0,
                     results.len(),
                     self.scripts.len() + self.scriptlets.len()
@@ -378,10 +384,11 @@ impl ScriptListApp {
     /// P1: Get filtered results with cache update (mutable version)
     /// Call this when you need to ensure cache is updated
     fn get_filtered_results_cached(&mut self) -> &Vec<scripts::SearchResult> {
-        if self.filter_text != self.filter_cache_key {
+        let filter_text = self.filter_input.text().to_string();
+        if filter_text != self.filter_cache_key {
             logging::log_debug(
                 "CACHE",
-                &format!("Filter cache MISS - recomputing for '{}'", self.filter_text),
+                &format!("Filter cache MISS - recomputing for '{}'", filter_text),
             );
             let search_start = std::time::Instant::now();
             self.cached_filtered_results = scripts::fuzzy_search_unified_all(
@@ -389,17 +396,17 @@ impl ScriptListApp {
                 &self.scriptlets,
                 &self.builtin_entries,
                 &self.apps,
-                &self.filter_text,
+                &filter_text,
             );
-            self.filter_cache_key = self.filter_text.clone();
+            self.filter_cache_key = filter_text.clone();
             let search_elapsed = search_start.elapsed();
 
-            if !self.filter_text.is_empty() {
+            if !filter_text.is_empty() {
                 logging::log(
                     "PERF",
                     &format!(
                         "Search '{}' took {:.2}ms ({} results from {} total)",
-                        self.filter_text,
+                        filter_text,
                         search_elapsed.as_secs_f64() * 1000.0,
                         self.cached_filtered_results.len(),
                         self.scripts.len()
@@ -412,7 +419,7 @@ impl ScriptListApp {
         } else {
             logging::log_debug(
                 "CACHE",
-                &format!("Filter cache HIT for '{}'", self.filter_text),
+                &format!("Filter cache HIT for '{}'", filter_text),
             );
         }
         &self.cached_filtered_results
@@ -566,10 +573,11 @@ impl ScriptListApp {
 
     #[allow(dead_code)]
     fn filtered_scripts(&self) -> Vec<scripts::Script> {
-        if self.filter_text.is_empty() {
+        let filter_text = self.filter_text();
+        if filter_text.is_empty() {
             self.scripts.clone()
         } else {
-            let filter_lower = self.filter_text.to_lowercase();
+            let filter_lower = filter_text.to_lowercase();
             self.scripts
                 .iter()
                 .filter(|s| s.name.to_lowercase().contains(&filter_lower))
@@ -701,9 +709,9 @@ impl ScriptListApp {
         clear: bool,
         cx: &mut Context<Self>,
     ) {
-        // P3: Stage 1 - Update filter_text immediately (displayed in input)
+        // P3: Stage 1 - Update filter_input immediately (displayed in input)
         if clear {
-            self.filter_text.clear();
+            self.filter_input.clear();
             self.selected_index = 0;
             self.last_scrolled_index = None;
             // Use main_list_state for variable-height list (not the legacy list_scroll_handle)
@@ -711,15 +719,15 @@ impl ScriptListApp {
             self.last_scrolled_index = Some(0);
             // P3: Clear also immediately updates computed text (no coalescing needed)
             self.computed_filter_text.clear();
-        } else if backspace && !self.filter_text.is_empty() {
-            self.filter_text.pop();
+        } else if backspace && !self.filter_input.is_empty() {
+            self.filter_input.backspace();
             self.selected_index = 0;
             self.last_scrolled_index = None;
             // Use main_list_state for variable-height list (not the legacy list_scroll_handle)
             self.main_list_state.scroll_to_reveal_item(0);
             self.last_scrolled_index = Some(0);
         } else if let Some(ch) = new_char {
-            self.filter_text.push(ch);
+            self.filter_input.insert_char(ch);
             self.selected_index = 0;
             self.last_scrolled_index = None;
             // Use main_list_state for variable-height list (not the legacy list_scroll_handle)
@@ -732,7 +740,7 @@ impl ScriptListApp {
 
         // P3: Stage 2 - Coalesce expensive search work with 16ms delay
         // Keep only the latest filter text while a timer is pending.
-        if self.filter_coalescer.queue(self.filter_text.clone()) {
+        if self.filter_coalescer.queue(self.filter_input.text().to_string()) {
             cx.spawn(async move |this, cx| {
                 // Wait 16ms for coalescing window (one frame at 60fps)
                 Timer::after(std::time::Duration::from_millis(16)).await;
@@ -857,7 +865,7 @@ impl ScriptListApp {
     fn set_prompt_input(&mut self, text: String, cx: &mut Context<Self>) {
         match &mut self.current_view {
             AppView::ArgPrompt { .. } => {
-                self.arg_input_text = text;
+                self.arg_input.set_text(text);
                 self.arg_selected_index = 0;
                 self.arg_list_scroll_handle
                     .scroll_to_item(0, ScrollStrategy::Top);
@@ -885,10 +893,10 @@ impl ScriptListApp {
 
     /// Helper to get filtered arg choices without cloning
     fn get_filtered_arg_choices<'a>(&self, choices: &'a [Choice]) -> Vec<&'a Choice> {
-        if self.arg_input_text.is_empty() {
+        if self.arg_input.is_empty() {
             choices.iter().collect()
         } else {
-            let filter = self.arg_input_text.to_lowercase();
+            let filter = self.arg_input.text().to_lowercase();
             choices
                 .iter()
                 .filter(|c| c.name.to_lowercase().contains(&filter))
@@ -1838,14 +1846,14 @@ impl ScriptListApp {
         );
 
         // Clear arg prompt state
-        self.arg_input_text.clear();
+        self.arg_input.clear();
         self.arg_selected_index = 0;
         // P0: Reset arg scroll handle
         self.arg_list_scroll_handle
             .scroll_to_item(0, ScrollStrategy::Top);
 
         // Clear filter and selection state for fresh menu
-        self.filter_text.clear();
+        self.filter_input.clear();
         self.computed_filter_text.clear();
         self.filter_coalescer.reset();
         self.selected_index = 0;
@@ -1937,10 +1945,10 @@ impl ScriptListApp {
     /// Get filtered choices for arg prompt
     fn filtered_arg_choices(&self) -> Vec<(usize, &Choice)> {
         if let AppView::ArgPrompt { choices, .. } = &self.current_view {
-            if self.arg_input_text.is_empty() {
+            if self.arg_input.is_empty() {
                 choices.iter().enumerate().collect()
             } else {
-                let filter = self.arg_input_text.to_lowercase();
+                let filter = self.arg_input.text().to_lowercase();
                 choices
                     .iter()
                     .enumerate()
@@ -1955,14 +1963,14 @@ impl ScriptListApp {
     /// P0: Get filtered choices as owned data for uniform_list closure
     fn get_filtered_arg_choices_owned(&self) -> Vec<(usize, Choice)> {
         if let AppView::ArgPrompt { choices, .. } = &self.current_view {
-            if self.arg_input_text.is_empty() {
+            if self.arg_input.is_empty() {
                 choices
                     .iter()
                     .enumerate()
                     .map(|(i, c)| (i, c.clone()))
                     .collect()
             } else {
-                let filter = self.arg_input_text.to_lowercase();
+                let filter = self.arg_input.text().to_lowercase();
                 choices
                     .iter()
                     .enumerate()

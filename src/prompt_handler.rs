@@ -50,7 +50,7 @@ impl ScriptListApp {
                     choices,
                     actions,
                 };
-                self.arg_input_text.clear();
+                self.arg_input.clear();
                 self.arg_selected_index = 0;
                 self.focused_input = FocusedInput::ArgPrompt;
                 // Resize window based on number of choices
@@ -551,7 +551,7 @@ impl ScriptListApp {
                             "none".to_string(),
                             None,
                             None,
-                            self.filter_text.clone(),
+                            self.filter_input.text().to_string(),
                             self.scripts.len()
                                 + self.scriptlets.len()
                                 + self.builtin_entries.len()
@@ -579,7 +579,7 @@ impl ScriptListApp {
                             "arg".to_string(),
                             Some(id.clone()),
                             Some(placeholder.clone()),
-                            self.arg_input_text.clone(),
+                            self.arg_input.text().to_string(),
                             choices.len(),
                             filtered.len(),
                             self.arg_selected_index as i32,

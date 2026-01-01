@@ -3111,7 +3111,6 @@ impl Render for EditorPrompt {
     }
 }
 
-
 #[cfg(test)]
 #[path = "editor_tests.rs"]
 mod tests;

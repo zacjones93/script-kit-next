@@ -275,7 +275,7 @@ impl ScriptListApp {
                                 let msg = protocol::Message::action_triggered(
                                     action_id.clone(),
                                     action.value.clone(),
-                                    self.arg_input_text.clone(),
+                                    self.arg_input.text().to_string(),
                                 );
                                 if let Err(e) = sender.send(msg) {
                                     logging::log(
@@ -342,7 +342,7 @@ impl ScriptListApp {
                         let msg = protocol::Message::action_triggered(
                             action_name.to_string(),
                             action.value.clone(),
-                            self.arg_input_text.clone(),
+                            self.arg_input.text().to_string(),
                         );
                         if let Err(e) = sender.send(msg) {
                             logging::log(

@@ -58,6 +58,7 @@ pub mod form_fields;
 pub mod prompt_container;
 pub mod prompt_header;
 pub mod scrollbar;
+pub mod text_input;
 pub mod toast;
 
 // Re-export commonly used types
@@ -73,5 +74,7 @@ pub use scrollbar::{
 pub use prompt_container::{PromptContainer, PromptContainerColors, PromptContainerConfig};
 #[allow(unused_imports)]
 pub use prompt_header::{PromptHeader, PromptHeaderColors, PromptHeaderConfig};
+#[allow(unused_imports)]
+pub use text_input::{TextInputState, TextSelection};
 #[allow(unused_imports)]
 pub use toast::{Toast, ToastAction, ToastColors, ToastVariant};

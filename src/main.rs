@@ -114,6 +114,7 @@ mod mcp_script_tools;
 mod mcp_server;
 mod mcp_streaming;
 
+use crate::components::text_input::TextInputState;
 use crate::components::toast::{Toast, ToastAction, ToastColors};
 use crate::error::ErrorSeverity;
 use crate::filter_coalescer::FilterCoalescer;
@@ -146,8 +147,8 @@ use scripts::get_grouped_results;
 
 use actions::{ActionsDialog, ScriptInfo};
 use panel::{
-    CURSOR_GAP_X, CURSOR_HEIGHT_LG, CURSOR_MARGIN_Y, CURSOR_WIDTH, DEFAULT_PLACEHOLDER,
-    HEADER_GAP, HEADER_PADDING_X, HEADER_PADDING_Y,
+    CURSOR_GAP_X, CURSOR_HEIGHT_LG, CURSOR_MARGIN_Y, CURSOR_WIDTH, DEFAULT_PLACEHOLDER, HEADER_GAP,
+    HEADER_PADDING_X, HEADER_PADDING_Y,
 };
 use parking_lot::Mutex as ParkingMutex;
 use protocol::{Choice, Message, ProtocolAction};
@@ -424,7 +425,8 @@ struct ScriptListApp {
     /// Cached list of installed applications for main search
     apps: Vec<app_launcher::AppInfo>,
     selected_index: usize,
-    filter_text: String,
+    /// Main menu filter input with selection and clipboard support
+    filter_input: TextInputState,
     last_output: Option<SharedString>,
     focus_handle: FocusHandle,
     show_logs: bool,
@@ -440,7 +442,8 @@ struct ScriptListApp {
     current_view: AppView,
     script_session: SharedSession,
     // Prompt-specific state (used when view is ArgPrompt or DivPrompt)
-    arg_input_text: String,
+    // Uses TextInputState for selection and clipboard support
+    arg_input: TextInputState,
     arg_selected_index: usize,
     // Channel for receiving prompt messages from script thread (async_channel for event-driven)
     prompt_receiver: Option<async_channel::Receiver<PromptMessage>>,
@@ -1258,7 +1261,7 @@ fn main() {
                             }
                             ExternalCommand::SetFilter { ref text } => {
                                 logging::log("STDIN", &format!("Setting filter to: '{}'", text));
-                                view.filter_text = text.clone();
+                                view.filter_input.set_text(text.clone());
                                 view.computed_filter_text = text.clone();
                                 view.filter_coalescer.reset();
                                 let _ = view.get_filtered_results_cached(); // Update cache
@@ -1333,7 +1336,7 @@ fn main() {
                                                 }
                                                 "escape" => {
                                                     logging::log("STDIN", "SimulateKey: Escape - clear filter or hide");
-                                                    if !view.filter_text.is_empty() {
+                                                    if !view.filter_input.is_empty() {
                                                         view.update_filter(None, false, true, ctx);
                                                     } else {
                                                         WINDOW_VISIBLE.store(false, Ordering::SeqCst);
@@ -1440,8 +1443,8 @@ fn main() {
                                                     if let Some((_, choice)) = filtered.get(view.arg_selected_index) {
                                                         let value = choice.value.clone();
                                                         view.submit_prompt_response(prompt_id, Some(value), ctx);
-                                                    } else if !view.arg_input_text.is_empty() {
-                                                        let value = view.arg_input_text.clone();
+                                                    } else if !view.arg_input.is_empty() {
+                                                        let value = view.arg_input.text().to_string();
                                                         view.submit_prompt_response(prompt_id, Some(value), ctx);
                                                     }
                                                 }

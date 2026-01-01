@@ -988,7 +988,6 @@ pub fn validate_interpreter_tool(tool: &str) -> Result<(), String> {
 // Tests
 // ============================================================================
 
-
 #[cfg(test)]
 #[path = "scriptlet_tests.rs"]
 mod tests;

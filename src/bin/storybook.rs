@@ -32,8 +32,8 @@ fn main() {
                 eprintln!("Usage: storybook [OPTIONS]");
                 eprintln!();
                 eprintln!("Options:");
-                eprintln!("  -s, --story <ID>   Open a specific story by ID");
-                eprintln!("  -h, --help         Show this help message");
+                eprintln!("  -s, --story <ID>     Open a specific story by ID");
+                eprintln!("  -h, --help           Show this help message");
                 eprintln!();
                 eprintln!("Available stories:");
                 eprintln!("  button           - Button component variants");

@@ -5,6 +5,79 @@
 // render_path_prompt, render_env_prompt, render_drop_prompt, render_template_prompt
 
 impl ScriptListApp {
+    /// Render the arg input text with cursor and selection highlight
+    fn render_arg_input_text(&self, text_primary: u32, accent_color: u32) -> gpui::Div {
+        let text = self.arg_input.text();
+        let chars: Vec<char> = text.chars().collect();
+        let cursor_pos = self.arg_input.cursor();
+        let has_selection = self.arg_input.has_selection();
+        // Separate focus state from blink state to avoid layout shift
+        let is_focused = self.focused_input == FocusedInput::ArgPrompt;
+        let is_cursor_visible = is_focused && self.cursor_visible;
+
+        if text.is_empty() {
+            // Empty - always reserve cursor space, only show bg when visible
+            return div().flex().flex_row().items_center().child(
+                div()
+                    .w(px(CURSOR_WIDTH))
+                    .h(px(CURSOR_HEIGHT_LG))
+                    .when(is_cursor_visible, |d: gpui::Div| d.bg(rgb(text_primary))),
+            );
+        }
+
+        if has_selection {
+            // With selection: before | selected | after (no cursor shown during selection)
+            let selection = self.arg_input.selection();
+            let (start, end) = selection.range();
+
+            let before: String = chars[..start].iter().collect();
+            let selected: String = chars[start..end].iter().collect();
+            let after: String = chars[end..].iter().collect();
+
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .overflow_x_hidden()
+                .when(!before.is_empty(), |d: gpui::Div| {
+                    d.child(div().child(before))
+                })
+                .child(
+                    div()
+                        .bg(rgba((accent_color << 8) | 0x60))
+                        .text_color(rgb(0xffffff))
+                        .child(selected),
+                )
+                .when(!after.is_empty(), |d: gpui::Div| {
+                    d.child(div().child(after))
+                })
+        } else {
+            // No selection: before cursor | cursor | after cursor
+            // Always reserve cursor space to prevent layout shift during blink
+            let before: String = chars[..cursor_pos].iter().collect();
+            let after: String = chars[cursor_pos..].iter().collect();
+
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .overflow_x_hidden()
+                .when(!before.is_empty(), |d: gpui::Div| {
+                    d.child(div().child(before))
+                })
+                // Always render cursor element, only show bg when visible
+                .child(
+                    div()
+                        .w(px(CURSOR_WIDTH))
+                        .h(px(CURSOR_HEIGHT_LG))
+                        .when(is_cursor_visible, |d: gpui::Div| d.bg(rgb(text_primary))),
+                )
+                .when(!after.is_empty(), |d: gpui::Div| {
+                    d.child(div().child(after))
+                })
+        }
+    }
+
     fn render_arg_prompt(
         &mut self,
         id: String,
@@ -127,8 +200,11 @@ impl ScriptListApp {
                     return;
                 }
 
+                let modifiers = &event.keystroke.modifiers;
+
+                // Arrow up/down: list navigation
                 match key_str.as_str() {
-                    "up" | "arrowup" => {
+                    "up" | "arrowup" if !modifiers.shift => {
                         if this.arg_selected_index > 0 {
                             this.arg_selected_index -= 1;
                             // P0: Scroll to keep selection visible
@@ -140,8 +216,9 @@ impl ScriptListApp {
                             );
                             cx.notify();
                         }
+                        return;
                     }
-                    "down" | "arrowdown" => {
+                    "down" | "arrowdown" if !modifiers.shift => {
                         let filtered = this.filtered_arg_choices();
                         if this.arg_selected_index < filtered.len().saturating_sub(1) {
                             this.arg_selected_index += 1;
@@ -157,6 +234,7 @@ impl ScriptListApp {
                             );
                             cx.notify();
                         }
+                        return;
                     }
                     "enter" => {
                         let filtered = this.filtered_arg_choices();
@@ -164,49 +242,49 @@ impl ScriptListApp {
                             // Case 1: There are filtered choices - submit the selected one
                             let value = choice.value.clone();
                             this.submit_prompt_response(prompt_id.clone(), Some(value), cx);
-                        } else if !this.arg_input_text.is_empty() {
-                            // Case 2: No choices but user typed something - submit input_text
-                            let value = this.arg_input_text.clone();
+                        } else if !this.arg_input.is_empty() {
+                            // Case 2: No choices but user typed something - submit input text
+                            let value = this.arg_input.text().to_string();
                             this.submit_prompt_response(prompt_id.clone(), Some(value), cx);
                         }
                         // Case 3: No choices and no input - do nothing (prevent empty submissions)
+                        return;
                     }
                     // Note: "escape" is handled by handle_global_shortcut_with_options above
-                    "backspace" => {
-                        if !this.arg_input_text.is_empty() {
-                            this.arg_input_text.pop();
-                            this.arg_selected_index = 0;
-                            this.update_window_size();
-                            cx.notify();
-                        }
+                    _ => {}
+                }
+
+                // Delegate all other keys to TextInputState for editing, selection, clipboard
+                let key_char = event.keystroke.key_char.as_deref();
+                let old_text = this.arg_input.text().to_string();
+
+                let handled = this.arg_input.handle_key(
+                    &key_str,
+                    key_char,
+                    modifiers.platform, // Cmd key on macOS
+                    modifiers.alt,
+                    modifiers.shift,
+                    cx,
+                );
+
+                if handled {
+                    // If text changed (not just cursor move), reset selection and update
+                    if this.arg_input.text() != old_text {
+                        this.arg_selected_index = 0;
+                        this.update_window_size();
                     }
-                    _ => {
-                        if let Some(ref key_char) = event.keystroke.key_char {
-                            if let Some(ch) = key_char.chars().next() {
-                                if !ch.is_control() {
-                                    this.arg_input_text.push(ch);
-                                    this.arg_selected_index = 0;
-                                    this.update_window_size();
-                                    cx.notify();
-                                }
-                            }
-                        }
-                    }
+                    cx.notify();
                 }
             },
         );
 
-        let input_display = if self.arg_input_text.is_empty() {
-            SharedString::from(placeholder.clone())
-        } else {
-            SharedString::from(self.arg_input_text.clone())
-        };
-        let input_is_empty = self.arg_input_text.is_empty();
+        let input_is_empty = self.arg_input.is_empty();
 
         // P4: Pre-compute theme values for arg prompt using design tokens for GLOBAL theming
         let arg_list_colors = ListItemColors::from_design(&design_colors);
         let text_primary = design_colors.text_primary;
         let text_muted = design_colors.text_muted;
+        let accent_color = design_colors.accent;
 
         // P0: Clone data needed for uniform_list closure
         let arg_selected_index = self.arg_selected_index;
@@ -300,8 +378,7 @@ impl ScriptListApp {
                     .flex_row()
                     .items_center()
                     .gap(px(HEADER_GAP))
-                    // Search input with blinking cursor (same as main menu)
-                    // Cursor appears at LEFT when input is empty (before placeholder text)
+                    // Search input with cursor and selection support
                     .child(
                         div()
                             .flex_1()
@@ -314,48 +391,27 @@ impl ScriptListApp {
                             } else {
                                 rgb(text_primary)
                             })
-                            // When empty: cursor FIRST (at left), then placeholder
-                            // When typing: text, then cursor at end
-                            //
-                            // ALIGNMENT FIX: The left cursor (when empty) takes up space
-                            // (CURSOR_WIDTH + CURSOR_GAP_X). We apply a negative margin to the
-                            // placeholder text to pull it back by that amount.
-                            .when(input_is_empty, |d| {
+                            // When empty: show cursor (always reserve space) + placeholder
+                            .when(input_is_empty, |d: gpui::Div| {
+                                let is_cursor_visible = self.focused_input
+                                    == FocusedInput::ArgPrompt
+                                    && self.cursor_visible;
+                                // Always render cursor div to reserve space, only show bg when visible
                                 d.child(
                                     div()
                                         .w(px(CURSOR_WIDTH))
                                         .h(px(CURSOR_HEIGHT_LG))
                                         .my(px(CURSOR_MARGIN_Y))
                                         .mr(px(CURSOR_GAP_X))
-                                        .when(
-                                            self.focused_input == FocusedInput::ArgPrompt
-                                                && self.cursor_visible,
-                                            |d| d.bg(rgb(text_primary)),
-                                        ),
+                                        .when(is_cursor_visible, |d: gpui::Div| {
+                                            d.bg(rgb(text_primary))
+                                        }),
                                 )
+                                .child(div().text_color(rgb(text_muted)).child(placeholder.clone()))
                             })
-                            // Display text - with negative margin for placeholder alignment
-                            .when(input_is_empty, |d| {
-                                d.child(
-                                    div()
-                                        .ml(px(-(CURSOR_WIDTH + CURSOR_GAP_X)))
-                                        .child(input_display.clone()),
-                                )
-                            })
-                            .when(!input_is_empty, |d| d.child(input_display.clone()))
-                            .when(!input_is_empty, |d| {
-                                d.child(
-                                    div()
-                                        .w(px(CURSOR_WIDTH))
-                                        .h(px(CURSOR_HEIGHT_LG))
-                                        .my(px(CURSOR_MARGIN_Y))
-                                        .ml(px(CURSOR_GAP_X))
-                                        .when(
-                                            self.focused_input == FocusedInput::ArgPrompt
-                                                && self.cursor_visible,
-                                            |d| d.bg(rgb(text_primary)),
-                                        ),
-                                )
+                            // When has text: show text with cursor/selection via helper
+                            .when(!input_is_empty, |d: gpui::Div| {
+                                d.child(self.render_arg_input_text(text_primary, accent_color))
                             }),
                     )
                     // CLS-FREE ACTIONS AREA: Matches main menu pattern exactly
