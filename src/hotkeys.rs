@@ -7,6 +7,145 @@ use std::sync::OnceLock;
 
 use crate::{config, logging, scripts, shortcuts};
 
+// =============================================================================
+// GCD dispatch for immediate main-thread execution (bypasses async runtime)
+// =============================================================================
+
+use std::sync::Arc;
+
+/// Callback type for hotkey actions - uses Arc<dyn Fn()> for repeated invocation
+pub type HotkeyHandler = Arc<dyn Fn() + Send + Sync>;
+
+/// Static storage for handlers to be invoked on main thread
+static NOTES_HANDLER: OnceLock<std::sync::Mutex<Option<HotkeyHandler>>> = OnceLock::new();
+static AI_HANDLER: OnceLock<std::sync::Mutex<Option<HotkeyHandler>>> = OnceLock::new();
+
+/// Register a handler to be invoked when the Notes hotkey is pressed.
+/// This handler will be executed on the main thread via GCD dispatch_async.
+/// The handler can be called multiple times (it's not consumed).
+#[allow(dead_code)]
+pub fn set_notes_hotkey_handler<F: Fn() + Send + Sync + 'static>(handler: F) {
+    let storage = NOTES_HANDLER.get_or_init(|| std::sync::Mutex::new(None));
+    *storage.lock().unwrap() = Some(Arc::new(handler));
+}
+
+/// Register a handler to be invoked when the AI hotkey is pressed.
+/// This handler will be executed on the main thread via GCD dispatch_async.
+/// The handler can be called multiple times (it's not consumed).
+#[allow(dead_code)]
+pub fn set_ai_hotkey_handler<F: Fn() + Send + Sync + 'static>(handler: F) {
+    let storage = AI_HANDLER.get_or_init(|| std::sync::Mutex::new(None));
+    *storage.lock().unwrap() = Some(Arc::new(handler));
+}
+
+#[cfg(target_os = "macos")]
+mod gcd {
+    use std::ffi::c_void;
+
+    // Link to libSystem for GCD functions
+    // Note: dispatch_get_main_queue is actually a macro that returns &_dispatch_main_q
+    // We use the raw symbol directly instead
+    #[link(name = "System", kind = "framework")]
+    extern "C" {
+        fn dispatch_async_f(
+            queue: *const c_void,
+            context: *mut c_void,
+            work: extern "C" fn(*mut c_void),
+        );
+        // The main dispatch queue is a global static symbol, not a function
+        #[link_name = "_dispatch_main_q"]
+        static DISPATCH_MAIN_QUEUE: c_void;
+    }
+
+    /// Dispatch a closure to the main thread via GCD.
+    /// This is the key to making hotkeys work before the GPUI event loop is "warmed up".
+    pub fn dispatch_to_main<F: FnOnce() + Send + 'static>(f: F) {
+        let boxed: Box<dyn FnOnce() + Send> = Box::new(f);
+        let raw = Box::into_raw(Box::new(boxed));
+
+        extern "C" fn trampoline(context: *mut c_void) {
+            unsafe {
+                let boxed: Box<Box<dyn FnOnce() + Send>> = Box::from_raw(context as *mut _);
+                boxed();
+            }
+        }
+
+        unsafe {
+            let main_queue = &DISPATCH_MAIN_QUEUE as *const c_void;
+            dispatch_async_f(main_queue, raw as *mut c_void, trampoline);
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+mod gcd {
+    /// Fallback for non-macOS: just call the closure directly (in the current thread)
+    pub fn dispatch_to_main<F: FnOnce() + Send + 'static>(f: F) {
+        f();
+    }
+}
+
+/// Dispatch the Notes hotkey handler to the main thread.
+///
+/// Strategy:
+/// 1. Send to channel (wakes any async waiters)
+/// 2. Dispatch a no-op to main thread via GCD (ensures GPUI event loop processes)
+///
+/// This works even before the main window is activated because GCD dispatch
+/// directly integrates with the NSApplication run loop that GPUI uses.
+fn dispatch_notes_hotkey() {
+    // Send to channel - this wakes any async task waiting on recv()
+    if notes_hotkey_channel().0.try_send(()).is_err() {
+        logging::log("HOTKEY", "Notes hotkey channel full/closed");
+    }
+
+    // Also try the handler approach for immediate execution
+    let handler = NOTES_HANDLER
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap()
+        .clone();
+
+    if let Some(handler) = handler {
+        gcd::dispatch_to_main(move || {
+            handler();
+        });
+    } else {
+        // Dispatch an empty closure to wake GPUI's event loop
+        // This ensures the channel message gets processed even if GPUI was idle
+        gcd::dispatch_to_main(|| {
+            // Empty closure - just wakes the run loop
+        });
+    }
+}
+
+/// Dispatch the AI hotkey handler to the main thread.
+/// Same strategy as Notes hotkey.
+fn dispatch_ai_hotkey() {
+    // Send to channel - this wakes any async task waiting on recv()
+    if ai_hotkey_channel().0.try_send(()).is_err() {
+        logging::log("HOTKEY", "AI hotkey channel full/closed");
+    }
+
+    // Also try the handler approach for immediate execution
+    let handler = AI_HANDLER
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap()
+        .clone();
+
+    if let Some(handler) = handler {
+        gcd::dispatch_to_main(move || {
+            handler();
+        });
+    } else {
+        // Dispatch an empty closure to wake GPUI's event loop
+        gcd::dispatch_to_main(|| {
+            // Empty closure - just wakes the run loop
+        });
+    }
+}
+
 // HOTKEY_CHANNEL: Event-driven async_channel for hotkey events (replaces AtomicBool polling)
 #[allow(dead_code)]
 static HOTKEY_CHANNEL: OnceLock<(async_channel::Sender<()>, async_channel::Receiver<()>)> =
@@ -393,19 +532,24 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
                         &format!("{} pressed (trigger #{})", hotkey_display, count + 1),
                     );
                 }
-                // Check if it's the notes hotkey
+                // Check if it's the notes hotkey - dispatch directly to main thread via GCD
                 else if event.id == notes_hotkey_id {
-                    logging::log("HOTKEY", &format!("{} pressed (notes)", notes_display));
-                    if notes_hotkey_channel().0.send_blocking(()).is_err() {
-                        logging::log("HOTKEY", "Notes hotkey channel closed, cannot send");
-                    }
+                    logging::log(
+                        "HOTKEY",
+                        &format!(
+                            "{} pressed (notes) - dispatching to main thread",
+                            notes_display
+                        ),
+                    );
+                    dispatch_notes_hotkey();
                 }
-                // Check if it's the AI hotkey
+                // Check if it's the AI hotkey - dispatch directly to main thread via GCD
                 else if event.id == ai_hotkey_id {
-                    logging::log("HOTKEY", &format!("{} pressed (AI)", ai_display));
-                    if ai_hotkey_channel().0.send_blocking(()).is_err() {
-                        logging::log("HOTKEY", "AI hotkey channel closed, cannot send");
-                    }
+                    logging::log(
+                        "HOTKEY",
+                        &format!("{} pressed (AI) - dispatching to main thread", ai_display),
+                    );
+                    dispatch_ai_hotkey();
                 }
                 // Check if it's a script shortcut
                 else if let Some(script_path) = script_hotkey_map.get(&event.id) {

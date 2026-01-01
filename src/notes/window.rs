@@ -6,8 +6,8 @@
 use anyhow::Result;
 use gpui::{
     div, prelude::*, px, rgb, size, App, Context, Entity, FocusHandle, Focusable, Hsla,
-    IntoElement, KeyDownEvent, ParentElement, Render, SharedString, Styled, Subscription, Window,
-    WindowBounds, WindowOptions,
+    IntoElement, KeyDownEvent, ParentElement, Render, Styled, Subscription, Window, WindowBounds,
+    WindowOptions,
 };
 
 #[cfg(target_os = "macos")]
@@ -17,7 +17,6 @@ use cocoa::base::{id, nil};
 use gpui_component::{
     button::{Button, ButtonVariants},
     input::{Input, InputEvent, InputState},
-    sidebar::{Sidebar, SidebarGroup, SidebarMenu, SidebarMenuItem},
     theme::{ActiveTheme, Theme as GpuiTheme, ThemeColor, ThemeMode},
     IconName, Root, Sizable,
 };
@@ -25,6 +24,8 @@ use gpui_component::{
 use objc::{msg_send, sel, sel_impl};
 use tracing::{debug, info};
 
+use super::actions_panel::NotesAction;
+use super::browse_panel::{BrowsePanel, NoteAction, NoteListItem};
 use super::model::{ExportFormat, Note, NoteId};
 use super::storage;
 
@@ -43,6 +44,12 @@ pub enum NotesViewMode {
 }
 
 /// The main notes application view
+///
+/// Raycast-style single-note view:
+/// - No sidebar - displays one note at a time
+/// - Titlebar with note title and hover-reveal action icons
+/// - Auto-resize: window height grows with content
+/// - Footer with type indicator and character count
 pub struct NotesApp {
     /// All notes (cached from storage)
     notes: Vec<Note>,
@@ -59,23 +66,32 @@ pub struct NotesApp {
     /// Editor input state (using gpui-component's Input)
     editor_state: Entity<InputState>,
 
-    /// Search input state
+    /// Search input state (for future browse panel)
     search_state: Entity<InputState>,
 
-    /// Current search query
+    /// Current search query (for future browse panel)
     search_query: String,
-
-    /// Whether the sidebar is collapsed
-    sidebar_collapsed: bool,
 
     /// Whether the titlebar is being hovered (for showing/hiding icons)
     titlebar_hovered: bool,
+
+    /// Last known content line count for auto-resize
+    last_line_count: usize,
 
     /// Focus handle for keyboard navigation
     focus_handle: FocusHandle,
 
     /// Subscriptions to keep alive
     _subscriptions: Vec<Subscription>,
+
+    /// Whether the actions panel is shown (Cmd+K)
+    show_actions_panel: bool,
+
+    /// Whether the browse panel is shown (Cmd+P)
+    show_browse_panel: bool,
+
+    /// Entity for the browse panel (when shown)
+    browse_panel: Option<Entity<super::browse_panel::BrowsePanel>>,
 }
 
 impl NotesApp {
@@ -97,6 +113,9 @@ impl NotesApp {
             .map(|n| n.content.clone())
             .unwrap_or_default();
 
+        // Calculate initial line count for auto-resize (before moving content)
+        let initial_line_count = initial_content.lines().count().max(1);
+
         // Create input states - use multi_line for the editor
         let editor_state = cx.new(|cx| {
             InputState::new(window, cx)
@@ -110,11 +129,11 @@ impl NotesApp {
 
         let focus_handle = cx.focus_handle();
 
-        // Subscribe to editor changes
+        // Subscribe to editor changes - passes window for auto-resize
         let editor_sub = cx.subscribe_in(&editor_state, window, {
-            move |this, _, ev: &InputEvent, _window, cx| {
+            move |this, _, ev: &InputEvent, window, cx| {
                 if matches!(ev, InputEvent::Change) {
-                    this.on_editor_change(cx);
+                    this.on_editor_change(window, cx);
                 }
             }
         });
@@ -138,21 +157,25 @@ impl NotesApp {
             editor_state,
             search_state,
             search_query: String::new(),
-            sidebar_collapsed: false,
             titlebar_hovered: false,
+            last_line_count: initial_line_count,
             focus_handle,
             _subscriptions: vec![editor_sub, search_sub],
+            show_actions_panel: false,
+            show_browse_panel: false,
+            browse_panel: None,
         }
     }
 
-    /// Handle editor content changes
-    fn on_editor_change(&mut self, cx: &mut Context<Self>) {
+    /// Handle editor content changes with auto-resize
+    fn on_editor_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(id) = self.selected_note_id {
             let content = self.editor_state.read(cx).value();
+            let content_string = content.to_string();
 
             // Update the note in our cache
             if let Some(note) = self.notes.iter_mut().find(|n| n.id == id) {
-                note.set_content(content.to_string());
+                note.set_content(content_string.clone());
 
                 // Save to storage (debounced in a real implementation)
                 if let Err(e) = storage::save_note(note) {
@@ -160,8 +183,52 @@ impl NotesApp {
                 }
             }
 
+            // Auto-resize: adjust window height based on content
+            let new_line_count = content_string.lines().count().max(1);
+            if new_line_count != self.last_line_count {
+                self.last_line_count = new_line_count;
+                self.update_window_height(window, new_line_count, cx);
+            }
+
             cx.notify();
         }
+    }
+
+    /// Update window height based on content line count
+    fn update_window_height(
+        &self,
+        window: &mut Window,
+        line_count: usize,
+        _cx: &mut Context<Self>,
+    ) {
+        // Constants for layout calculation
+        const TITLEBAR_HEIGHT: f32 = 36.0;
+        const TOOLBAR_HEIGHT: f32 = 40.0; // Approximate toolbar height
+        const FOOTER_HEIGHT: f32 = 28.0;
+        const PADDING: f32 = 24.0; // Top + bottom padding
+        const LINE_HEIGHT: f32 = 22.0; // Approximate line height
+        const MIN_HEIGHT: f32 = 200.0;
+        const MAX_HEIGHT: f32 = 800.0;
+
+        // Calculate desired height
+        let content_height = (line_count as f32) * LINE_HEIGHT;
+        let total_height =
+            TITLEBAR_HEIGHT + TOOLBAR_HEIGHT + content_height + FOOTER_HEIGHT + PADDING;
+        let clamped_height = total_height.clamp(MIN_HEIGHT, MAX_HEIGHT);
+
+        // Get current bounds and update height
+        let current_bounds = window.bounds();
+        let old_height = current_bounds.size.height;
+        let new_size = size(current_bounds.size.width, px(clamped_height));
+
+        debug!(
+            old_height = %old_height,
+            new_height = %clamped_height,
+            line_count = line_count,
+            "Auto-resize: updating window height"
+        );
+
+        window.resize(new_size);
     }
 
     /// Handle search query changes
@@ -404,6 +471,95 @@ impl NotesApp {
         }
     }
 
+    /// Handle action from the actions panel (Cmd+K)
+    fn handle_action(&mut self, action: NotesAction, window: &mut Window, cx: &mut Context<Self>) {
+        debug!(?action, "Handling notes action");
+        match action {
+            NotesAction::NewNote => self.create_note(window, cx),
+            NotesAction::BrowseNotes => {
+                self.show_browse_panel = true;
+                self.show_actions_panel = false;
+                self.open_browse_panel(window, cx);
+            }
+            NotesAction::CopyNote => self.copy_note_to_clipboard(cx),
+            NotesAction::DeleteNote => self.delete_selected_note(cx),
+            NotesAction::FindInNote => {
+                // Future feature - for now just log
+                info!("Find in note not yet implemented");
+            }
+            NotesAction::Cancel => {
+                // Panel was cancelled, nothing to do
+            }
+        }
+        self.show_actions_panel = false;
+        cx.notify();
+    }
+
+    /// Open the browse panel with current notes
+    fn open_browse_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Create NoteListItems from current notes
+        let note_items: Vec<NoteListItem> = self
+            .notes
+            .iter()
+            .map(|note| NoteListItem::from_note(note, Some(note.id) == self.selected_note_id))
+            .collect();
+
+        let browse_panel = cx.new(|cx| BrowsePanel::new(note_items, window, cx));
+
+        self.browse_panel = Some(browse_panel);
+        cx.notify();
+    }
+
+    /// Handle note selection from browse panel
+    fn handle_browse_select(&mut self, id: NoteId, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_note(id, window, cx);
+        self.show_browse_panel = false;
+        self.browse_panel = None;
+        cx.notify();
+    }
+
+    /// Handle note action from browse panel
+    fn handle_browse_action(&mut self, id: NoteId, action: NoteAction, cx: &mut Context<Self>) {
+        match action {
+            NoteAction::TogglePin => {
+                if let Some(note) = self.notes.iter_mut().find(|n| n.id == id) {
+                    note.is_pinned = !note.is_pinned;
+                    if let Err(e) = storage::save_note(note) {
+                        tracing::error!(error = %e, "Failed to save note pin state");
+                    }
+                }
+            }
+            NoteAction::Delete => {
+                let current_id = self.selected_note_id;
+                self.selected_note_id = Some(id);
+                self.delete_selected_note(cx);
+                // Restore selection if different note was deleted
+                if current_id != Some(id) {
+                    self.selected_note_id = current_id;
+                }
+            }
+        }
+        // Update browse panel's note list
+        if let Some(ref browse_panel) = self.browse_panel {
+            let note_items: Vec<NoteListItem> = self
+                .notes
+                .iter()
+                .map(|note| NoteListItem::from_note(note, Some(note.id) == self.selected_note_id))
+                .collect();
+            browse_panel.update(cx, |panel, cx| {
+                panel.set_notes(note_items, cx);
+            });
+        }
+        cx.notify();
+    }
+
+    /// Close the browse panel
+    fn close_browse_panel(&mut self, cx: &mut Context<Self>) {
+        self.show_browse_panel = false;
+        self.browse_panel = None;
+        cx.notify();
+    }
+
     /// Render the search input
     fn render_search(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -519,84 +675,8 @@ impl NotesApp {
             )
     }
 
-    /// Render the notes sidebar
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let notes = self.get_visible_notes();
-        let selected_id = self.selected_note_id;
-        let is_trash = self.view_mode == NotesViewMode::Trash;
-
-        Sidebar::left()
-            .collapsed(self.sidebar_collapsed)
-            .header(
-                div()
-                    .flex()
-                    .flex_col()
-                    .w_full()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .w_full()
-                            .child(if is_trash { "Trash" } else { "Notes" })
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap_1()
-                                    .when(!is_trash, |d| {
-                                        d.child(
-                                            Button::new("new-note")
-                                                .ghost()
-                                                .small()
-                                                .icon(IconName::Plus)
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.create_note(window, cx);
-                                                })),
-                                        )
-                                    })
-                                    .child(
-                                        Button::new("toggle-trash")
-                                            .ghost()
-                                            .small()
-                                            .icon(if is_trash {
-                                                IconName::ArrowLeft
-                                            } else {
-                                                IconName::Delete
-                                            })
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                let new_mode = if is_trash {
-                                                    NotesViewMode::AllNotes
-                                                } else {
-                                                    NotesViewMode::Trash
-                                                };
-                                                this.set_view_mode(new_mode, window, cx);
-                                            })),
-                                    ),
-                            ),
-                    )
-                    .when(!is_trash, |d| d.child(self.render_search(cx))),
-            )
-            .child(
-                SidebarGroup::new("notes-list").child(SidebarMenu::new().children(
-                    notes.iter().map(|note| {
-                        let note_id = note.id;
-                        let is_selected = selected_id == Some(note_id);
-                        let title: SharedString = if note.title.is_empty() {
-                            "Untitled Note".into()
-                        } else {
-                            note.title.clone().into()
-                        };
-
-                        SidebarMenuItem::new(title)
-                            .active(is_selected)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.select_note(note_id, window, cx);
-                            }))
-                    }),
-                )),
-            )
-    }
+    // Note: Sidebar removed for Raycast-style single-note view.
+    // Browse panel (Cmd+P) will be implemented as a separate overlay in the future.
 
     /// Render the main editor area with Raycast-style clean UI
     fn render_editor(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -662,8 +742,26 @@ impl NotesApp {
                             Button::new("shortcut")
                                 .ghost()
                                 .xsmall()
-                                .label("⌘")
-                                .tooltip("Keyboard shortcuts"),
+                                .label("⌘K")
+                                .tooltip("Actions (⌘K)")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.show_actions_panel = true;
+                                    this.show_browse_panel = false;
+                                    this.browse_panel = None;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("browse")
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::File)
+                                .tooltip("Browse Notes (⌘P)")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.show_browse_panel = true;
+                                    this.show_actions_panel = false;
+                                    this.open_browse_panel(window, cx);
+                                })),
                         )
                         .child(
                             Button::new("copy")
@@ -769,6 +867,192 @@ impl NotesApp {
             )
             .when(has_selection && !is_trash, |d| d.child(footer))
     }
+
+    /// Render the actions panel overlay (Cmd+K)
+    fn render_actions_panel_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // Simple inline action list instead of separate component
+        // This avoids needing an Entity for the NotesActionsPanel
+        let actions = NotesAction::all();
+
+        let mut action_list = div()
+            .flex()
+            .flex_col()
+            .w(px(320.))
+            .max_h(px(400.))
+            .bg(cx.theme().background)
+            .border_1()
+            .border_color(cx.theme().border)
+            .rounded_lg()
+            .shadow_lg()
+            .overflow_hidden();
+
+        // Action items
+        for (idx, action) in actions.iter().enumerate() {
+            let action_copy = *action;
+            let is_first = idx == 0;
+
+            action_list = action_list.child(
+                div()
+                    .id(("action", idx))
+                    .w_full()
+                    .h(px(42.))
+                    .px(px(12.))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(cx.theme().list_hover))
+                    .when(is_first, |d| d.bg(cx.theme().list_active))
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            this.handle_action(action_copy, window, cx);
+                        }),
+                    )
+                    // Left side: icon + label
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(match action {
+                                        NotesAction::NewNote => "✚",
+                                        NotesAction::BrowseNotes => "📄",
+                                        NotesAction::FindInNote => "🔍",
+                                        NotesAction::CopyNote => "📋",
+                                        NotesAction::DeleteNote => "🗑",
+                                        NotesAction::Cancel => "✕",
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().foreground)
+                                    .child(action.label()),
+                            ),
+                    )
+                    // Right side: shortcut
+                    .child(
+                        div()
+                            .px(px(6.))
+                            .py(px(2.))
+                            .bg(cx.theme().muted)
+                            .rounded(px(4.))
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(action.shortcut_display()),
+                    ),
+            );
+        }
+
+        // Footer with Cmd+K indicator
+        action_list = action_list.child(
+            div()
+                .w_full()
+                .h(px(36.))
+                .px(px(12.))
+                .border_t_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().secondary)
+                .flex()
+                .items_center()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("⌘K to toggle"),
+                ),
+        );
+
+        div()
+            .id("actions-panel-overlay")
+            .absolute()
+            .inset_0()
+            .bg(gpui::rgba(0x00000080))
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.show_actions_panel = false;
+                    cx.notify();
+                }),
+            )
+            .child(
+                div()
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, _| {
+                        // Stop propagation - don't close when clicking panel
+                    })
+                    .child(action_list),
+            )
+    }
+
+    /// Render the browse panel overlay (Cmd+P)
+    fn render_browse_panel_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // If we have a browse panel entity, render it
+        // Otherwise render an empty container that will close on click
+        if let Some(ref browse_panel) = self.browse_panel {
+            div()
+                .id("browse-panel-overlay")
+                .absolute()
+                .inset_0()
+                .child(browse_panel.clone())
+        } else {
+            // Fallback: create inline browse panel
+            let note_items: Vec<NoteListItem> = self
+                .notes
+                .iter()
+                .map(|note| NoteListItem::from_note(note, Some(note.id) == self.selected_note_id))
+                .collect();
+
+            // We need a simple inline version since we can't create entities in render
+            div()
+                .id("browse-panel-overlay")
+                .absolute()
+                .inset_0()
+                .bg(gpui::rgba(0x00000080))
+                .flex()
+                .items_center()
+                .justify_center()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.show_browse_panel = false;
+                    this.browse_panel = None;
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .w(px(500.))
+                        .max_h(px(400.))
+                        .bg(cx.theme().background)
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .rounded_lg()
+                        .shadow_lg()
+                        .p_4()
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, _| {
+                            // Stop propagation
+                        })
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(format!("{} notes available", note_items.len())),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .mt_2()
+                                .child("Press Escape to close"),
+                        ),
+                )
+        }
+    }
 }
 
 impl Focusable for NotesApp {
@@ -779,10 +1063,15 @@ impl Focusable for NotesApp {
 
 impl Render for NotesApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let show_actions = self.show_actions_panel;
+        let show_browse = self.show_browse_panel;
+
+        // Raycast-style single-note view: no sidebar, editor fills full width
         div()
             .flex()
-            .flex_row()
+            .flex_col()
             .size_full()
+            .relative()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .track_focus(&self.focus_handle)
@@ -791,9 +1080,40 @@ impl Render for NotesApp {
                 let key = event.keystroke.key.as_str();
                 let modifiers = &event.keystroke.modifiers;
 
+                // Handle Escape to close panels
+                if key == "escape" {
+                    if this.show_actions_panel {
+                        this.show_actions_panel = false;
+                        cx.notify();
+                        return;
+                    }
+                    if this.show_browse_panel {
+                        this.close_browse_panel(cx);
+                        return;
+                    }
+                }
+
                 // platform modifier = Cmd on macOS, Ctrl on Windows/Linux
                 if modifiers.platform {
                     match key {
+                        "k" => {
+                            // Toggle actions panel
+                            this.show_actions_panel = !this.show_actions_panel;
+                            this.show_browse_panel = false;
+                            this.browse_panel = None;
+                            cx.notify();
+                        }
+                        "p" => {
+                            // Toggle browse panel
+                            this.show_browse_panel = !this.show_browse_panel;
+                            this.show_actions_panel = false;
+                            if this.show_browse_panel {
+                                this.open_browse_panel(window, cx);
+                            } else {
+                                this.browse_panel = None;
+                            }
+                            cx.notify();
+                        }
                         "n" => this.create_note(window, cx),
                         "b" => this.insert_formatting("**", "**", cx),
                         "i" => this.insert_formatting("_", "_", cx),
@@ -801,8 +1121,15 @@ impl Render for NotesApp {
                     }
                 }
             }))
-            .child(self.render_sidebar(cx))
+            // Single note view - editor takes full width
             .child(self.render_editor(cx))
+            // Overlay panels
+            .when(show_actions, |d| {
+                d.child(self.render_actions_panel_overlay(cx))
+            })
+            .when(show_browse, |d| {
+                d.child(self.render_browse_panel_overlay(cx))
+            })
     }
 }
 

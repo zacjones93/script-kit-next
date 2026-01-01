@@ -34,9 +34,19 @@
 // Allow dead code in this module - many functions are designed for future use
 #![allow(dead_code)]
 
+mod actions_panel;
+mod browse_panel;
 mod model;
 mod storage;
 mod window;
+
+// Re-export actions panel types for use by window.rs
+#[allow(unused_imports)]
+pub use actions_panel::{NotesAction, NotesActionCallback, NotesActionsPanel};
+
+// Re-export browse panel types for use by window.rs
+#[allow(unused_imports)]
+pub use browse_panel::{BrowsePanel, NoteAction, NoteListItem};
 
 // Re-export key types - suppress unused warnings since these are public API
 #[allow(unused_imports)]
