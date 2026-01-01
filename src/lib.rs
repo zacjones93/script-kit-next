@@ -140,3 +140,13 @@ pub mod notes;
 // AI Chat - Separate floating window for AI conversations
 // BYOK (Bring Your Own Key) with SQLite storage at ~/.kenv/ai-chats.db
 pub mod ai;
+
+// macOS launch-at-login via SMAppService
+// Uses SMAppService on macOS 13+ for modern login item management
+pub mod login_item;
+
+// UI transitions/animations (self-contained module, no external crate dependency)
+// Provides TransitionColor, Opacity, SlideOffset, AppearTransition, HoverState
+// and easing functions (ease_out_quad, ease_in_quad, etc.)
+// Used for smooth hover effects, toast animations, and other UI transitions
+pub mod transitions;

@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
 use glob::glob;
+use nucleo_matcher::pattern::Pattern;
+use nucleo_matcher::{Matcher, Utf32Str};
 use std::cmp::Ordering;
 use std::env;
 use std::fs;
@@ -926,6 +928,17 @@ fn fuzzy_match_with_indices(haystack: &str, pattern: &str) -> (bool, Vec<usize>)
 
     let matched = pattern_chars.peek().is_none();
     (matched, if matched { indices } else { Vec::new() })
+}
+
+/// Score a haystack against a nucleo pattern.
+/// Returns Some(score) if the pattern matches, None otherwise.
+/// Score range is typically 0-1000+ (higher = better match).
+#[inline]
+#[allow(dead_code)]
+fn nucleo_score(haystack: &str, pattern: &Pattern, matcher: &mut Matcher) -> Option<u32> {
+    let mut haystack_buf = Vec::new();
+    let haystack_utf32 = Utf32Str::new(haystack, &mut haystack_buf);
+    pattern.score(haystack_utf32, matcher)
 }
 
 /// Compute match indices for a search result on-demand (lazy evaluation)

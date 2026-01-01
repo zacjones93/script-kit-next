@@ -36,6 +36,7 @@ syntect = { version = "5.2", default-features = false, features = ["default-synt
 anyhow = "1.0"
 thiserror = "2.0"
 regex = "1.12"
+nucleo-matcher = "0.3"         # High-performance fuzzy matching (10-100x faster than bespoke)
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "time"] }
 time = { version = "0.3", features = ["formatting", "macros"] }
@@ -117,6 +118,9 @@ english-to-cron = "0.1"        # Convert natural language schedules to cron
 
 # HTTP client for AI provider API calls
 ureq = { version = "3", features = ["json"] }
+
+# macOS launch-at-login via SMAppService
+smappservice-rs = "0.1"
 
 [features]
 default = ["ocr"]
