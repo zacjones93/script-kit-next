@@ -155,7 +155,8 @@ use syntax::highlight_code_lines;
 #[allow(dead_code)]
 type PromptChannel = (mpsc::Sender<PromptMessage>, mpsc::Receiver<PromptMessage>);
 
-// Import render_path_with_highlights from utils
+// Import utilities from modules
+use stdin_commands::{start_stdin_listener, ExternalCommand};
 use utils::render_path_with_highlights;
 
 // Global state for hotkey signaling between threads
@@ -411,75 +412,6 @@ enum PromptMessage {
     SetActions {
         actions: Vec<protocol::ProtocolAction>,
     },
-}
-
-/// External commands that can be sent to the app via stdin
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-enum ExternalCommand {
-    /// Run a script by path
-    Run { path: String },
-    /// Show the window
-    Show,
-    /// Hide the window
-    Hide,
-    /// Set the filter text (for testing)
-    SetFilter { text: String },
-    /// Trigger a built-in feature by name (for testing)
-    TriggerBuiltin { name: String },
-    /// Simulate a key press (for testing)
-    /// key: Key name like "enter", "escape", "up", "down", "k", etc.
-    /// modifiers: Optional array of modifiers ["cmd", "shift", "alt", "ctrl"]
-    SimulateKey {
-        key: String,
-        #[serde(default)]
-        modifiers: Vec<String>,
-    },
-}
-
-/// Start a thread that listens on stdin for external JSONL commands.
-/// Returns an async_channel::Receiver that can be awaited without polling.
-fn start_stdin_listener() -> async_channel::Receiver<ExternalCommand> {
-    use std::io::BufRead;
-
-    // P1-6: Use bounded channel to prevent unbounded memory growth
-    // Capacity of 100 is generous for stdin commands (typically < 10/sec)
-    let (tx, rx) = async_channel::bounded(100);
-
-    std::thread::spawn(move || {
-        logging::log("STDIN", "External command listener started");
-        let stdin = std::io::stdin();
-        let reader = stdin.lock();
-
-        for line in reader.lines() {
-            match line {
-                Ok(line) if !line.trim().is_empty() => {
-                    logging::log("STDIN", &format!("Received: {}", line));
-                    match serde_json::from_str::<ExternalCommand>(&line) {
-                        Ok(cmd) => {
-                            logging::log("STDIN", &format!("Parsed command: {:?}", cmd));
-                            // send_blocking is used since we're in a sync thread
-                            if tx.send_blocking(cmd).is_err() {
-                                logging::log("STDIN", "Command channel closed, exiting");
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            logging::log("STDIN", &format!("Failed to parse command: {}", e));
-                        }
-                    }
-                }
-                Ok(_) => {} // Empty line, ignore
-                Err(e) => {
-                    logging::log("STDIN", &format!("Error reading stdin: {}", e));
-                    break;
-                }
-            }
-        }
-        logging::log("STDIN", "External command listener exiting");
-    });
-
-    rx
 }
 
 struct ScriptListApp {

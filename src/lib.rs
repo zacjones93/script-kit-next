@@ -128,3 +128,7 @@ pub mod mcp_script_tools;
 // MCP Resources - read-only data resources for MCP clients
 // Provides kit://state, scripts://, and scriptlets:// resources
 pub mod mcp_resources;
+
+// Stdin commands - external command handling via stdin
+// Provides JSON command protocol for testing and automation
+pub mod stdin_commands;
