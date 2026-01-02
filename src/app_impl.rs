@@ -1,5 +1,5 @@
 impl ScriptListApp {
-    fn new(config: config::Config, cx: &mut Context<Self>) -> Self {
+    fn new(config: config::Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // PERF: Measure script loading time
         let load_start = std::time::Instant::now();
         let scripts = scripts::read_scripts();
@@ -136,13 +136,46 @@ impl ScriptListApp {
         })
         .detach();
 
+        let gpui_input_state =
+            cx.new(|cx| InputState::new(window, cx).placeholder(DEFAULT_PLACEHOLDER));
+        let gpui_input_subscription = cx.subscribe_in(&gpui_input_state, window, {
+            move |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::Focus => {
+                    this.gpui_input_focused = true;
+                    this.focused_input = FocusedInput::MainFilter;
+                    cx.notify();
+                }
+                InputEvent::Blur => {
+                    this.gpui_input_focused = false;
+                    if this.focused_input == FocusedInput::MainFilter {
+                        this.focused_input = FocusedInput::None;
+                    }
+                    cx.notify();
+                }
+                InputEvent::Change => {
+                    this.handle_filter_input_change(window, cx);
+                }
+                InputEvent::PressEnter { .. } => {
+                    if matches!(this.current_view, AppView::ScriptList) && !this.show_actions_popup
+                    {
+                        this.execute_selected(cx);
+                    }
+                }
+            }
+        });
+
         let mut app = ScriptListApp {
             scripts,
             scriptlets,
             builtin_entries,
             apps,
             selected_index: 0,
-            filter_input: TextInputState::new(),
+            filter_text: String::new(),
+            gpui_input_state,
+            gpui_input_focused: false,
+            gpui_input_subscriptions: vec![gpui_input_subscription],
+            suppress_filter_events: false,
+            pending_filter_sync: false,
             last_output: None,
             focus_handle: cx.focus_handle(),
             show_logs: false,
@@ -217,7 +250,7 @@ impl ScriptListApp {
             // Navigation coalescing for rapid arrow key events
             nav_coalescer: NavCoalescer::new(),
             // Window focus tracking - for detecting focus lost and auto-dismissing prompts
-            was_window_focused: true,
+            was_window_focused: false,
             // Scroll stabilization: track last scrolled index for each handle
             last_scrolled_main: None,
             last_scrolled_arg: None,
@@ -335,7 +368,7 @@ impl ScriptListApp {
     /// Get unified filtered results combining scripts and scriptlets
     /// Helper to get filter text as string (for compatibility with existing code)
     fn filter_text(&self) -> &str {
-        self.filter_input.text()
+        self.filter_text.as_str()
     }
 
     /// P1: Now uses caching - invalidates only when filter_text changes
@@ -384,11 +417,10 @@ impl ScriptListApp {
     /// P1: Get filtered results with cache update (mutable version)
     /// Call this when you need to ensure cache is updated
     fn get_filtered_results_cached(&mut self) -> &Vec<scripts::SearchResult> {
-        let filter_text = self.filter_input.text().to_string();
-        if filter_text != self.filter_cache_key {
+        if self.filter_text != self.filter_cache_key {
             logging::log_debug(
                 "CACHE",
-                &format!("Filter cache MISS - recomputing for '{}'", filter_text),
+                &format!("Filter cache MISS - recomputing for '{}'", self.filter_text),
             );
             let search_start = std::time::Instant::now();
             self.cached_filtered_results = scripts::fuzzy_search_unified_all(
@@ -396,17 +428,17 @@ impl ScriptListApp {
                 &self.scriptlets,
                 &self.builtin_entries,
                 &self.apps,
-                &filter_text,
+                &self.filter_text,
             );
-            self.filter_cache_key = filter_text.clone();
+            self.filter_cache_key = self.filter_text.clone();
             let search_elapsed = search_start.elapsed();
 
-            if !filter_text.is_empty() {
+            if !self.filter_text.is_empty() {
                 logging::log(
                     "PERF",
                     &format!(
                         "Search '{}' took {:.2}ms ({} results from {} total)",
-                        filter_text,
+                        self.filter_text,
                         search_elapsed.as_secs_f64() * 1000.0,
                         self.cached_filtered_results.len(),
                         self.scripts.len()
@@ -419,7 +451,7 @@ impl ScriptListApp {
         } else {
             logging::log_debug(
                 "CACHE",
-                &format!("Filter cache HIT for '{}'", filter_text),
+                &format!("Filter cache HIT for '{}'", self.filter_text),
             );
         }
         &self.cached_filtered_results
@@ -702,46 +734,54 @@ impl ScriptListApp {
         }
     }
 
-    fn update_filter(
-        &mut self,
-        new_char: Option<char>,
-        backspace: bool,
-        clear: bool,
-        cx: &mut Context<Self>,
-    ) {
-        // P3: Stage 1 - Update filter_input immediately (displayed in input)
-        if clear {
-            self.filter_input.clear();
-            self.selected_index = 0;
-            self.last_scrolled_index = None;
-            // Use main_list_state for variable-height list (not the legacy list_scroll_handle)
-            self.main_list_state.scroll_to_reveal_item(0);
-            self.last_scrolled_index = Some(0);
-            // P3: Clear also immediately updates computed text (no coalescing needed)
-            self.computed_filter_text.clear();
-        } else if backspace && !self.filter_input.is_empty() {
-            self.filter_input.backspace();
-            self.selected_index = 0;
-            self.last_scrolled_index = None;
-            // Use main_list_state for variable-height list (not the legacy list_scroll_handle)
-            self.main_list_state.scroll_to_reveal_item(0);
-            self.last_scrolled_index = Some(0);
-        } else if let Some(ch) = new_char {
-            self.filter_input.insert_char(ch);
-            self.selected_index = 0;
-            self.last_scrolled_index = None;
-            // Use main_list_state for variable-height list (not the legacy list_scroll_handle)
-            self.main_list_state.scroll_to_reveal_item(0);
-            self.last_scrolled_index = Some(0);
+    fn handle_filter_input_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.suppress_filter_events {
+            return;
         }
 
-        // P3: Notify immediately so input field updates (responsive typing)
-        cx.notify();
+        let new_text = self.gpui_input_state.read(cx).value().to_string();
+        if new_text == self.filter_text {
+            return;
+        }
 
-        // P3: Stage 2 - Debounce expensive search/window resize work
-        // The input display is synchronous above, but fuzzy search is expensive.
+        let previous_text = std::mem::replace(&mut self.filter_text, new_text.clone());
+        self.selected_index = 0;
+        self.last_scrolled_index = None;
+        // Use main_list_state for variable-height list (not the legacy list_scroll_handle)
+        self.main_list_state.scroll_to_reveal_item(0);
+        self.last_scrolled_index = Some(0);
+
+        if new_text.ends_with(' ') {
+            let trimmed = new_text.trim_end_matches(' ');
+            if !trimmed.is_empty() && trimmed == previous_text {
+                if let Some(alias_match) = self.find_alias_match(trimmed) {
+                    logging::log(
+                        "ALIAS",
+                        &format!("Alias '{}' triggered execution", trimmed),
+                    );
+                    match alias_match {
+                        AliasMatch::Script(script) => {
+                            self.execute_interactive(&script, cx);
+                        }
+                        AliasMatch::Scriptlet(scriptlet) => {
+                            self.execute_scriptlet(&scriptlet, cx);
+                        }
+                    }
+                    self.clear_filter(window, cx);
+                    return;
+                }
+            }
+        }
+
+        // P3: Notify immediately so UI updates (responsive typing)
+        cx.notify();
+        self.queue_filter_compute(new_text, cx);
+    }
+
+    fn queue_filter_compute(&mut self, value: String, cx: &mut Context<Self>) {
+        // P3: Debounce expensive search/window resize work.
         // Use 8ms debounce (half a frame) to batch rapid keystrokes.
-        if self.filter_coalescer.queue(self.filter_input.text().to_string()) {
+        if self.filter_coalescer.queue(value) {
             cx.spawn(async move |this, cx| {
                 // Wait 8ms for coalescing window (half frame at 60fps)
                 Timer::after(std::time::Duration::from_millis(8)).await;
@@ -761,6 +801,55 @@ impl ScriptListApp {
             })
             .detach();
         }
+    }
+
+    fn set_filter_text_immediate(
+        &mut self,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.suppress_filter_events = true;
+        self.filter_text = text.clone();
+        self.gpui_input_state.update(cx, |state, cx| {
+            state.set_value(text.clone(), window, cx);
+        });
+        self.suppress_filter_events = false;
+        self.pending_filter_sync = false;
+
+        self.selected_index = 0;
+        self.last_scrolled_index = None;
+        self.main_list_state.scroll_to_reveal_item(0);
+        self.last_scrolled_index = Some(0);
+
+        self.computed_filter_text = text;
+        self.filter_coalescer.reset();
+        self.update_window_size();
+        cx.notify();
+    }
+
+    fn clear_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_filter_text_immediate(String::new(), window, cx);
+    }
+
+    fn sync_filter_input_if_needed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.pending_filter_sync {
+            return;
+        }
+
+        let desired = self.filter_text.clone();
+        let current = self.gpui_input_state.read(cx).value().to_string();
+        if current == desired {
+            self.pending_filter_sync = false;
+            return;
+        }
+
+        self.suppress_filter_events = true;
+        self.gpui_input_state.update(cx, |state, cx| {
+            state.set_value(desired.clone(), window, cx);
+        });
+        self.suppress_filter_events = false;
+        self.pending_filter_sync = false;
     }
 
     fn toggle_logs(&mut self, cx: &mut Context<Self>) {
@@ -905,14 +994,21 @@ impl ScriptListApp {
         }
     }
 
+    fn focus_main_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focused_input = FocusedInput::MainFilter;
+        let input_state = self.gpui_input_state.clone();
+        input_state.update(cx, |state, cx| {
+            state.focus(window, cx);
+        });
+    }
+
     fn toggle_actions(&mut self, cx: &mut Context<Self>, window: &mut Window) {
         logging::log("KEY", "Toggling actions popup");
         if self.show_actions_popup {
             // Close - return focus to main filter
             self.show_actions_popup = false;
             self.actions_dialog = None;
-            self.focused_input = FocusedInput::MainFilter;
-            window.focus(&self.focus_handle, cx);
+            self.focus_main_filter(window, cx);
             logging::log("FOCUS", "Actions closed, focus returned to MainFilter");
         } else {
             // Open - create dialog entity
@@ -1878,6 +1974,7 @@ impl ScriptListApp {
         // This was a bug where focused_input could remain as ArgPrompt/None after
         // script exit, causing the cursor to not show in the main filter.
         self.focused_input = FocusedInput::MainFilter;
+        self.gpui_input_focused = false;
         logging::log(
             "FOCUS",
             "Reset focused_input to MainFilter for cursor display",
@@ -1891,8 +1988,10 @@ impl ScriptListApp {
             .scroll_to_item(0, ScrollStrategy::Top);
 
         // Clear filter and selection state for fresh menu
-        self.filter_input.clear();
+        self.filter_text.clear();
         self.computed_filter_text.clear();
+        self.filter_coalescer.reset();
+        self.pending_filter_sync = true;
         self.selected_index = 0;
         self.last_scrolled_index = None;
         // Use main_list_state for variable-height list (not the legacy list_scroll_handle)
@@ -2073,4 +2172,3 @@ impl ScriptListApp {
         }]
     }
 }
-

@@ -2,79 +2,6 @@
 // This file is included via include!() macro in main.rs
 
 impl ScriptListApp {
-    /// Render the main filter input with cursor and selection highlight
-    fn render_filter_input_text(&self, text_primary: u32, accent_color: u32) -> gpui::Div {
-        let text = self.filter_input.text();
-        let chars: Vec<char> = text.chars().collect();
-        let cursor_pos = self.filter_input.cursor();
-        let has_selection = self.filter_input.has_selection();
-        // Separate focus state from blink state to avoid layout shift
-        let is_focused = self.focused_input == FocusedInput::MainFilter;
-        let is_cursor_visible = is_focused && self.cursor_visible;
-
-        if text.is_empty() {
-            // Empty - always reserve cursor space, only show bg when visible
-            return div().flex().flex_row().items_center().child(
-                div()
-                    .w(px(CURSOR_WIDTH))
-                    .h(px(CURSOR_HEIGHT_LG))
-                    .when(is_cursor_visible, |d: gpui::Div| d.bg(rgb(text_primary))),
-            );
-        }
-
-        if has_selection {
-            // With selection: before | selected | after (no cursor shown during selection)
-            let selection = self.filter_input.selection();
-            let (start, end) = selection.range();
-
-            let before: String = chars[..start].iter().collect();
-            let selected: String = chars[start..end].iter().collect();
-            let after: String = chars[end..].iter().collect();
-
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .overflow_x_hidden()
-                .when(!before.is_empty(), |d: gpui::Div| {
-                    d.child(div().child(before))
-                })
-                .child(
-                    div()
-                        .bg(rgba((accent_color << 8) | 0x60))
-                        .text_color(rgb(0xffffff))
-                        .child(selected),
-                )
-                .when(!after.is_empty(), |d: gpui::Div| {
-                    d.child(div().child(after))
-                })
-        } else {
-            // No selection: before cursor | cursor | after cursor
-            // Always reserve cursor space to prevent layout shift during blink
-            let before: String = chars[..cursor_pos].iter().collect();
-            let after: String = chars[cursor_pos..].iter().collect();
-
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .overflow_x_hidden()
-                .when(!before.is_empty(), |d: gpui::Div| {
-                    d.child(div().child(before))
-                })
-                // Always render cursor element, only show bg when visible
-                .child(
-                    div()
-                        .w(px(CURSOR_WIDTH))
-                        .h(px(CURSOR_HEIGHT_LG))
-                        .when(is_cursor_visible, |d: gpui::Div| d.bg(rgb(text_primary))),
-                )
-                .when(!after.is_empty(), |d: gpui::Div| {
-                    d.child(div().child(after))
-                })
-        }
-    }
-
     fn render_script_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
         // Get grouped or flat results based on filter state (cached) - MUST come first
         // to avoid borrow conflicts with theme access below
@@ -145,10 +72,10 @@ impl ScriptListApp {
                 .justify_center()
                 .text_color(rgb(empty_text_color))
                 .font_family(empty_font_family)
-                .child(if self.filter_input.is_empty() {
+                .child(if self.filter_text.is_empty() {
                     "No scripts or snippets found".to_string()
                 } else {
-                    format!("No results match '{}'", self.filter_input.text())
+                    format!("No results match '{}'", self.filter_text)
                 })
                 .into_any_element()
         } else {
@@ -368,8 +295,6 @@ impl ScriptListApp {
             None
         };
 
-        let filter_is_empty = self.filter_input.is_empty();
-
         let handle_key = cx.listener(
             move |this: &mut Self,
                   event: &gpui::KeyDownEvent,
@@ -488,8 +413,7 @@ impl ScriptListApp {
                                     if should_close {
                                         this.show_actions_popup = false;
                                         this.actions_dialog = None;
-                                        this.focused_input = FocusedInput::MainFilter;
-                                        window.focus(&this.focus_handle, cx);
+                                        this.focus_main_filter(window, cx);
                                     }
                                     this.handle_action(action_id, cx);
                                 }
@@ -498,8 +422,7 @@ impl ScriptListApp {
                             "escape" => {
                                 this.show_actions_popup = false;
                                 this.actions_dialog = None;
-                                this.focused_input = FocusedInput::MainFilter;
-                                window.focus(&this.focus_handle, cx);
+                                this.focus_main_filter(window, cx);
                                 cx.notify();
                                 return;
                             }
@@ -551,88 +474,21 @@ impl ScriptListApp {
                         }
                         this.ensure_nav_flush_task(cx);
                     }
-                    "enter" => this.execute_selected(cx),
+                    "enter" => {
+                        if !this.gpui_input_focused {
+                            this.execute_selected(cx);
+                        }
+                    }
                     "escape" => {
-                        if !this.filter_input.is_empty() {
+                        if !this.filter_text.is_empty() {
                             // Clear filter first if there's text
-                            this.update_filter(None, false, true, cx);
+                            this.clear_filter(window, cx);
                         } else {
                             // Filter is empty - close window
                             this.close_and_reset_window(cx);
                         }
                     }
-                    "space" | " " => {
-                        // Check if current filter text matches an alias
-                        // If so, execute the matching script/scriptlet immediately
-                        let filter_text = this.filter_input.text().to_string();
-                        if !filter_text.is_empty() {
-                            if let Some(alias_match) = this.find_alias_match(&filter_text) {
-                                logging::log(
-                                    "ALIAS",
-                                    &format!("Alias '{}' triggered execution", filter_text),
-                                );
-                                match alias_match {
-                                    AliasMatch::Script(script) => {
-                                        this.execute_interactive(&script, cx);
-                                    }
-                                    AliasMatch::Scriptlet(scriptlet) => {
-                                        this.execute_scriptlet(&scriptlet, cx);
-                                    }
-                                }
-                                // Clear filter after alias execution
-                                this.update_filter(None, false, true, cx);
-                                return;
-                            }
-                        }
-                        // No alias match - add space to filter as normal character
-                        this.update_filter(Some(' '), false, false, cx);
-                    }
-                    _ => {
-                        // Delegate to TextInputState for editing, selection, clipboard
-                        let modifiers = &event.keystroke.modifiers;
-                        let key_char = event.keystroke.key_char.as_deref();
-                        let old_text = this.filter_input.text().to_string();
-
-                        let handled = this.filter_input.handle_key(
-                            &key_str,
-                            key_char,
-                            modifiers.platform, // Cmd key on macOS
-                            modifiers.alt,
-                            modifiers.shift,
-                            cx,
-                        );
-
-                        if handled {
-                            // If text changed (not just cursor move), reset selection and update search
-                            if this.filter_input.text() != old_text {
-                                this.selected_index = 0;
-                                this.last_scrolled_index = None;
-                                this.main_list_state.scroll_to_reveal_item(0);
-                                this.last_scrolled_index = Some(0);
-                                // P3: Debounce expensive search work with 8ms delay
-                                // Input display is already updated; this batches the fuzzy search
-                                let new_text = this.filter_input.text().to_string();
-                                if this.filter_coalescer.queue(new_text) {
-                                    cx.spawn(async move |this, cx| {
-                                        gpui::Timer::after(std::time::Duration::from_millis(8)).await;
-                                        let _ = cx.update(|cx| {
-                                            this.update(cx, |app, cx| {
-                                                if let Some(latest) = app.filter_coalescer.take_latest() {
-                                                    if app.computed_filter_text != latest {
-                                                        app.computed_filter_text = latest;
-                                                        app.update_window_size();
-                                                        cx.notify();
-                                                    }
-                                                }
-                                            })
-                                        });
-                                    })
-                                    .detach();
-                                }
-                            }
-                            cx.notify();
-                        }
-                    }
+                    _ => {}
                 }
             },
         );
@@ -720,6 +576,7 @@ impl ScriptListApp {
                 } else {
                     design_colors.accent
                 };
+                let input_height = CURSOR_HEIGHT_LG + (CURSOR_MARGIN_Y * 2.0);
 
                 div()
                     .w_full()
@@ -736,41 +593,17 @@ impl ScriptListApp {
                             .flex()
                             .flex_row()
                             .items_center()
-                            .text_lg()
-                            .text_color(if filter_is_empty {
-                                rgb(text_muted)
-                            } else {
-                                rgb(text_primary)
-                            })
-                            // When empty: show cursor (always reserve space) + placeholder
-                            // ALIGNMENT: cursor takes CURSOR_WIDTH + CURSOR_GAP_X space, so we
-                            // apply negative margin to placeholder to align it with typed text
-                            .when(filter_is_empty, |d: gpui::Div| {
-                                let is_cursor_visible = self.focused_input
-                                    == FocusedInput::MainFilter
-                                    && self.cursor_visible;
-                                // Always render cursor div to reserve space, only show bg when visible
-                                d.child(
-                                    div()
-                                        .w(px(CURSOR_WIDTH))
-                                        .h(px(CURSOR_HEIGHT_LG))
-                                        .my(px(CURSOR_MARGIN_Y))
-                                        .mr(px(CURSOR_GAP_X))
-                                        .when(is_cursor_visible, |d: gpui::Div| {
-                                            d.bg(rgb(text_primary))
-                                        }),
-                                )
-                                .child(
-                                    div()
-                                        .ml(px(-(CURSOR_WIDTH + CURSOR_GAP_X)))
-                                        .text_color(rgb(text_muted))
-                                        .child(DEFAULT_PLACEHOLDER),
-                                )
-                            })
-                            // When has text: show text with cursor/selection via helper
-                            .when(!filter_is_empty, |d: gpui::Div| {
-                                d.child(self.render_filter_input_text(text_primary, accent_color))
-                            }),
+                            .child(
+                                Input::new(&self.gpui_input_state)
+                                    .w_full()
+                                    .h(px(input_height))
+                                    .px(px(0.))
+                                    .py(px(0.))
+                                    .text_lg()
+                                    .appearance(false)
+                                    .bordered(false)
+                                    .focus_bordered(false),
+                            ),
                     )
                     // CLS-FREE ACTIONS AREA: Fixed-size relative container with stacked children
                     // Both states are always rendered at the same position, visibility toggled via opacity
@@ -1021,8 +854,7 @@ impl ScriptListApp {
                                         logging::log("FOCUS", "Actions backdrop clicked - dismissing dialog");
                                         this.show_actions_popup = false;
                                         this.actions_dialog = None;
-                                        this.focused_input = FocusedInput::MainFilter;
-                                        window.focus(&this.focus_handle, cx);
+                                        this.focus_main_filter(window, cx);
                                         cx.notify();
                                     });
 

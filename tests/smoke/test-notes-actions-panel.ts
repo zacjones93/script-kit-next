@@ -6,7 +6,9 @@
  * 
  * 1. Panel Structure
  *    - Has search input at top
- *    - Lists 5 actions: New Note, Browse Notes, Find in Note, Copy Note, Delete Note
+ *    - Lists Raycast actions: New Note, Duplicate Note, Browse Notes, Find in Note,
+ *      Copy Note As..., Copy Deeplink, Create Quicklink, Export..., Move List Item Up,
+ *      Move List Item Down, Format...
  *    - Each action shows icon, label, and keyboard shortcut badge
  * 
  * 2. Keyboard Navigation
@@ -54,15 +56,21 @@ const start1 = Date.now();
 try {
   // Expected actions that should be in the Notes ActionsPanel
   const expectedActions = [
-    { id: 'new_note', label: 'New Note', shortcut: 'N' },
-    { id: 'browse_notes', label: 'Browse Notes', shortcut: 'P' },
-    { id: 'find_in_note', label: 'Find in Note', shortcut: 'F' },
-    { id: 'copy_note', label: 'Copy Note', shortcut: 'C' },
-    { id: 'delete_note', label: 'Delete Note', shortcut: 'D' },
+    { id: 'new_note', label: 'New Note', shortcut: '⌘N' },
+    { id: 'duplicate_note', label: 'Duplicate Note', shortcut: '⌘D' },
+    { id: 'browse_notes', label: 'Browse Notes', shortcut: '⌘P' },
+    { id: 'find_in_note', label: 'Find in Note', shortcut: '⌘F' },
+    { id: 'copy_note_as', label: 'Copy Note As...', shortcut: '⇧⌘C' },
+    { id: 'copy_deeplink', label: 'Copy Deeplink', shortcut: '⇧⌘D' },
+    { id: 'create_quicklink', label: 'Create Quicklink', shortcut: '⇧⌘L' },
+    { id: 'export', label: 'Export...', shortcut: '⇧⌘E' },
+    { id: 'move_list_item_up', label: 'Move List Item Up', shortcut: '⌃⌘↑' },
+    { id: 'move_list_item_down', label: 'Move List Item Down', shortcut: '⌃⌘↓' },
+    { id: 'format', label: 'Format...', shortcut: '⇧⌘T' },
   ];
   
-  // Verify we have exactly 5 expected actions
-  if (expectedActions.length === 5) {
+  // Verify we have exactly 11 expected actions
+  if (expectedActions.length === 11) {
     logTest(testName1, 'pass', { 
       result: expectedActions.map(a => a.id),
       duration_ms: Date.now() - start1 
@@ -85,10 +93,16 @@ const start2 = Date.now();
 try {
   const actions = [
     { id: 'new_note', label: 'New Note' },
+    { id: 'duplicate_note', label: 'Duplicate Note' },
     { id: 'browse_notes', label: 'Browse Notes' },
     { id: 'find_in_note', label: 'Find in Note' },
-    { id: 'copy_note', label: 'Copy Note' },
-    { id: 'delete_note', label: 'Delete Note' },
+    { id: 'copy_note_as', label: 'Copy Note As...' },
+    { id: 'copy_deeplink', label: 'Copy Deeplink' },
+    { id: 'create_quicklink', label: 'Create Quicklink' },
+    { id: 'export', label: 'Export...' },
+    { id: 'move_list_item_up', label: 'Move List Item Up' },
+    { id: 'move_list_item_down', label: 'Move List Item Down' },
+    { id: 'format', label: 'Format...' },
   ];
   
   // Simple filter function (mirrors what ActionsPanel does)
@@ -103,12 +117,16 @@ try {
   const newResults = filterActions('new');
   const noteResults = filterActions('note');
   const copyResults = filterActions('copy');
+  const linkResults = filterActions('link');
+  const moveResults = filterActions('move');
   const xyzResults = filterActions('xyz');
   
-  if (allResults.length === 5 &&
+  if (allResults.length === 11 &&
       newResults.length === 1 && newResults[0].id === 'new_note' &&
-      noteResults.length === 5 && // All actions contain "Note"
-      copyResults.length === 1 && copyResults[0].id === 'copy_note' &&
+      noteResults.length === 5 &&
+      copyResults.length === 2 &&
+      linkResults.length === 2 &&
+      moveResults.length === 2 &&
       xyzResults.length === 0) {
     logTest(testName2, 'pass', { 
       result: {
@@ -116,6 +134,8 @@ try {
         new: newResults.length,
         note: noteResults.length,
         copy: copyResults.length,
+        link: linkResults.length,
+        move: moveResults.length,
         xyz: xyzResults.length
       },
       duration_ms: Date.now() - start2 
@@ -136,19 +156,22 @@ logTest(testName3, 'running');
 const start3 = Date.now();
 
 try {
-  // Shortcuts should be displayed as "Cmd+X" format
-  const formatShortcut = (key: string) => `\u2318${key}`;
-  
   const shortcuts = {
-    new_note: formatShortcut('N'),
-    browse_notes: formatShortcut('P'),
-    find_in_note: formatShortcut('F'),
-    copy_note: formatShortcut('C'),
-    delete_note: formatShortcut('D'),
+    new_note: '⌘N',
+    duplicate_note: '⌘D',
+    browse_notes: '⌘P',
+    find_in_note: '⌘F',
+    copy_note_as: '⇧⌘C',
+    copy_deeplink: '⇧⌘D',
+    create_quicklink: '⇧⌘L',
+    export: '⇧⌘E',
+    move_list_item_up: '⌃⌘↑',
+    move_list_item_down: '⌃⌘↓',
+    format: '⇧⌘T',
   };
   
-  // Verify all shortcuts use command symbol
-  const allHaveCmd = Object.values(shortcuts).every(s => s.startsWith('\u2318'));
+  // Verify all shortcuts include command symbol
+  const allHaveCmd = Object.values(shortcuts).every(s => s.includes('\u2318'));
   
   if (allHaveCmd) {
     logTest(testName3, 'pass', { 
@@ -182,14 +205,14 @@ try {
       shadow: true,
     },
     searchInput: {
-      position: 'bottom', // Like main ActionsDialog
-      placeholder: 'Search actions...',
-      icon: 'Cmd+K indicator',
+      position: 'top',
+      placeholder: 'Search for actions...',
+      icon: 'Search icon',
     },
     actionRows: {
       height: 42, // Same as main ActionsDialog ACTION_ITEM_HEIGHT
-      layout: 'icon | label | shortcut badge',
-      selectedIndicator: 'left accent bar',
+      layout: 'icon | label | keycaps',
+      selectedIndicator: 'left accent bar + section dividers',
     },
   };
   

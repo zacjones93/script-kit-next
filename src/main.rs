@@ -3,12 +3,13 @@
 use gpui::{
     div, hsla, list, point, prelude::*, px, rgb, rgba, size, svg, uniform_list, AnyElement, App,
     Application, BoxShadow, Context, ElementId, Entity, FocusHandle, Focusable, ListAlignment,
-    ListSizingBehavior, ListState, Render, ScrollStrategy, SharedString, Timer,
+    ListSizingBehavior, ListState, Render, ScrollStrategy, SharedString, Subscription, Timer,
     UniformListScrollHandle, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
     WindowOptions,
 };
 
 // gpui-component Root wrapper for theme and context provision
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::notification::{Notification, NotificationType};
 use gpui_component::Root;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -178,18 +179,9 @@ use stdin_commands::{start_stdin_listener, ExternalCommand};
 use utils::render_path_with_highlights;
 
 // Global state for hotkey signaling between threads
-static MAIN_WINDOW_VISIBLE: AtomicBool = AtomicBool::new(false); // Track window visibility for toggle (starts hidden)
 static NEEDS_RESET: AtomicBool = AtomicBool::new(false); // Track if window needs reset to script list on next show
 
-/// Check if the main window is currently visible
-pub fn is_main_window_visible() -> bool {
-    MAIN_WINDOW_VISIBLE.load(Ordering::SeqCst)
-}
-
-/// Set the main window visibility state  
-pub fn set_main_window_visible(visible: bool) {
-    MAIN_WINDOW_VISIBLE.store(visible, Ordering::SeqCst);
-}
+pub use script_kit_gpui::{is_main_window_visible, set_main_window_visible};
 static PANEL_CONFIGURED: AtomicBool = AtomicBool::new(false); // Track if floating panel has been configured (one-time setup on first show)
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false); // Track if shutdown signal received (prevents new script spawns)
 
@@ -487,8 +479,17 @@ struct ScriptListApp {
     /// Cached list of installed applications for main search
     apps: Vec<app_launcher::AppInfo>,
     selected_index: usize,
-    /// Main menu filter input with selection and clipboard support
-    filter_input: TextInputState,
+    /// Main menu filter text (mirrors gpui-component input state)
+    filter_text: String,
+    /// gpui-component input state for the main filter
+    gpui_input_state: Entity<InputState>,
+    gpui_input_focused: bool,
+    #[allow(dead_code)]
+    gpui_input_subscriptions: Vec<Subscription>,
+    /// Suppress handling of programmatic InputEvent::Change updates.
+    suppress_filter_events: bool,
+    /// Sync gpui input text on next render when window access is available.
+    pending_filter_sync: bool,
     last_output: Option<SharedString>,
     focus_handle: FocusHandle,
     show_logs: bool,
@@ -645,72 +646,98 @@ impl Render for ScriptListApp {
         // This is needed because toast push sites don't have window access
         self.flush_pending_toasts(window, cx);
 
-        // P0-4: Focus handling using reference match (avoids clone for focus check)
-        // Focus handling depends on the view:
-        // - For EditorPrompt: Use its own focus handle (not the parent's)
-        // - For other views: Use the parent's focus handle
-        match &self.current_view {
-            AppView::EditorPrompt { focus_handle, .. } => {
-                // EditorPrompt has its own focus handle - focus it
-                let is_focused = focus_handle.is_focused(window);
-                if !is_focused {
-                    // Clone focus handle to satisfy borrow checker
-                    let fh = focus_handle.clone();
-                    window.focus(&fh, cx);
-                }
-            }
-            AppView::PathPrompt { focus_handle, .. } => {
-                // PathPrompt has its own focus handle - focus it
-                // But if actions dialog is showing, focus the dialog instead
-                if self.show_actions_popup {
-                    if let Some(ref dialog) = self.actions_dialog {
-                        let dialog_focus_handle = dialog.read(cx).focus_handle.clone();
-                        let is_focused = dialog_focus_handle.is_focused(window);
-                        if !is_focused {
-                            window.focus(&dialog_focus_handle, cx);
-                        }
-                    }
-                } else {
-                    let is_focused = focus_handle.is_focused(window);
-                    if !is_focused {
-                        let fh = focus_handle.clone();
-                        window.focus(&fh, cx);
-                    }
-                }
-            }
-            AppView::FormPrompt { entity, .. } => {
-                // FormPrompt uses delegated Focusable - get focus handle from the currently focused field
-                // This prevents the parent from stealing focus from form text fields
-                let form_focus_handle = entity.read(cx).focus_handle(cx);
-                let is_focused = form_focus_handle.is_focused(window);
-                if !is_focused {
-                    window.focus(&form_focus_handle, cx);
-                }
-            }
-            _ => {
-                // Other views use the parent's focus handle
-                let is_focused = self.focus_handle.is_focused(window);
-                if !is_focused {
-                    window.focus(&self.focus_handle, cx);
-                }
-            }
-        }
-
-        // Focus-lost auto-dismiss: Close dismissable prompts when user clicks another app
-        // This makes the app feel more native - clicking away from a prompt dismisses it
-        let is_app_active = platform::is_app_active();
-        if self.was_window_focused && !is_app_active {
-            // Window just lost focus (user clicked on another app)
+        // Focus-lost auto-dismiss: Close dismissable prompts when the main window loses focus
+        // This includes focus loss to other app windows like Notes/AI.
+        let is_window_focused = platform::is_main_window_focused();
+        if self.was_window_focused && !is_window_focused {
+            // Window just lost focus (user clicked another window)
             // Only auto-dismiss if we're in a dismissable view AND window is visible
             if self.is_dismissable_view() && script_kit_gpui::is_main_window_visible() {
                 logging::log(
                     "FOCUS",
-                    "Window lost focus while in dismissable view - closing",
+                    "Main window lost focus while in dismissable view - closing",
                 );
                 self.close_and_reset_window(cx);
             }
         }
-        self.was_window_focused = is_app_active;
+        self.was_window_focused = is_window_focused;
+
+        // P0-4: Focus handling using reference match (avoids clone for focus check)
+        // Focus handling depends on the view:
+        // - For EditorPrompt: Use its own focus handle (not the parent's)
+        // - For other views: Use the parent's focus handle
+        //
+        // Only enforce focus when the main window is currently focused.
+        if is_window_focused {
+            match &self.current_view {
+                AppView::EditorPrompt { focus_handle, .. } => {
+                    // EditorPrompt has its own focus handle - focus it
+                    let is_focused = focus_handle.is_focused(window);
+                    if !is_focused {
+                        // Clone focus handle to satisfy borrow checker
+                        let fh = focus_handle.clone();
+                        window.focus(&fh, cx);
+                    }
+                }
+                AppView::PathPrompt { focus_handle, .. } => {
+                    // PathPrompt has its own focus handle - focus it
+                    // But if actions dialog is showing, focus the dialog instead
+                    if self.show_actions_popup {
+                        if let Some(ref dialog) = self.actions_dialog {
+                            let dialog_focus_handle = dialog.read(cx).focus_handle.clone();
+                            let is_focused = dialog_focus_handle.is_focused(window);
+                            if !is_focused {
+                                window.focus(&dialog_focus_handle, cx);
+                            }
+                        }
+                    } else {
+                        let is_focused = focus_handle.is_focused(window);
+                        if !is_focused {
+                            let fh = focus_handle.clone();
+                            window.focus(&fh, cx);
+                        }
+                    }
+                }
+                AppView::FormPrompt { entity, .. } => {
+                    // FormPrompt uses delegated Focusable - get focus handle from the currently focused field
+                    // This prevents the parent from stealing focus from form text fields
+                    let form_focus_handle = entity.read(cx).focus_handle(cx);
+                    let is_focused = form_focus_handle.is_focused(window);
+                    if !is_focused {
+                        window.focus(&form_focus_handle, cx);
+                    }
+                }
+                AppView::ScriptList => {
+                    self.sync_filter_input_if_needed(window, cx);
+
+                    if self.show_actions_popup {
+                        if let Some(ref dialog) = self.actions_dialog {
+                            let dialog_focus_handle = dialog.read(cx).focus_handle.clone();
+                            let is_focused = dialog_focus_handle.is_focused(window);
+                            if !is_focused {
+                                window.focus(&dialog_focus_handle, cx);
+                            }
+                        }
+                    } else {
+                        let input_state = self.gpui_input_state.clone();
+                        let is_focused =
+                            input_state.read(cx).focus_handle(cx).is_focused(window);
+                        if !is_focused {
+                            input_state.update(cx, |state, cx| {
+                                state.focus(window, cx);
+                            });
+                        }
+                    }
+                }
+                _ => {
+                    // Other views use the parent's focus handle
+                    let is_focused = self.focus_handle.is_focused(window);
+                    if !is_focused {
+                        window.focus(&self.focus_handle, cx);
+                    }
+                }
+            }
+        }
 
         // NOTE: Prompt messages are now handled via event-driven async_channel listener
         // spawned in execute_interactive() - no polling needed in render()
@@ -1057,7 +1084,7 @@ fn main() {
             },
             |window, cx| {
                 logging::log("APP", "Window opened, creating ScriptListApp wrapped in Root");
-                let view = cx.new(|cx| ScriptListApp::new(config_for_app, cx));
+                let view = cx.new(|cx| ScriptListApp::new(config_for_app, window, cx));
                 // Store the entity for external access
                 *app_entity_for_closure.lock().unwrap() = Some(view.clone());
                 cx.new(|cx| Root::new(view, window, cx))
@@ -1482,12 +1509,8 @@ fn main() {
                             }
                             ExternalCommand::SetFilter { ref text } => {
                                 logging::log("STDIN", &format!("Setting filter to: '{}'", text));
-                                view.filter_input.set_text(text.clone());
-                                view.computed_filter_text = text.clone();
-                                view.filter_coalescer.reset();
+                                view.set_filter_text_immediate(text.clone(), window, ctx);
                                 let _ = view.get_filtered_results_cached(); // Update cache
-                                view.selected_index = 0;
-                                view.update_window_size();
                             }
                             ExternalCommand::TriggerBuiltin { ref name } => {
                                 logging::log("STDIN", &format!("Triggering built-in: '{}'", name));
@@ -1557,8 +1580,8 @@ fn main() {
                                                 }
                                                 "escape" => {
                                                     logging::log("STDIN", "SimulateKey: Escape - clear filter or hide");
-                                                    if !view.filter_input.is_empty() {
-                                                        view.update_filter(None, false, true, ctx);
+                                                    if !view.filter_text.is_empty() {
+                                                        view.clear_filter(window, ctx);
                                                     } else {
                                                         script_kit_gpui::set_main_window_visible(false);
                                                         ctx.hide();
@@ -1876,4 +1899,27 @@ fn main() {
 
         logging::log("APP", "Application ready - Cmd+; to show, Esc to hide, Cmd+K for actions");
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_main_window_visible, set_main_window_visible};
+
+    #[test]
+    fn main_window_visibility_is_shared_with_library() {
+        set_main_window_visible(false);
+        script_kit_gpui::set_main_window_visible(false);
+
+        set_main_window_visible(true);
+        assert!(
+            script_kit_gpui::is_main_window_visible(),
+            "library visibility should mirror main visibility"
+        );
+
+        script_kit_gpui::set_main_window_visible(false);
+        assert!(
+            !is_main_window_visible(),
+            "main visibility should mirror library visibility"
+        );
+    }
 }

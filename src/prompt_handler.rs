@@ -551,7 +551,7 @@ impl ScriptListApp {
                             "none".to_string(),
                             None,
                             None,
-                            self.filter_input.text().to_string(),
+                            self.filter_text.clone(),
                             self.scripts.len()
                                 + self.scriptlets.len()
                                 + self.builtin_entries.len()

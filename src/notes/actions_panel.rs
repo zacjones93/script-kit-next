@@ -5,10 +5,16 @@
 //!
 //! ## Actions
 //! - New Note (⌘N) - Create a new note
+//! - Duplicate Note (⌘D) - Create a copy of the current note
 //! - Browse Notes (⌘P) - Open note browser/picker
 //! - Find in Note (⌘F) - Search within current note
-//! - Copy Note (⌘C) - Copy note content to clipboard
-//! - Delete Note (⌘D) - Delete current note
+//! - Copy Note As... (⇧⌘C) - Copy note in a chosen format
+//! - Copy Deeplink (⇧⌘D) - Copy a deeplink to the note
+//! - Create Quicklink (⇧⌘L) - Copy a quicklink to the note
+//! - Export... (⇧⌘E) - Export note content
+//! - Move List Item Up (⌃⌘↑) - Reorder notes list (disabled)
+//! - Move List Item Down (⌃⌘↓) - Reorder notes list (disabled)
+//! - Format... (⇧⌘T) - Formatting commands
 //!
 //! ## Keyboard Navigation
 //! - Arrow Up/Down: Navigate actions
@@ -18,9 +24,9 @@
 
 use gpui::{
     div, point, prelude::*, px, uniform_list, App, BoxShadow, Context, FocusHandle, Focusable,
-    Hsla, Render, ScrollStrategy, SharedString, UniformListScrollHandle, Window,
+    Hsla, MouseButton, Render, ScrollStrategy, SharedString, UniformListScrollHandle, Window,
 };
-use gpui_component::{theme::ActiveTheme, Icon, IconName};
+use gpui_component::{theme::{ActiveTheme, Theme}, Icon, IconName};
 use std::sync::Arc;
 use tracing::debug;
 
@@ -33,14 +39,26 @@ pub type NotesActionCallback = Arc<dyn Fn(NotesAction) + Send + Sync>;
 pub enum NotesAction {
     /// Create a new note
     NewNote,
+    /// Duplicate the current note
+    DuplicateNote,
     /// Open the note browser/picker
     BrowseNotes,
     /// Search within the current note
     FindInNote,
-    /// Copy note content to clipboard
-    CopyNote,
-    /// Delete the current note
-    DeleteNote,
+    /// Copy note content as a formatted export
+    CopyNoteAs,
+    /// Copy deeplink to the current note
+    CopyDeeplink,
+    /// Copy quicklink to the current note
+    CreateQuicklink,
+    /// Export note content
+    Export,
+    /// Move list item up (disabled placeholder)
+    MoveListItemUp,
+    /// Move list item down (disabled placeholder)
+    MoveListItemDown,
+    /// Open formatting commands
+    Format,
     /// Enable auto-sizing (window grows/shrinks with content)
     EnableAutoSizing,
     /// Panel was cancelled (Escape pressed)
@@ -52,11 +70,16 @@ impl NotesAction {
     pub fn all() -> &'static [NotesAction] {
         &[
             NotesAction::NewNote,
+            NotesAction::DuplicateNote,
             NotesAction::BrowseNotes,
             NotesAction::FindInNote,
-            NotesAction::CopyNote,
-            NotesAction::DeleteNote,
-            NotesAction::EnableAutoSizing,
+            NotesAction::CopyNoteAs,
+            NotesAction::CopyDeeplink,
+            NotesAction::CreateQuicklink,
+            NotesAction::Export,
+            NotesAction::MoveListItemUp,
+            NotesAction::MoveListItemDown,
+            NotesAction::Format,
         ]
     }
 
@@ -64,10 +87,16 @@ impl NotesAction {
     pub fn label(&self) -> &'static str {
         match self {
             NotesAction::NewNote => "New Note",
+            NotesAction::DuplicateNote => "Duplicate Note",
             NotesAction::BrowseNotes => "Browse Notes",
             NotesAction::FindInNote => "Find in Note",
-            NotesAction::CopyNote => "Copy Note",
-            NotesAction::DeleteNote => "Delete Note",
+            NotesAction::CopyNoteAs => "Copy Note As...",
+            NotesAction::CopyDeeplink => "Copy Deeplink",
+            NotesAction::CreateQuicklink => "Create Quicklink",
+            NotesAction::Export => "Export...",
+            NotesAction::MoveListItemUp => "Move List Item Up",
+            NotesAction::MoveListItemDown => "Move List Item Down",
+            NotesAction::Format => "Format...",
             NotesAction::EnableAutoSizing => "Enable Auto-Sizing",
             NotesAction::Cancel => "Cancel",
         }
@@ -77,31 +106,77 @@ impl NotesAction {
     pub fn shortcut_key(&self) -> &'static str {
         match self {
             NotesAction::NewNote => "N",
+            NotesAction::DuplicateNote => "D",
             NotesAction::BrowseNotes => "P",
             NotesAction::FindInNote => "F",
-            NotesAction::CopyNote => "C",
-            NotesAction::DeleteNote => "D",
+            NotesAction::CopyNoteAs => "C",
+            NotesAction::CopyDeeplink => "D",
+            NotesAction::CreateQuicklink => "L",
+            NotesAction::Export => "E",
+            NotesAction::MoveListItemUp => "↑",
+            NotesAction::MoveListItemDown => "↓",
+            NotesAction::Format => "T",
             NotesAction::EnableAutoSizing => "A",
             NotesAction::Cancel => "Esc",
         }
     }
 
+    /// Get shortcut keys for keycap rendering
+    pub fn shortcut_keys(&self) -> &'static [&'static str] {
+        const CMD_N: [&str; 2] = ["⌘", "N"];
+        const CMD_D: [&str; 2] = ["⌘", "D"];
+        const CMD_P: [&str; 2] = ["⌘", "P"];
+        const CMD_F: [&str; 2] = ["⌘", "F"];
+        const SHIFT_CMD_C: [&str; 3] = ["⇧", "⌘", "C"];
+        const SHIFT_CMD_D: [&str; 3] = ["⇧", "⌘", "D"];
+        const SHIFT_CMD_L: [&str; 3] = ["⇧", "⌘", "L"];
+        const SHIFT_CMD_E: [&str; 3] = ["⇧", "⌘", "E"];
+        const CTRL_CMD_UP: [&str; 3] = ["⌃", "⌘", "↑"];
+        const CTRL_CMD_DOWN: [&str; 3] = ["⌃", "⌘", "↓"];
+        const SHIFT_CMD_T: [&str; 3] = ["⇧", "⌘", "T"];
+        const CMD_A: [&str; 2] = ["⌘", "A"];
+        const ESC: [&str; 1] = ["Esc"];
+
+        match self {
+            NotesAction::NewNote => &CMD_N,
+            NotesAction::DuplicateNote => &CMD_D,
+            NotesAction::BrowseNotes => &CMD_P,
+            NotesAction::FindInNote => &CMD_F,
+            NotesAction::CopyNoteAs => &SHIFT_CMD_C,
+            NotesAction::CopyDeeplink => &SHIFT_CMD_D,
+            NotesAction::CreateQuicklink => &SHIFT_CMD_L,
+            NotesAction::Export => &SHIFT_CMD_E,
+            NotesAction::MoveListItemUp => &CTRL_CMD_UP,
+            NotesAction::MoveListItemDown => &CTRL_CMD_DOWN,
+            NotesAction::Format => &SHIFT_CMD_T,
+            NotesAction::EnableAutoSizing => &CMD_A,
+            NotesAction::Cancel => &ESC,
+        }
+    }
+
     /// Get the formatted shortcut display string
     pub fn shortcut_display(&self) -> String {
-        match self {
-            NotesAction::Cancel => "Esc".to_string(),
-            _ => format!("⌘{}", self.shortcut_key()),
+        if self.shortcut_keys().is_empty() {
+            return String::new();
         }
+
+        self.shortcut_keys().join("")
     }
 
     /// Get the icon for this action
     pub fn icon(&self) -> IconName {
         match self {
             NotesAction::NewNote => IconName::Plus,
-            NotesAction::BrowseNotes => IconName::File,
+            NotesAction::DuplicateNote => IconName::Copy,
+            NotesAction::BrowseNotes => IconName::FolderOpen,
             NotesAction::FindInNote => IconName::Search,
-            NotesAction::CopyNote => IconName::Copy,
-            NotesAction::DeleteNote => IconName::Delete,
+            NotesAction::CopyNoteAs => IconName::Copy,
+            NotesAction::CopyDeeplink => IconName::ExternalLink,
+            NotesAction::CreateQuicklink => IconName::Star,
+            NotesAction::Export => IconName::ArrowRight,
+            NotesAction::MoveListItemUp => IconName::ArrowUp,
+            NotesAction::MoveListItemDown => IconName::ArrowDown,
+            NotesAction::Format => IconName::ALargeSmall,
             NotesAction::EnableAutoSizing => IconName::Maximize,
             NotesAction::Cancel => IconName::Close,
         }
@@ -111,27 +186,82 @@ impl NotesAction {
     pub fn id(&self) -> &'static str {
         match self {
             NotesAction::NewNote => "new_note",
+            NotesAction::DuplicateNote => "duplicate_note",
             NotesAction::BrowseNotes => "browse_notes",
             NotesAction::FindInNote => "find_in_note",
-            NotesAction::CopyNote => "copy_note",
-            NotesAction::DeleteNote => "delete_note",
+            NotesAction::CopyNoteAs => "copy_note_as",
+            NotesAction::CopyDeeplink => "copy_deeplink",
+            NotesAction::CreateQuicklink => "create_quicklink",
+            NotesAction::Export => "export",
+            NotesAction::MoveListItemUp => "move_list_item_up",
+            NotesAction::MoveListItemDown => "move_list_item_down",
+            NotesAction::Format => "format",
             NotesAction::EnableAutoSizing => "enable_auto_sizing",
             NotesAction::Cancel => "cancel",
         }
     }
 }
 
+/// Action list sections for visual grouping
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NotesActionSection {
+    Primary,
+    Actions,
+    Move,
+    Format,
+    Utility,
+}
+
+impl NotesActionSection {
+    fn for_action(action: NotesAction) -> Self {
+        match action {
+            NotesAction::NewNote
+            | NotesAction::DuplicateNote
+            | NotesAction::BrowseNotes => NotesActionSection::Primary,
+            NotesAction::FindInNote
+            | NotesAction::CopyNoteAs
+            | NotesAction::CopyDeeplink
+            | NotesAction::CreateQuicklink
+            | NotesAction::Export => NotesActionSection::Actions,
+            NotesAction::MoveListItemUp | NotesAction::MoveListItemDown => NotesActionSection::Move,
+            NotesAction::Format => NotesActionSection::Format,
+            NotesAction::EnableAutoSizing | NotesAction::Cancel => NotesActionSection::Utility,
+        }
+    }
+}
+
+/// Action entry with enabled state
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotesActionItem {
+    pub action: NotesAction,
+    pub enabled: bool,
+}
+
+impl NotesActionItem {
+    fn section(&self) -> NotesActionSection {
+        NotesActionSection::for_action(self.action)
+    }
+}
+
 /// Panel dimensions and styling constants (matches main ActionsDialog)
 pub const PANEL_WIDTH: f32 = 320.0;
-pub const PANEL_MAX_HEIGHT: f32 = 400.0;
+pub const PANEL_MAX_HEIGHT: f32 = 580.0;
 pub const PANEL_CORNER_RADIUS: f32 = 12.0;
 pub const ACTION_ITEM_HEIGHT: f32 = 42.0;
 pub const ACCENT_BAR_WIDTH: f32 = 3.0;
+pub const PANEL_SEARCH_HEIGHT: f32 = 44.0;
+pub const PANEL_BORDER_HEIGHT: f32 = 2.0;
+
+pub fn panel_height_for_rows(row_count: usize) -> f32 {
+    let items_height =
+        (row_count as f32 * ACTION_ITEM_HEIGHT).min(PANEL_MAX_HEIGHT - (PANEL_SEARCH_HEIGHT + 16.0));
+    items_height + PANEL_SEARCH_HEIGHT + PANEL_BORDER_HEIGHT
+}
 
 /// Notes Actions Panel - Modal overlay for note operations
 pub struct NotesActionsPanel {
     /// Available actions
-    actions: Vec<NotesAction>,
+    actions: Vec<NotesActionItem>,
     /// Filtered action indices
     filtered_indices: Vec<usize>,
     /// Currently selected index (within filtered)
@@ -150,16 +280,23 @@ pub struct NotesActionsPanel {
 
 impl NotesActionsPanel {
     /// Create a new NotesActionsPanel
-    pub fn new(focus_handle: FocusHandle, on_action: NotesActionCallback) -> Self {
-        let actions: Vec<NotesAction> = NotesAction::all().to_vec();
+    pub fn new(
+        focus_handle: FocusHandle,
+        actions: Vec<NotesActionItem>,
+        on_action: NotesActionCallback,
+    ) -> Self {
         let filtered_indices: Vec<usize> = (0..actions.len()).collect();
+        let selected_index = actions
+            .iter()
+            .position(|item| item.enabled)
+            .unwrap_or(0);
 
         debug!(action_count = actions.len(), "Notes actions panel created");
 
         Self {
             actions,
             filtered_indices,
-            selected_index: 0,
+            selected_index,
             search_text: String::new(),
             focus_handle,
             on_action,
@@ -171,6 +308,10 @@ impl NotesActionsPanel {
     /// Set cursor visibility (for blink animation)
     pub fn set_cursor_visible(&mut self, visible: bool) {
         self.cursor_visible = visible;
+    }
+
+    pub fn focus_handle(&self) -> FocusHandle {
+        self.focus_handle.clone()
     }
 
     /// Handle character input
@@ -191,30 +332,22 @@ impl NotesActionsPanel {
 
     /// Move selection up
     pub fn move_up(&mut self, cx: &mut Context<Self>) {
-        if self.selected_index > 0 {
-            self.selected_index -= 1;
-            self.scroll_handle
-                .scroll_to_item(self.selected_index, ScrollStrategy::Nearest);
-            cx.notify();
-        }
+        self.move_selection(-1, cx);
     }
 
     /// Move selection down
     pub fn move_down(&mut self, cx: &mut Context<Self>) {
-        if self.selected_index < self.filtered_indices.len().saturating_sub(1) {
-            self.selected_index += 1;
-            self.scroll_handle
-                .scroll_to_item(self.selected_index, ScrollStrategy::Nearest);
-            cx.notify();
-        }
+        self.move_selection(1, cx);
     }
 
     /// Submit the selected action
     pub fn submit_selected(&mut self) {
         if let Some(&action_idx) = self.filtered_indices.get(self.selected_index) {
             if let Some(action) = self.actions.get(action_idx) {
-                debug!(action = ?action, "Notes action selected");
-                (self.on_action)(*action);
+                if action.enabled {
+                    debug!(action = ?action.action, "Notes action selected");
+                    (self.on_action)(action.action);
+                }
             }
         }
     }
@@ -230,7 +363,7 @@ impl NotesActionsPanel {
         self.filtered_indices
             .get(self.selected_index)
             .and_then(|&idx| self.actions.get(idx))
-            .copied()
+            .and_then(|item| if item.enabled { Some(item.action) } else { None })
     }
 
     /// Refilter actions based on search text
@@ -243,20 +376,74 @@ impl NotesActionsPanel {
                 .actions
                 .iter()
                 .enumerate()
-                .filter(|(_, action)| action.label().to_lowercase().contains(&search_lower))
+                .filter(|(_, action)| {
+                    action
+                        .action
+                        .label()
+                        .to_lowercase()
+                        .contains(&search_lower)
+                })
                 .map(|(idx, _)| idx)
                 .collect();
         }
 
-        // Reset selection if out of bounds
-        if self.selected_index >= self.filtered_indices.len() {
-            self.selected_index = 0;
-        }
+        self.ensure_valid_selection();
 
         // Scroll to keep selection visible
         if !self.filtered_indices.is_empty() {
             self.scroll_handle
                 .scroll_to_item(self.selected_index, ScrollStrategy::Nearest);
+        }
+    }
+
+    fn ensure_valid_selection(&mut self) {
+        if self.filtered_indices.is_empty() {
+            self.selected_index = 0;
+            return;
+        }
+
+        if self.selected_index >= self.filtered_indices.len()
+            || !self.is_selectable(self.selected_index)
+        {
+            if let Some(index) = (0..self.filtered_indices.len())
+                .find(|&idx| self.is_selectable(idx))
+            {
+                self.selected_index = index;
+            } else {
+                self.selected_index = 0;
+            }
+        }
+    }
+
+    fn is_selectable(&self, filtered_idx: usize) -> bool {
+        self.filtered_indices
+            .get(filtered_idx)
+            .and_then(|&idx| self.actions.get(idx))
+            .map(|item| item.enabled)
+            .unwrap_or(false)
+    }
+
+    fn move_selection(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let filtered_len = self.filtered_indices.len();
+        if filtered_len == 0 {
+            return;
+        }
+
+        let mut next_index = self.selected_index as i32;
+        loop {
+            next_index += delta;
+            if next_index < 0 || next_index >= filtered_len as i32 {
+                break;
+            }
+
+            let next = next_index as usize;
+            if self.is_selectable(next) {
+                self.selected_index = next;
+                self.scroll_handle
+                    .scroll_to_item(self.selected_index, ScrollStrategy::Nearest);
+                cx.notify();
+                return;
+            }
         }
     }
 
@@ -308,7 +495,7 @@ impl Render for NotesActionsPanel {
 
         // Search display
         let search_display = if self.search_text.is_empty() {
-            SharedString::from("Search actions...")
+            SharedString::from("Search for actions...")
         } else {
             SharedString::from(self.search_text.clone())
         };
@@ -316,23 +503,21 @@ impl Render for NotesActionsPanel {
         // Build search input row
         let search_input = div()
             .w_full()
-            .h(px(44.0))
+            .h(px(PANEL_SEARCH_HEIGHT))
             .px(px(12.0))
             .py(px(8.0))
             .bg(theme.secondary)
-            .border_t_1()
+            .border_b_1()
             .border_color(border_color)
             .flex()
             .flex_row()
             .items_center()
             .gap(px(8.0))
-            // Cmd+K indicator
+            // Search icon
             .child(
-                div()
-                    .w(px(24.0))
-                    .text_color(text_muted)
-                    .text_xs()
-                    .child("⌘K"),
+                Icon::new(IconName::Search)
+                    .size_4()
+                    .text_color(text_muted),
             )
             // Search field
             .child(
@@ -408,8 +593,20 @@ impl Render for NotesActionsPanel {
                         for idx in visible_range {
                             if let Some(&action_idx) = this.filtered_indices.get(idx) {
                                 if let Some(action) = this.actions.get(action_idx) {
-                                    let action: &NotesAction = action;
-                                    let is_selected = idx == selected_index;
+                                    let action: &NotesActionItem = action;
+                                    let is_enabled = action.enabled;
+                                    let is_selected = idx == selected_index && is_enabled;
+                                    let is_section_start = if idx > 0 {
+                                        this.filtered_indices
+                                            .get(idx - 1)
+                                            .and_then(|&prev_idx| this.actions.get(prev_idx))
+                                            .map(|prev: &NotesActionItem| {
+                                                prev.section() != action.section()
+                                            })
+                                            .unwrap_or(false)
+                                    } else {
+                                        false
+                                    };
 
                                     // Transparent Hsla for unselected state
                                     let transparent = Hsla {
@@ -431,8 +628,6 @@ impl Render for NotesActionsPanel {
                                         } else {
                                             transparent
                                         })
-                                        .hover(|s| s.bg(theme.list_hover))
-                                        .cursor_pointer()
                                         // Left accent bar for selection
                                         .border_l(px(ACCENT_BAR_WIDTH))
                                         .border_color(if is_selected {
@@ -440,6 +635,12 @@ impl Render for NotesActionsPanel {
                                         } else {
                                             transparent
                                         })
+                                        .when(is_section_start, |d| {
+                                            d.border_t_1().border_color(theme.border)
+                                        })
+                                        .when(is_enabled, |d| d.hover(|s| s.bg(theme.list_hover)))
+                                        .when(is_enabled, |d| d.cursor_pointer())
+                                        .when(!is_enabled, |d| d.opacity(0.5))
                                         // Content
                                         .child(
                                             div()
@@ -458,10 +659,11 @@ impl Render for NotesActionsPanel {
                                                         .gap(px(8.0))
                                                         // Icon - render using gpui_component Icon
                                                         .child({
-                                                            let icon_name: IconName = action.icon();
+                                                            let icon_name: IconName =
+                                                                action.action.icon();
                                                             Icon::new(icon_name)
                                                                 .size_4()
-                                                                .text_color(if is_selected {
+                                                                .text_color(if is_enabled {
                                                                     theme.foreground
                                                                 } else {
                                                                     theme.muted_foreground
@@ -471,7 +673,7 @@ impl Render for NotesActionsPanel {
                                                         .child(
                                                             div()
                                                                 .text_sm()
-                                                                .text_color(if is_selected {
+                                                                .text_color(if is_enabled {
                                                                     theme.foreground
                                                                 } else {
                                                                     theme.muted_foreground
@@ -481,21 +683,27 @@ impl Render for NotesActionsPanel {
                                                                 } else {
                                                                     gpui::FontWeight::NORMAL
                                                                 })
-                                                                .child(action.label()),
+                                                                .child(action.action.label()),
                                                         ),
                                                 )
                                                 // Right: shortcut badge
                                                 .child(
-                                                    div()
-                                                        .px(px(6.0))
-                                                        .py(px(2.0))
-                                                        .bg(theme.muted)
-                                                        .rounded(px(4.0))
-                                                        .text_xs()
-                                                        .text_color(theme.muted_foreground)
-                                                        .child(action.shortcut_display()),
+                                                    render_shortcut_keys(
+                                                        action.action.shortcut_keys(),
+                                                        theme,
+                                                    ),
                                                 ),
-                                        );
+                                        )
+                                        .when(is_enabled, |d| {
+                                            d.on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |this, _, _, cx| {
+                                                    this.selected_index = idx;
+                                                    this.submit_selected();
+                                                    cx.notify();
+                                                }),
+                                            )
+                                        });
 
                                     items.push(action_row);
                                 }
@@ -512,8 +720,9 @@ impl Render for NotesActionsPanel {
         };
 
         // Calculate dynamic height
-        let items_height = (filtered_len as f32 * ACTION_ITEM_HEIGHT).min(PANEL_MAX_HEIGHT - 60.0);
-        let total_height = items_height + 44.0 + 2.0; // search + border
+        let items_height = (filtered_len as f32 * ACTION_ITEM_HEIGHT)
+            .min(PANEL_MAX_HEIGHT - (PANEL_SEARCH_HEIGHT + 16.0));
+        let total_height = items_height + PANEL_SEARCH_HEIGHT + PANEL_BORDER_HEIGHT;
 
         // Main container
         div()
@@ -528,9 +737,39 @@ impl Render for NotesActionsPanel {
             .border_color(border_color)
             .overflow_hidden()
             .track_focus(&self.focus_handle)
-            .child(actions_list)
             .child(search_input)
+            .child(actions_list)
     }
+}
+
+fn render_shortcut_keys(keys: &[&'static str], theme: &Theme) -> impl IntoElement {
+    if keys.is_empty() {
+        return div().into_any_element();
+    }
+
+    let mut row = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(4.0));
+
+    for key in keys {
+        row = row.child(
+            div()
+                .min_w(px(18.0))
+                .px(px(6.0))
+                .py(px(2.0))
+                .bg(theme.muted)
+                .border_1()
+                .border_color(theme.border)
+                .rounded(px(5.0))
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(*key),
+        );
+    }
+
+    row.into_any_element()
 }
 
 #[cfg(test)]
@@ -540,50 +779,70 @@ mod tests {
     #[test]
     fn test_notes_action_labels() {
         assert_eq!(NotesAction::NewNote.label(), "New Note");
+        assert_eq!(NotesAction::DuplicateNote.label(), "Duplicate Note");
         assert_eq!(NotesAction::BrowseNotes.label(), "Browse Notes");
         assert_eq!(NotesAction::FindInNote.label(), "Find in Note");
-        assert_eq!(NotesAction::CopyNote.label(), "Copy Note");
-        assert_eq!(NotesAction::DeleteNote.label(), "Delete Note");
-        assert_eq!(NotesAction::EnableAutoSizing.label(), "Enable Auto-Sizing");
+        assert_eq!(NotesAction::CopyNoteAs.label(), "Copy Note As...");
+        assert_eq!(NotesAction::CopyDeeplink.label(), "Copy Deeplink");
+        assert_eq!(NotesAction::CreateQuicklink.label(), "Create Quicklink");
+        assert_eq!(NotesAction::Export.label(), "Export...");
+        assert_eq!(NotesAction::MoveListItemUp.label(), "Move List Item Up");
+        assert_eq!(NotesAction::MoveListItemDown.label(), "Move List Item Down");
+        assert_eq!(NotesAction::Format.label(), "Format...");
     }
 
     #[test]
     fn test_notes_action_shortcuts() {
         assert_eq!(NotesAction::NewNote.shortcut_display(), "⌘N");
+        assert_eq!(NotesAction::DuplicateNote.shortcut_display(), "⌘D");
         assert_eq!(NotesAction::BrowseNotes.shortcut_display(), "⌘P");
         assert_eq!(NotesAction::FindInNote.shortcut_display(), "⌘F");
-        assert_eq!(NotesAction::CopyNote.shortcut_display(), "⌘C");
-        assert_eq!(NotesAction::DeleteNote.shortcut_display(), "⌘D");
-        assert_eq!(NotesAction::EnableAutoSizing.shortcut_display(), "⌘A");
+        assert_eq!(NotesAction::CopyNoteAs.shortcut_display(), "⇧⌘C");
+        assert_eq!(NotesAction::CopyDeeplink.shortcut_display(), "⇧⌘D");
+        assert_eq!(NotesAction::CreateQuicklink.shortcut_display(), "⇧⌘L");
+        assert_eq!(NotesAction::Export.shortcut_display(), "⇧⌘E");
+        assert_eq!(NotesAction::MoveListItemUp.shortcut_display(), "⌃⌘↑");
+        assert_eq!(NotesAction::MoveListItemDown.shortcut_display(), "⌃⌘↓");
+        assert_eq!(NotesAction::Format.shortcut_display(), "⇧⌘T");
     }
 
     #[test]
     fn test_notes_action_all() {
         let all = NotesAction::all();
-        assert_eq!(all.len(), 6);
+        assert_eq!(all.len(), 11);
         assert!(all.contains(&NotesAction::NewNote));
+        assert!(all.contains(&NotesAction::DuplicateNote));
         assert!(all.contains(&NotesAction::BrowseNotes));
         assert!(all.contains(&NotesAction::FindInNote));
-        assert!(all.contains(&NotesAction::CopyNote));
-        assert!(all.contains(&NotesAction::DeleteNote));
-        assert!(all.contains(&NotesAction::EnableAutoSizing));
+        assert!(all.contains(&NotesAction::CopyNoteAs));
+        assert!(all.contains(&NotesAction::CopyDeeplink));
+        assert!(all.contains(&NotesAction::CreateQuicklink));
+        assert!(all.contains(&NotesAction::Export));
+        assert!(all.contains(&NotesAction::MoveListItemUp));
+        assert!(all.contains(&NotesAction::MoveListItemDown));
+        assert!(all.contains(&NotesAction::Format));
     }
 
     #[test]
     fn test_notes_action_ids() {
         assert_eq!(NotesAction::NewNote.id(), "new_note");
+        assert_eq!(NotesAction::DuplicateNote.id(), "duplicate_note");
         assert_eq!(NotesAction::BrowseNotes.id(), "browse_notes");
         assert_eq!(NotesAction::FindInNote.id(), "find_in_note");
-        assert_eq!(NotesAction::CopyNote.id(), "copy_note");
-        assert_eq!(NotesAction::DeleteNote.id(), "delete_note");
-        assert_eq!(NotesAction::EnableAutoSizing.id(), "enable_auto_sizing");
+        assert_eq!(NotesAction::CopyNoteAs.id(), "copy_note_as");
+        assert_eq!(NotesAction::CopyDeeplink.id(), "copy_deeplink");
+        assert_eq!(NotesAction::CreateQuicklink.id(), "create_quicklink");
+        assert_eq!(NotesAction::Export.id(), "export");
+        assert_eq!(NotesAction::MoveListItemUp.id(), "move_list_item_up");
+        assert_eq!(NotesAction::MoveListItemDown.id(), "move_list_item_down");
+        assert_eq!(NotesAction::Format.id(), "format");
     }
 
     #[test]
     fn test_panel_constants() {
         // Verify panel matches main ActionsDialog dimensions
         assert_eq!(PANEL_WIDTH, 320.0);
-        assert_eq!(PANEL_MAX_HEIGHT, 400.0);
+        assert_eq!(PANEL_MAX_HEIGHT, 580.0);
         assert_eq!(PANEL_CORNER_RADIUS, 12.0);
         assert_eq!(ACTION_ITEM_HEIGHT, 42.0);
     }

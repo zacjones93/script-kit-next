@@ -672,12 +672,12 @@ impl ScriptListApp {
                         .justify_center()
                         .text_color(rgb(text_muted))
                         .child(
-                            if self.filter_input.is_empty()
+                            if self.filter_text.is_empty()
                                 && self.scripts.is_empty()
                                 && self.scriptlets.is_empty()
                             {
                                 "No scripts or snippets found"
-                            } else if !self.filter_input.is_empty() {
+                            } else if !self.filter_text.is_empty() {
                                 "No matching scripts"
                             } else {
                                 "Select a script to preview"

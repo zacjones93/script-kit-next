@@ -224,6 +224,7 @@ pub fn hide_main_window() {
 /// - macOS: Uses NSApplication isActive
 /// - Other platforms: Always returns true (not yet implemented)
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 pub fn is_app_active() -> bool {
     unsafe {
         let app: id = NSApp();
@@ -233,9 +234,34 @@ pub fn is_app_active() -> bool {
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(dead_code)]
 pub fn is_app_active() -> bool {
     // TODO: Implement for other platforms
     // On non-macOS, assume always active
+    true
+}
+
+/// Check if the main window is currently focused (key window).
+///
+/// This is used to detect focus loss even when the app remains active
+/// (e.g., when switching focus to Notes/AI windows).
+#[cfg(target_os = "macos")]
+pub fn is_main_window_focused() -> bool {
+    unsafe {
+        let window = match window_manager::get_main_window() {
+            Some(window) => window,
+            None => return false,
+        };
+
+        let is_key: bool = msg_send![window, isKeyWindow];
+        is_key
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn is_main_window_focused() -> bool {
+    // TODO: Implement for other platforms
+    // On non-macOS, assume focused to avoid auto-dismiss behavior.
     true
 }
 
@@ -604,6 +630,12 @@ pub fn capture_app_screenshot(
 
     let windows = Window::all()?;
 
+    struct Candidate {
+        window: Window,
+        title: String,
+    }
+
+    let mut candidates = Vec::new();
     for window in windows {
         let title = window.title().unwrap_or_else(|_| String::new());
         let app_name = window.app_name().unwrap_or_else(|_| String::new());
@@ -616,58 +648,88 @@ pub fn capture_app_screenshot(
         let is_minimized = window.is_minimized().unwrap_or(true);
 
         if is_our_window && !is_minimized {
-            tracing::debug!(
-                app_name = %app_name,
-                title = %title,
-                hi_dpi = hi_dpi,
-                "Found Script Kit window for screenshot"
-            );
-
-            let image = window.capture_image()?;
-            let original_width = image.width();
-            let original_height = image.height();
-
-            // Scale down to 1x if not hi_dpi mode (xcap captures at retina resolution on macOS)
-            let (final_image, width, height) = if hi_dpi {
-                (image, original_width, original_height)
-            } else {
-                // Scale down by 2x for 1x resolution
-                let new_width = original_width / 2;
-                let new_height = original_height / 2;
-                let resized = image::imageops::resize(
-                    &image,
-                    new_width,
-                    new_height,
-                    image::imageops::FilterType::Lanczos3,
-                );
-                tracing::debug!(
-                    original_width = original_width,
-                    original_height = original_height,
-                    new_width = new_width,
-                    new_height = new_height,
-                    "Scaled screenshot to 1x resolution"
-                );
-                (resized, new_width, new_height)
-            };
-
-            // Encode to PNG in memory (no temp files needed)
-            let mut png_data = Vec::new();
-            let encoder = PngEncoder::new(&mut png_data);
-            encoder.write_image(&final_image, width, height, image::ExtendedColorType::Rgba8)?;
-
-            tracing::debug!(
-                width = width,
-                height = height,
-                hi_dpi = hi_dpi,
-                file_size = png_data.len(),
-                "Screenshot captured with xcap"
-            );
-
-            return Ok((png_data, width, height));
+            candidates.push(Candidate {
+                window,
+                title,
+            });
         }
     }
 
-    Err("Script Kit window not found".into())
+    let mut target = candidates
+        .iter()
+        .filter(|candidate| candidate.title.contains("Notes") || candidate.title.contains("AI"))
+        .find(|candidate| candidate.window.is_focused().unwrap_or(false))
+        .map(|candidate| candidate.window.clone());
+
+    if target.is_none() {
+        target = candidates
+            .iter()
+            .find(|candidate| candidate.title.contains("Notes") || candidate.title.contains("AI"))
+            .map(|candidate| candidate.window.clone());
+    }
+
+    if target.is_none() {
+        target = candidates
+            .iter()
+            .find(|candidate| candidate.window.is_focused().unwrap_or(false))
+            .map(|candidate| candidate.window.clone());
+    }
+
+    let Some(window) = target.or_else(|| candidates.first().map(|candidate| candidate.window.clone())) else {
+        return Err("Script Kit window not found".into());
+    };
+
+    let title = window.title().unwrap_or_else(|_| String::new());
+    let app_name = window.app_name().unwrap_or_else(|_| String::new());
+
+    tracing::debug!(
+        app_name = %app_name,
+        title = %title,
+        hi_dpi = hi_dpi,
+        "Found Script Kit window for screenshot"
+    );
+
+    let image = window.capture_image()?;
+    let original_width = image.width();
+    let original_height = image.height();
+
+    // Scale down to 1x if not hi_dpi mode (xcap captures at retina resolution on macOS)
+    let (final_image, width, height) = if hi_dpi {
+        (image, original_width, original_height)
+    } else {
+        // Scale down by 2x for 1x resolution
+        let new_width = original_width / 2;
+        let new_height = original_height / 2;
+        let resized = image::imageops::resize(
+            &image,
+            new_width,
+            new_height,
+            image::imageops::FilterType::Lanczos3,
+        );
+        tracing::debug!(
+            original_width = original_width,
+            original_height = original_height,
+            new_width = new_width,
+            new_height = new_height,
+            "Scaled screenshot to 1x resolution"
+        );
+        (resized, new_width, new_height)
+    };
+
+    // Encode to PNG in memory (no temp files needed)
+    let mut png_data = Vec::new();
+    let encoder = PngEncoder::new(&mut png_data);
+    encoder.write_image(&final_image, width, height, image::ExtendedColorType::Rgba8)?;
+
+    tracing::debug!(
+        width = width,
+        height = height,
+        hi_dpi = hi_dpi,
+        file_size = png_data.len(),
+        "Screenshot captured with xcap"
+    );
+
+    Ok((png_data, width, height))
 }
 
 /// Capture a screenshot of a window by its title pattern.

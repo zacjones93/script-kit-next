@@ -1282,11 +1282,13 @@ pub fn map_scriptkit_to_gpui_theme(sk_theme: &Theme) -> ThemeColor {
     theme_color.scrollbar_thumb = hex_to_hsla(colors.text.dimmed);
     theme_color.scrollbar_thumb_hover = hex_to_hsla(colors.text.muted);
 
-    // Caret (cursor) - cyan by default
-    theme_color.caret = hex_to_hsla(0x00ffff);
+    // Caret (cursor) - match main input text color
+    theme_color.caret = hex_to_hsla(colors.text.primary);
 
-    // Selection
-    theme_color.selection = hex_to_hsla(colors.accent.selected_subtle);
+    // Selection - match main input selection alpha (0x60)
+    let mut selection = hex_to_hsla(colors.accent.selected);
+    selection.a = 96.0 / 255.0;
+    theme_color.selection = selection;
 
     // Ring (focus ring)
     theme_color.ring = hex_to_hsla(colors.accent.selected);

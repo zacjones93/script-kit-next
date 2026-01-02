@@ -42,7 +42,7 @@ mod window;
 
 // Re-export actions panel types for use by window.rs
 #[allow(unused_imports)]
-pub use actions_panel::{NotesAction, NotesActionCallback, NotesActionsPanel};
+pub use actions_panel::{NotesAction, NotesActionCallback, NotesActionItem, NotesActionsPanel};
 
 // Re-export browse panel types for use by window.rs
 #[allow(unused_imports)]
