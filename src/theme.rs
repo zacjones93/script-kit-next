@@ -1253,8 +1253,10 @@ pub fn map_scriptkit_to_gpui_theme(sk_theme: &Theme) -> ThemeColor {
     // Secondary (muted buttons)
     theme_color.secondary = hex_to_hsla(colors.background.search_box).opacity(opacity.search_box);
     theme_color.secondary_foreground = hex_to_hsla(colors.text.primary);
-    theme_color.secondary_hover = hex_to_hsla(colors.background.title_bar).opacity(opacity.title_bar);
-    theme_color.secondary_active = hex_to_hsla(colors.background.title_bar).opacity(opacity.title_bar);
+    theme_color.secondary_hover =
+        hex_to_hsla(colors.background.title_bar).opacity(opacity.title_bar);
+    theme_color.secondary_active =
+        hex_to_hsla(colors.background.title_bar).opacity(opacity.title_bar);
 
     // Muted (disabled states, subtle elements)
     theme_color.muted = hex_to_hsla(colors.background.search_box).opacity(opacity.search_box);

@@ -648,10 +648,7 @@ pub fn capture_app_screenshot(
         let is_minimized = window.is_minimized().unwrap_or(true);
 
         if is_our_window && !is_minimized {
-            candidates.push(Candidate {
-                window,
-                title,
-            });
+            candidates.push(Candidate { window, title });
         }
     }
 
@@ -675,7 +672,9 @@ pub fn capture_app_screenshot(
             .map(|candidate| candidate.window.clone());
     }
 
-    let Some(window) = target.or_else(|| candidates.first().map(|candidate| candidate.window.clone())) else {
+    let Some(window) =
+        target.or_else(|| candidates.first().map(|candidate| candidate.window.clone()))
+    else {
         return Err("Script Kit window not found".into());
     };
 

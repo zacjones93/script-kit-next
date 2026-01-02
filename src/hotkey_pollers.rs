@@ -35,10 +35,10 @@ impl HotkeyPoller {
                 // The hotkeys are independent - main hotkey should have ZERO effect on Notes/AI.
                 let notes_open = notes::is_notes_window_open();
                 let ai_open = ai::is_ai_window_open();
-                
+
                 if notes_open || ai_open {
                     logging::log(
-                        "VISIBILITY", 
+                        "VISIBILITY",
                         &format!(
                             "Notes/AI window is open (notes={}, ai={}) - main hotkey IGNORED",
                             notes_open, ai_open

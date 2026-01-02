@@ -720,8 +720,7 @@ impl Render for ScriptListApp {
                         }
                     } else {
                         let input_state = self.gpui_input_state.clone();
-                        let is_focused =
-                            input_state.read(cx).focus_handle(cx).is_focused(window);
+                        let is_focused = input_state.read(cx).focus_handle(cx).is_focused(window);
                         if !is_focused {
                             input_state.update(cx, |state, cx| {
                                 state.focus(window, cx);

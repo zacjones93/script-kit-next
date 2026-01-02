@@ -288,12 +288,10 @@ impl AiApp {
 
         // Subscribe to input changes and Enter key
         let input_sub = cx.subscribe_in(&input_state, window, {
-            move |this, _, ev: &InputEvent, window, cx| {
-                match ev {
-                    InputEvent::Change => this.on_input_change(cx),
-                    InputEvent::PressEnter { .. } => this.submit_message(window, cx),
-                    _ => {}
-                }
+            move |this, _, ev: &InputEvent, window, cx| match ev {
+                InputEvent::Change => this.on_input_change(cx),
+                InputEvent::PressEnter { .. } => this.submit_message(window, cx),
+                _ => {}
             }
         });
 
@@ -379,8 +377,8 @@ impl AiApp {
                 if self.selected_chat_id != Some(first_id) {
                     self.selected_chat_id = Some(first_id);
                     // Load messages for the selected chat
-                    self.current_messages = storage::get_chat_messages(&first_id)
-                        .unwrap_or_default();
+                    self.current_messages =
+                        storage::get_chat_messages(&first_id).unwrap_or_default();
                 }
             } else {
                 self.selected_chat_id = None;
@@ -394,8 +392,8 @@ impl AiApp {
                 if !self.chats.iter().any(|c| c.id == id) {
                     self.selected_chat_id = self.chats.first().map(|c| c.id);
                     if let Some(new_id) = self.selected_chat_id {
-                        self.current_messages = storage::get_chat_messages(&new_id)
-                            .unwrap_or_default();
+                        self.current_messages =
+                            storage::get_chat_messages(&new_id).unwrap_or_default();
                     }
                 }
             }
@@ -1044,7 +1042,7 @@ impl AiApp {
                     .chars()
                     .take(50)
                     .collect();
-                
+
                 d.child(
                     // Preview (muted, smaller text, single line only)
                     div()
@@ -1343,9 +1341,7 @@ impl AiApp {
                             .border_color(input_border_color.opacity(0.6)) // Subtle border
                             .overflow_hidden()
                             .child(
-                                Input::new(&self.input_state)
-                                    .w_full()
-                                    .focus_bordered(false), // Disable default focus ring
+                                Input::new(&self.input_state).w_full().focus_bordered(false), // Disable default focus ring
                             ),
                     ),
             )
@@ -1426,13 +1422,11 @@ impl AiApp {
                     .flex()
                     .flex_col()
                     .overflow_hidden()
-                    .child(
-                        if has_messages {
-                            self.render_messages(cx).into_any_element()
-                        } else {
-                            self.render_welcome(cx).into_any_element()
-                        },
-                    ),
+                    .child(if has_messages {
+                        self.render_messages(cx).into_any_element()
+                    } else {
+                        self.render_welcome(cx).into_any_element()
+                    }),
             )
             // Input area (fixed height, always visible at bottom)
             .child(input_area)
@@ -1590,7 +1584,6 @@ fn map_scriptkit_to_gpui_theme(sk_theme: &crate::theme::Theme) -> ThemeColor {
     theme_color.tab_foreground = hex_to_hsla(colors.text.secondary);
     theme_color.tab_bar = surface(colors.background.title_bar);
 
-
     debug!(
         background = format!("#{:06x}", colors.background.main),
         accent = format!("#{:06x}", colors.accent.selected),
@@ -1620,7 +1613,7 @@ fn ensure_theme_initialized(cx: &mut App) {
 }
 
 /// Toggle the AI window (open if closed, bring to front if open)
-/// 
+///
 /// The AI window behaves as a NORMAL window (not a floating panel):
 /// - Can go behind other windows when it loses focus
 /// - Hotkey brings it to front and focuses it
@@ -1653,7 +1646,7 @@ pub fn open_ai_window(cx: &mut App) -> Result<()> {
             cx.activate(true);
             return Ok(());
         }
-        
+
         // Window handle was invalid, fall through to create new window
         logging::log("AI", "AI window handle was invalid - creating new");
         *guard = None;
@@ -1729,7 +1722,7 @@ pub fn close_ai_window(cx: &mut App) {
 }
 
 /// Check if the AI window is currently open
-/// 
+///
 /// Returns true if the AI window exists and is valid.
 /// This is used by other parts of the app to check if AI is open
 /// without affecting it.

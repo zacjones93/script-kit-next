@@ -25,10 +25,13 @@ use objc::{msg_send, sel, sel_impl};
 use std::sync::{Arc, Mutex};
 use tracing::{debug, info};
 
-use super::actions_panel::{panel_height_for_rows, NotesAction, NotesActionItem, NotesActionsPanel};
+use super::actions_panel::{
+    panel_height_for_rows, NotesAction, NotesActionItem, NotesActionsPanel,
+};
 use super::browse_panel::{BrowsePanel, NoteAction, NoteListItem};
 use super::model::{ExportFormat, Note, NoteId};
 use super::storage;
+use crate::watcher::ThemeWatcher;
 
 /// Global handle to the notes window
 static NOTES_WINDOW: std::sync::OnceLock<std::sync::Mutex<Option<gpui::WindowHandle<Root>>>> =
@@ -1015,24 +1018,20 @@ impl NotesApp {
             .children(if window_hovered && has_selection && !is_trash {
                 // Hover-reveal actions: ⌘K
                 Some(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(
-                            Button::new("shortcut")
-                                .ghost()
-                                .xsmall()
-                                .label("⌘K")
-                                .tooltip("Actions (⌘K)")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    if this.show_actions_panel {
-                                        this.close_actions_panel(window, cx);
-                                    } else {
-                                        this.open_actions_panel(window, cx);
-                                    }
-                                })),
-                        ),
+                    div().flex().items_center().gap_1().child(
+                        Button::new("shortcut")
+                            .ghost()
+                            .xsmall()
+                            .label("⌘K")
+                            .tooltip("Actions (⌘K)")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if this.show_actions_panel {
+                                    this.close_actions_panel(window, cx);
+                                } else {
+                                    this.open_actions_panel(window, cx);
+                                }
+                            })),
+                    ),
                 )
             } else if has_selection && is_trash {
                 // Trash actions (always visible)
@@ -1336,7 +1335,9 @@ impl Render for NotesApp {
             // Single note view - editor takes full width
             .child(self.render_editor(cx))
             // Overlay panels
-            .when(show_actions, |d| d.child(self.render_actions_panel_overlay(cx)))
+            .when(show_actions, |d| {
+                d.child(self.render_actions_panel_overlay(cx))
+            })
             .when(show_browse, |d| {
                 d.child(self.render_browse_panel_overlay(cx))
             })
@@ -1395,8 +1396,10 @@ fn map_scriptkit_to_gpui_theme(sk_theme: &crate::theme::Theme) -> ThemeColor {
     // Secondary (muted buttons)
     theme_color.secondary = hex_to_hsla(colors.background.search_box).opacity(opacity.search_box);
     theme_color.secondary_foreground = hex_to_hsla(colors.text.primary);
-    theme_color.secondary_hover = hex_to_hsla(colors.background.title_bar).opacity(opacity.title_bar);
-    theme_color.secondary_active = hex_to_hsla(colors.background.title_bar).opacity(opacity.title_bar);
+    theme_color.secondary_hover =
+        hex_to_hsla(colors.background.title_bar).opacity(opacity.title_bar);
+    theme_color.secondary_active =
+        hex_to_hsla(colors.background.title_bar).opacity(opacity.title_bar);
 
     // Muted (disabled states, subtle elements)
     theme_color.muted = hex_to_hsla(colors.background.search_box).opacity(opacity.search_box);
@@ -1641,10 +1644,37 @@ pub fn open_notes_window(cx: &mut App) -> Result<()> {
         });
     }
 
-    *guard = Some(handle);
+    *guard = Some(handle.clone());
 
     // Configure as floating panel (always on top) after window is created
     configure_notes_as_floating_panel();
+
+    // Theme hot-reload watcher for Notes window
+    // Spawns a background task that watches ~/.kenv/theme.json for changes
+    if let Some(notes_app) = notes_app_holder.lock().unwrap().clone() {
+        let notes_app_for_theme = notes_app.clone();
+        cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+            let (mut theme_watcher, theme_rx) = ThemeWatcher::new();
+            if theme_watcher.start().is_err() {
+                return;
+            }
+            loop {
+                gpui::Timer::after(std::time::Duration::from_millis(200)).await;
+                if theme_rx.try_recv().is_ok() {
+                    info!("Notes window: theme.json changed, reloading");
+                    let _ = cx.update(|cx| {
+                        // Re-sync gpui-component theme with updated Script Kit theme
+                        crate::theme::sync_gpui_component_theme(cx);
+                        // Notify the Notes window to re-render with new colors
+                        notes_app_for_theme.update(cx, |_app, cx| {
+                            cx.notify();
+                        });
+                    });
+                }
+            }
+        })
+        .detach();
+    }
 
     Ok(())
 }
