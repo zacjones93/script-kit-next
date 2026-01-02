@@ -10,8 +10,8 @@
 //! - LSP hooks for diagnostics/completion
 
 use gpui::{
-    div, prelude::*, px, rgb, Context, Entity, FocusHandle, Focusable, IntoElement, Render, Styled,
-    Subscription, Window,
+    div, prelude::*, px, rgb, Context, Entity, FocusHandle, Focusable, IntoElement, Render,
+    SharedString, Styled, Subscription, Window,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 use std::sync::Arc;
@@ -327,8 +327,11 @@ impl Render for EditorPromptV2 {
         // Calculate height
         let height = self.content_height.unwrap_or_else(|| px(500.)); // Default height if not specified
 
-        // Build the main container - code editor fills the space with minimal padding
-        // The line number gutter provides left margin, so we only need small top padding
+        // Get mono font family for code editor
+        let fonts = self.theme.get_fonts();
+        let mono_font: SharedString = fonts.mono_family.into();
+
+        // Build the main container - code editor fills the space completely
         let mut container = div()
             .id("editor-v2")
             .flex()
@@ -337,6 +340,7 @@ impl Render for EditorPromptV2 {
             .h(height)
             .bg(rgb(colors.background.main))
             .text_color(rgb(colors.text.primary))
+            .font_family(mono_font) // Use monospace font for code
             .track_focus(&self.focus_handle)
             .on_key_down(handle_key);
 

@@ -1530,19 +1530,19 @@ fn hex_to_hsla(hex: u32) -> Hsla {
     rgb(hex).into()
 }
 
-// Match the main window background alpha (0xE8 ≈ 91%)
-const AI_SURFACE_OPACITY: f32 = 232.0 / 255.0;
-
 /// Map Script Kit's ColorScheme to gpui-component's ThemeColor
+///
+/// NOTE: We intentionally do NOT apply the user's opacity.* values to theme colors here.
+/// The opacity values are for window-level transparency (vibrancy effect),
+/// not for making UI elements semi-transparent. UI elements should remain solid.
 fn map_scriptkit_to_gpui_theme(sk_theme: &crate::theme::Theme) -> ThemeColor {
     let colors = &sk_theme.colors;
 
     // Get default dark theme as base and override with Script Kit colors
     let mut theme_color = *ThemeColor::dark();
-    let surface = |hex| hex_to_hsla(hex).opacity(AI_SURFACE_OPACITY);
 
     // Main background and foreground
-    theme_color.background = surface(colors.background.main);
+    theme_color.background = hex_to_hsla(colors.background.main);
     theme_color.foreground = hex_to_hsla(colors.text.primary);
 
     // Accent colors (Script Kit yellow/gold)
@@ -1554,15 +1554,15 @@ fn map_scriptkit_to_gpui_theme(sk_theme: &crate::theme::Theme) -> ThemeColor {
     theme_color.input = hex_to_hsla(colors.ui.border);
 
     // List/sidebar colors
-    theme_color.list = surface(colors.background.main);
+    theme_color.list = hex_to_hsla(colors.background.main);
     theme_color.list_active = hex_to_hsla(colors.accent.selected_subtle);
     theme_color.list_active_border = hex_to_hsla(colors.accent.selected);
     theme_color.list_hover = hex_to_hsla(colors.accent.selected_subtle);
-    theme_color.list_even = surface(colors.background.main);
-    theme_color.list_head = surface(colors.background.title_bar);
+    theme_color.list_even = hex_to_hsla(colors.background.main);
+    theme_color.list_head = hex_to_hsla(colors.background.title_bar);
 
     // Sidebar (use slightly lighter background)
-    theme_color.sidebar = surface(colors.background.title_bar);
+    theme_color.sidebar = hex_to_hsla(colors.background.title_bar);
     theme_color.sidebar_foreground = hex_to_hsla(colors.text.primary);
     theme_color.sidebar_border = hex_to_hsla(colors.ui.border);
     theme_color.sidebar_accent = hex_to_hsla(colors.accent.selected_subtle);
@@ -1594,11 +1594,11 @@ fn map_scriptkit_to_gpui_theme(sk_theme: &crate::theme::Theme) -> ThemeColor {
     theme_color.muted_foreground = hex_to_hsla(colors.text.muted);
 
     // Title bar
-    theme_color.title_bar = surface(colors.background.title_bar);
+    theme_color.title_bar = hex_to_hsla(colors.background.title_bar);
     theme_color.title_bar_border = hex_to_hsla(colors.ui.border);
 
     // Popover
-    theme_color.popover = surface(colors.background.main);
+    theme_color.popover = hex_to_hsla(colors.background.main);
     theme_color.popover_foreground = hex_to_hsla(colors.text.primary);
 
     // Status colors
@@ -1612,7 +1612,7 @@ fn map_scriptkit_to_gpui_theme(sk_theme: &crate::theme::Theme) -> ThemeColor {
     theme_color.info_foreground = hex_to_hsla(colors.text.primary);
 
     // Scrollbar
-    theme_color.scrollbar = surface(colors.background.main);
+    theme_color.scrollbar = hex_to_hsla(colors.background.main);
     theme_color.scrollbar_thumb = hex_to_hsla(colors.text.dimmed);
     theme_color.scrollbar_thumb_hover = hex_to_hsla(colors.text.muted);
 
@@ -1629,11 +1629,11 @@ fn map_scriptkit_to_gpui_theme(sk_theme: &crate::theme::Theme) -> ThemeColor {
     theme_color.ring = ring_color;
 
     // Tab colors
-    theme_color.tab = surface(colors.background.main);
-    theme_color.tab_active = surface(colors.background.search_box);
+    theme_color.tab = hex_to_hsla(colors.background.main);
+    theme_color.tab_active = hex_to_hsla(colors.background.search_box);
     theme_color.tab_active_foreground = hex_to_hsla(colors.text.primary);
     theme_color.tab_foreground = hex_to_hsla(colors.text.secondary);
-    theme_color.tab_bar = surface(colors.background.title_bar);
+    theme_color.tab_bar = hex_to_hsla(colors.background.title_bar);
 
     debug!(
         background = format!("#{:06x}", colors.background.main),

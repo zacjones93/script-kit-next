@@ -45,14 +45,15 @@ const actions = [
 // Start editor (don't await since it blocks until submit)
 const editorPromise = editor(content, "typescript", actions);
 
-// Wait for editor to render
-await new Promise(r => setTimeout(r, 1500));
+// Wait longer for editor to render fully
+console.error('[TEST] Waiting for editor to render...');
+await new Promise(r => setTimeout(r, 2500));
 
-// Capture screenshot showing the Actions button in the titlebar
+// Capture screenshot showing the editor with Actions button in the titlebar
 console.error('[TEST] Capturing editor screenshot...');
-await captureAndSave('editor-v2-actions');
+await captureAndSave('editor-v2-fixed');
 
 // Wait a bit more then exit
 await new Promise(r => setTimeout(r, 500));
-console.error('[TEST] Test complete - look for "Actions" button in top-right corner');
+console.error('[TEST] Test complete - check for: 1) Monospace font 2) No padding 3) No line numbers 4) Actions button');
 process.exit(0);
