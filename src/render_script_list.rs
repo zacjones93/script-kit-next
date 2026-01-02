@@ -654,9 +654,11 @@ impl ScriptListApp {
                                     )
                                     .child(
                                         div()
+                                            .flex()
+                                            .items_center()
                                             .mx(px(4.)) // Horizontal margin for spacing
                                             .text_color(rgba((text_dimmed << 8) | 0x60)) // Reduced opacity (60%)
-                                            .text_sm() // Slightly smaller text
+                                            .text_sm()
                                             .child("|"),
                                     )
                                     // Actions button with click handler
@@ -674,9 +676,11 @@ impl ScriptListApp {
                                     )
                                     .child(
                                         div()
+                                            .flex()
+                                            .items_center()
                                             .mx(px(4.)) // Horizontal margin for spacing
                                             .text_color(rgba((text_dimmed << 8) | 0x60)) // Reduced opacity (60%)
-                                            .text_sm() // Slightly smaller text
+                                            .text_sm()
                                             .child("|"),
                                     ),
                             )
@@ -764,9 +768,11 @@ impl ScriptListApp {
                                     )
                                     .child(
                                         div()
+                                            .flex()
+                                            .items_center()
                                             .mx(px(4.)) // Horizontal margin for spacing
                                             .text_color(rgba((text_dimmed << 8) | 0x60)) // Reduced opacity (60%)
-                                            .text_sm() // Slightly smaller text
+                                            .text_sm()
                                             .child("|"),
                                     ),
                             )
