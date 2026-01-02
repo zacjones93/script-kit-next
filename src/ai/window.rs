@@ -14,8 +14,8 @@ use anyhow::Result;
 use chrono::{Datelike, NaiveDate, Utc};
 use gpui::{
     div, prelude::*, px, rgb, size, svg, App, Context, Entity, FocusHandle, Focusable, Hsla,
-    IntoElement, KeyDownEvent, ParentElement, Render, SharedString, Styled, Subscription, Window,
-    WindowBounds, WindowOptions,
+    IntoElement, KeyDownEvent, ParentElement, Render, ScrollHandle, SharedString, Styled,
+    Subscription, Window, WindowBounds, WindowOptions,
 };
 
 // Import local IconName for SVG icons (has external_path() method)
@@ -223,6 +223,9 @@ pub struct AiApp {
 
     /// Messages for the currently selected chat (cached for display)
     current_messages: Vec<Message>,
+
+    /// Scroll handle for the messages area (for auto-scrolling during streaming)
+    messages_scroll_handle: ScrollHandle,
 }
 
 impl AiApp {
@@ -283,11 +286,13 @@ impl AiApp {
 
         let focus_handle = cx.focus_handle();
 
-        // Subscribe to input changes
+        // Subscribe to input changes and Enter key
         let input_sub = cx.subscribe_in(&input_state, window, {
-            move |this, _, ev: &InputEvent, _window, cx| {
-                if matches!(ev, InputEvent::Change) {
-                    this.on_input_change(cx);
+            move |this, _, ev: &InputEvent, window, cx| {
+                match ev {
+                    InputEvent::Change => this.on_input_change(cx),
+                    InputEvent::PressEnter { .. } => this.submit_message(window, cx),
+                    _ => {}
                 }
             }
         });
@@ -325,6 +330,7 @@ impl AiApp {
             is_streaming: false,
             streaming_content: String::new(),
             current_messages,
+            messages_scroll_handle: ScrollHandle::new(),
         }
     }
 
@@ -437,6 +443,9 @@ impl AiApp {
         // Load messages for this chat
         self.current_messages = storage::get_chat_messages(&id).unwrap_or_default();
 
+        // Scroll to bottom to show latest messages
+        self.messages_scroll_handle.scroll_to_bottom();
+
         // Clear any streaming state
         self.is_streaming = false;
         self.streaming_content.clear();
@@ -508,6 +517,9 @@ impl AiApp {
 
         // Add to current messages for display
         self.current_messages.push(user_message);
+
+        // Scroll to bottom to show the new message
+        self.messages_scroll_handle.scroll_to_bottom();
 
         // Update message preview cache
         let preview: String = content.chars().take(60).collect();
@@ -660,6 +672,8 @@ impl AiApp {
                         let _ = cx.update(|cx| {
                             this.update(cx, |app, cx| {
                                 app.streaming_content = current;
+                                // Auto-scroll to bottom as new content arrives
+                                app.messages_scroll_handle.scroll_to_bottom();
                                 cx.notify();
                             })
                         });
@@ -717,6 +731,8 @@ impl AiApp {
                 let _ = cx.update(|cx| {
                     this.update(cx, |app, cx| {
                         app.streaming_content = current_content;
+                        // Auto-scroll to bottom as new content arrives
+                        app.messages_scroll_handle.scroll_to_bottom();
                         cx.notify();
                     })
                 });
@@ -1208,6 +1224,7 @@ impl AiApp {
         // Note: The container (in render_main_panel) handles flex_1 for sizing
         // We use size_full() here to fill the bounded container
         div()
+            .id("messages-scroll-container")
             .flex()
             .flex_col()
             .p_3()
@@ -1221,7 +1238,8 @@ impl AiApp {
             )
             // Show streaming content if streaming
             .children(streaming_element)
-            .overflow_y_scrollbar()
+            .overflow_y_scroll()
+            .track_scroll(&self.messages_scroll_handle)
     }
 
     /// Render the main chat panel
