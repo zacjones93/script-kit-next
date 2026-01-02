@@ -1580,8 +1580,21 @@ fn main() {
                         match cmd {
                             ExternalCommand::Run { ref path } => {
                                 logging::log("STDIN", &format!("Executing script: {}", path));
-                                // Show and focus window first
+                                // Show and focus window - match hotkey handler setup for consistency
                                 script_kit_gpui::set_main_window_visible(true);
+                                
+                                // Position window on mouse display at eye-line (same as hotkey handler)
+                                platform::ensure_move_to_active_space();
+                                let window_size = gpui::size(px(750.), initial_window_height());
+                                let bounds = platform::calculate_eye_line_bounds_on_mouse_display(window_size);
+                                platform::move_first_window_to_bounds(&bounds);
+                                
+                                // Configure as floating panel on first show (same as hotkey handler)
+                                if !PANEL_CONFIGURED.load(std::sync::atomic::Ordering::SeqCst) {
+                                    platform::configure_as_floating_panel();
+                                    PANEL_CONFIGURED.store(true, std::sync::atomic::Ordering::SeqCst);
+                                }
+                                
                                 ctx.activate(true);
                                 window.activate_window();
                                 let focus_handle = view.focus_handle(ctx);
@@ -1592,7 +1605,21 @@ fn main() {
                             }
                             ExternalCommand::Show => {
                                 logging::log("STDIN", "Showing window");
+                                // Show and focus window - match hotkey handler setup for consistency
                                 script_kit_gpui::set_main_window_visible(true);
+                                
+                                // Position window on mouse display at eye-line (same as hotkey handler)
+                                platform::ensure_move_to_active_space();
+                                let window_size = gpui::size(px(750.), initial_window_height());
+                                let bounds = platform::calculate_eye_line_bounds_on_mouse_display(window_size);
+                                platform::move_first_window_to_bounds(&bounds);
+                                
+                                // Configure as floating panel on first show (same as hotkey handler)
+                                if !PANEL_CONFIGURED.load(std::sync::atomic::Ordering::SeqCst) {
+                                    platform::configure_as_floating_panel();
+                                    PANEL_CONFIGURED.store(true, std::sync::atomic::Ordering::SeqCst);
+                                }
+                                
                                 ctx.activate(true);
                                 window.activate_window();
                                 let focus_handle = view.focus_handle(ctx);
