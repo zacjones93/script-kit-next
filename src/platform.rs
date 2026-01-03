@@ -28,6 +28,48 @@ use objc::{class, msg_send, sel, sel_impl};
 use crate::window_manager;
 
 // ============================================================================
+// Application Activation Policy
+// ============================================================================
+
+/// Configure the app as an "accessory" application.
+///
+/// This is equivalent to setting `LSUIElement=true` in Info.plist, but done at runtime.
+/// Accessory apps:
+/// - Do NOT appear in the Dock
+/// - Do NOT take menu bar ownership when activated
+/// - Can still show windows that float above other apps
+///
+/// This is critical for window management actions (tile, maximize, etc.) because
+/// it allows us to query `menuBarOwningApplication` to find the previously active app.
+///
+/// # macOS Behavior
+///
+/// Sets NSApplicationActivationPolicyAccessory (value = 1) on the app.
+/// Must be called early in app startup, before any windows are shown.
+///
+/// # Other Platforms
+///
+/// No-op on non-macOS platforms.
+#[cfg(target_os = "macos")]
+pub fn configure_as_accessory_app() {
+    unsafe {
+        let app: id = NSApp();
+        // NSApplicationActivationPolicyAccessory = 1
+        // This makes the app not appear in Dock and not take menu bar ownership
+        let _: () = msg_send![app, setActivationPolicy: 1i64];
+        logging::log(
+            "PANEL",
+            "Configured app as accessory (no Dock icon, no menu bar ownership)",
+        );
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn configure_as_accessory_app() {
+    // No-op on non-macOS platforms
+}
+
+// ============================================================================
 // Space Management
 // ============================================================================
 

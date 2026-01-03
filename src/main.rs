@@ -672,6 +672,9 @@ struct ScriptListApp {
     was_window_focused: bool,
     // Show warning banner when bun is not available
     show_bun_warning: bool,
+    // Pending confirmation: when set, the entry with this ID is awaiting confirmation
+    // Used for dangerous actions like Shut Down, Restart, Log Out, Empty Trash
+    pending_confirmation: Option<String>,
     // Scroll stabilization: track last scrolled-to index for each scroll handle
     #[allow(dead_code)]
     last_scrolled_main: Option<usize>,
@@ -1234,6 +1237,12 @@ fn main() {
     Application::new().run(move |cx: &mut App| {
         logging::log("APP", "GPUI Application starting");
 
+        // Configure as accessory app FIRST, before any windows are created
+        // This is equivalent to LSUIElement=true in Info.plist:
+        // - No Dock icon
+        // - No menu bar ownership (critical for window actions to work)
+        platform::configure_as_accessory_app();
+
         // Register bundled JetBrains Mono font
         // This makes "JetBrains Mono" available as a font family for the editor
         register_bundled_fonts(cx);
@@ -1391,6 +1400,7 @@ fn main() {
                     });
                 } else {
                     logging::log("VISIBILITY", "Decision: SHOW");
+                    
                     script_kit_gpui::set_main_window_visible(true);
 
                     let _ = cx.update(move |cx: &mut gpui::App| {
