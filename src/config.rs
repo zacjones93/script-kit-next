@@ -31,6 +31,17 @@ pub const DEFAULT_FRECENCY_HALF_LIFE_DAYS: f64 = 7.0;
 pub const DEFAULT_FRECENCY_MAX_RECENT_ITEMS: usize = 10;
 pub const DEFAULT_FRECENCY_ENABLED: bool = true;
 
+/// Commands that require confirmation before execution by default.
+/// Users can override this behavior per-command in config.ts using `confirmationRequired`.
+pub const DEFAULT_CONFIRMATION_COMMANDS: &[&str] = &[
+    "builtin-shut-down",
+    "builtin-restart",
+    "builtin-log-out",
+    "builtin-empty-trash",
+    "builtin-sleep",
+    "builtin-test-confirmation", // Dev test item
+];
+
 /// Configuration for built-in features (clipboard history, app launcher, etc.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -175,6 +186,10 @@ pub struct CommandConfig {
     /// Whether this command should be hidden from the main menu
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hidden: Option<bool>,
+    /// Whether this command requires confirmation before execution.
+    /// Overrides the default behavior from DEFAULT_CONFIRMATION_COMMANDS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmation_required: Option<bool>,
 }
 
 /// Check if a string is a valid command ID format.
@@ -405,6 +420,23 @@ impl Config {
     pub fn get_command_shortcut(&self, command_id: &str) -> Option<&HotkeyConfig> {
         self.get_command_config(command_id)
             .and_then(|c| c.shortcut.as_ref())
+    }
+
+    /// Check if a command requires confirmation before execution.
+    ///
+    /// Returns true if:
+    /// - Command is in DEFAULT_CONFIRMATION_COMMANDS AND not explicitly disabled in config
+    /// - OR command has confirmationRequired: true in config
+    #[allow(dead_code)]
+    pub fn requires_confirmation(&self, command_id: &str) -> bool {
+        // Check if user has explicitly configured this command
+        if let Some(cmd_config) = self.get_command_config(command_id) {
+            if let Some(requires) = cmd_config.confirmation_required {
+                return requires;
+            }
+        }
+        // Fall back to defaults
+        DEFAULT_CONFIRMATION_COMMANDS.contains(&command_id)
     }
 }
 
@@ -1763,5 +1795,229 @@ mod tests {
             original.health_check_interval_ms,
             cloned.health_check_interval_ms
         );
+    }
+
+    // Confirmation required tests
+    #[test]
+    fn test_default_confirmation_commands_constant() {
+        // Verify the constant contains expected dangerous commands
+        assert!(DEFAULT_CONFIRMATION_COMMANDS.contains(&"builtin-shut-down"));
+        assert!(DEFAULT_CONFIRMATION_COMMANDS.contains(&"builtin-restart"));
+        assert!(DEFAULT_CONFIRMATION_COMMANDS.contains(&"builtin-log-out"));
+        assert!(DEFAULT_CONFIRMATION_COMMANDS.contains(&"builtin-empty-trash"));
+        assert!(DEFAULT_CONFIRMATION_COMMANDS.contains(&"builtin-sleep"));
+        assert!(DEFAULT_CONFIRMATION_COMMANDS.contains(&"builtin-test-confirmation"));
+    }
+
+    #[test]
+    fn test_requires_confirmation_default_commands() {
+        // Default commands should require confirmation
+        let config = Config::default();
+
+        assert!(config.requires_confirmation("builtin-shut-down"));
+        assert!(config.requires_confirmation("builtin-restart"));
+        assert!(config.requires_confirmation("builtin-log-out"));
+        assert!(config.requires_confirmation("builtin-empty-trash"));
+        assert!(config.requires_confirmation("builtin-sleep"));
+        assert!(config.requires_confirmation("builtin-test-confirmation"));
+    }
+
+    #[test]
+    fn test_requires_confirmation_non_dangerous_commands() {
+        // Non-dangerous commands should NOT require confirmation
+        let config = Config::default();
+
+        assert!(!config.requires_confirmation("builtin-clipboard-history"));
+        assert!(!config.requires_confirmation("builtin-app-launcher"));
+        assert!(!config.requires_confirmation("script/hello-world"));
+        assert!(!config.requires_confirmation("app/com.apple.Safari"));
+    }
+
+    #[test]
+    fn test_requires_confirmation_user_override_disable() {
+        // User can disable confirmation for a default dangerous command
+        let mut commands = HashMap::new();
+        commands.insert(
+            "builtin-shut-down".to_string(),
+            CommandConfig {
+                shortcut: None,
+                hidden: None,
+                confirmation_required: Some(false), // User explicitly disables
+            },
+        );
+
+        let config = Config {
+            hotkey: HotkeyConfig {
+                modifiers: vec!["meta".to_string()],
+                key: "Semicolon".to_string(),
+            },
+            bun_path: None,
+            editor: None,
+            padding: None,
+            editor_font_size: None,
+            terminal_font_size: None,
+            ui_scale: None,
+            built_ins: None,
+            process_limits: None,
+            clipboard_history_max_text_length: None,
+            frecency: None,
+            notes_hotkey: None,
+            ai_hotkey: None,
+            commands: Some(commands),
+        };
+
+        // Should NOT require confirmation because user disabled it
+        assert!(!config.requires_confirmation("builtin-shut-down"));
+        // Other default commands still require it
+        assert!(config.requires_confirmation("builtin-restart"));
+    }
+
+    #[test]
+    fn test_requires_confirmation_user_override_enable() {
+        // User can enable confirmation for a non-default command
+        let mut commands = HashMap::new();
+        commands.insert(
+            "script/dangerous-script".to_string(),
+            CommandConfig {
+                shortcut: None,
+                hidden: None,
+                confirmation_required: Some(true), // User explicitly enables
+            },
+        );
+
+        let config = Config {
+            hotkey: HotkeyConfig {
+                modifiers: vec!["meta".to_string()],
+                key: "Semicolon".to_string(),
+            },
+            bun_path: None,
+            editor: None,
+            padding: None,
+            editor_font_size: None,
+            terminal_font_size: None,
+            ui_scale: None,
+            built_ins: None,
+            process_limits: None,
+            clipboard_history_max_text_length: None,
+            frecency: None,
+            notes_hotkey: None,
+            ai_hotkey: None,
+            commands: Some(commands),
+        };
+
+        // Should require confirmation because user enabled it
+        assert!(config.requires_confirmation("script/dangerous-script"));
+        // Non-configured commands still use defaults
+        assert!(!config.requires_confirmation("script/safe-script"));
+    }
+
+    #[test]
+    fn test_command_config_confirmation_required_serialization() {
+        let cmd_config = CommandConfig {
+            shortcut: None,
+            hidden: None,
+            confirmation_required: Some(true),
+        };
+
+        let json = serde_json::to_string(&cmd_config).unwrap();
+
+        // Should use camelCase in JSON
+        assert!(json.contains("confirmationRequired"));
+        assert!(!json.contains("confirmation_required"));
+
+        let deserialized: CommandConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.confirmation_required, Some(true));
+    }
+
+    #[test]
+    fn test_command_config_confirmation_required_deserialization() {
+        let json = r#"{"confirmationRequired": false}"#;
+        let cmd_config: CommandConfig = serde_json::from_str(json).unwrap();
+
+        assert_eq!(cmd_config.confirmation_required, Some(false));
+        assert!(cmd_config.shortcut.is_none());
+        assert!(cmd_config.hidden.is_none());
+    }
+
+    #[test]
+    fn test_command_config_confirmation_required_skips_none() {
+        let cmd_config = CommandConfig {
+            shortcut: None,
+            hidden: None,
+            confirmation_required: None,
+        };
+
+        let json = serde_json::to_string(&cmd_config).unwrap();
+
+        // None values should not appear in JSON
+        assert!(!json.contains("confirmationRequired"));
+    }
+
+    #[test]
+    fn test_config_deserialization_with_confirmation_required() {
+        let json = r#"{
+            "hotkey": {
+                "modifiers": ["meta"],
+                "key": "Semicolon"
+            },
+            "commands": {
+                "builtin-shut-down": {
+                    "confirmationRequired": false
+                },
+                "script/my-script": {
+                    "confirmationRequired": true
+                }
+            }
+        }"#;
+
+        let config: Config = serde_json::from_str(json).unwrap();
+
+        // User disabled confirmation for shut-down
+        assert!(!config.requires_confirmation("builtin-shut-down"));
+        // User enabled confirmation for custom script
+        assert!(config.requires_confirmation("script/my-script"));
+        // Other default commands still require it
+        assert!(config.requires_confirmation("builtin-restart"));
+    }
+
+    #[test]
+    fn test_requires_confirmation_with_partial_command_config() {
+        // Command config exists but doesn't specify confirmation_required
+        // Should fall back to defaults
+        let mut commands = HashMap::new();
+        commands.insert(
+            "builtin-shut-down".to_string(),
+            CommandConfig {
+                shortcut: Some(HotkeyConfig {
+                    modifiers: vec!["meta".to_string()],
+                    key: "KeyX".to_string(),
+                }),
+                hidden: None,
+                confirmation_required: None, // Not specified
+            },
+        );
+
+        let config = Config {
+            hotkey: HotkeyConfig {
+                modifiers: vec!["meta".to_string()],
+                key: "Semicolon".to_string(),
+            },
+            bun_path: None,
+            editor: None,
+            padding: None,
+            editor_font_size: None,
+            terminal_font_size: None,
+            ui_scale: None,
+            built_ins: None,
+            process_limits: None,
+            clipboard_history_max_text_length: None,
+            frecency: None,
+            notes_hotkey: None,
+            ai_hotkey: None,
+            commands: Some(commands),
+        };
+
+        // Should still require confirmation (falls back to default)
+        assert!(config.requires_confirmation("builtin-shut-down"));
     }
 }

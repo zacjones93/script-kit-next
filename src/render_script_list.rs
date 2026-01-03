@@ -231,6 +231,15 @@ impl ScriptListApp {
                                             },
                                         );
 
+                                        // Check if this item requires confirmation and is pending
+                                        let pending_id = this.pending_confirmation.clone();
+                                        let is_pending_confirmation = match result {
+                                            scripts::SearchResult::BuiltIn(bm) => {
+                                                pending_id.as_ref() == Some(&bm.entry.id)
+                                            }
+                                            _ => false,
+                                        };
+
                                         // Dispatch to design-specific item renderer
                                         let item_element = render_design_item(
                                             current_design,
@@ -241,6 +250,37 @@ impl ScriptListApp {
                                             theme_colors,
                                         );
 
+                                        // Wrap with confirmation overlay if pending
+                                        let final_element = if is_pending_confirmation && is_selected {
+                                            // Create confirmation overlay
+                                            let warning_bg = rgb(0xB85C00); // Orange/warning background
+                                            let confirm_name = match result {
+                                                scripts::SearchResult::BuiltIn(bm) => {
+                                                    format!("⚠️ Confirm {}? (Enter)", bm.entry.name)
+                                                }
+                                                _ => "⚠️ Confirm? (Enter)".to_string(),
+                                            };
+                                            
+                                            div()
+                                                .w_full()
+                                                .h(px(LIST_ITEM_HEIGHT))
+                                                .flex()
+                                                .items_center()
+                                                .px(px(16.))
+                                                .bg(warning_bg)
+                                                .rounded_md()
+                                                .child(
+                                                    div()
+                                                        .text_color(gpui::white())
+                                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                        .text_size(px(14.))
+                                                        .child(confirm_name)
+                                                )
+                                                .into_any_element()
+                                        } else {
+                                            item_element
+                                        };
+
                                         div()
                                             .id(ElementId::NamedInteger(
                                                 "script-item".into(),
@@ -249,7 +289,7 @@ impl ScriptListApp {
                                             .h(px(LIST_ITEM_HEIGHT)) // Explicit 48px height
                                             .on_hover(hover_handler)
                                             .on_click(click_handler)
-                                            .child(item_element)
+                                            .child(final_element)
                                             .into_any_element()
                                     } else {
                                         // Fallback for missing result
@@ -539,7 +579,12 @@ impl ScriptListApp {
                         }
                     }
                     "escape" => {
-                        if !this.filter_text.is_empty() {
+                        // First check if we have a pending confirmation to clear
+                        if this.pending_confirmation.is_some() {
+                            logging::log("KEY", "ESC - clearing pending confirmation");
+                            this.pending_confirmation = None;
+                            cx.notify();
+                        } else if !this.filter_text.is_empty() {
                             // Clear filter first if there's text
                             this.clear_filter(window, cx);
                         } else {

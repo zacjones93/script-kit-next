@@ -212,6 +212,7 @@ pub fn force_quit_apps() -> Result<(), String> {
 /// Increase system volume
 ///
 /// Increases the system volume by approximately 6.25% (1/16th of max).
+#[allow(dead_code)]
 pub fn volume_up() -> Result<(), String> {
     info!("Increasing volume");
     run_applescript(r#"set volume output volume ((output volume of (get volume settings)) + 6.25)"#)
@@ -220,6 +221,7 @@ pub fn volume_up() -> Result<(), String> {
 /// Decrease system volume
 ///
 /// Decreases the system volume by approximately 6.25% (1/16th of max).
+#[allow(dead_code)]
 pub fn volume_down() -> Result<(), String> {
     info!("Decreasing volume");
     run_applescript(r#"set volume output volume ((output volume of (get volume settings)) - 6.25)"#)
@@ -240,7 +242,6 @@ pub fn volume_mute() -> Result<(), String> {
 ///
 /// # Arguments
 /// * `level` - Volume level from 0 to 100
-#[allow(dead_code)]
 pub fn set_volume(level: u8) -> Result<(), String> {
     let level = level.min(100);
     info!(level = level, "Setting volume");
@@ -273,6 +274,7 @@ pub fn is_muted() -> Result<bool, String> {
 /// Increase display brightness
 ///
 /// Simulates pressing the brightness up key.
+#[allow(dead_code)]
 pub fn brightness_up() -> Result<(), String> {
     info!("Increasing brightness");
     // Key code 144 is brightness up
@@ -286,6 +288,7 @@ pub fn brightness_up() -> Result<(), String> {
 /// Decrease display brightness
 ///
 /// Simulates pressing the brightness down key.
+#[allow(dead_code)]
 pub fn brightness_down() -> Result<(), String> {
     info!("Decreasing brightness");
     // Key code 145 is brightness down
@@ -294,6 +297,51 @@ pub fn brightness_down() -> Result<(), String> {
             key code 145
         end tell"#,
     )
+}
+
+/// Set display brightness to a specific level
+///
+/// Uses AppleScript to set brightness. Note that this requires
+/// the brightness scripting addition or may use key simulation
+/// to reach the target level.
+///
+/// # Arguments
+/// * `level` - Brightness level from 0 to 100
+pub fn set_brightness(level: u8) -> Result<(), String> {
+    let level = level.min(100);
+    info!(level = level, "Setting brightness");
+
+    // Try using the brightness command line tool if available
+    // This is the cleanest approach when the tool is installed
+    let result = std::process::Command::new("brightness")
+        .arg(format!("{:.2}", level as f32 / 100.0))
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() => {
+            debug!("Brightness set via brightness command");
+            Ok(())
+        }
+        _ => {
+            // Fallback: Try using AppleScript with System Events
+            // This sets approximate brightness by simulating key presses
+            debug!("brightness command not available, using key simulation");
+
+            // First, set to minimum by pressing brightness down many times
+            for _ in 0..16 {
+                let _ = run_applescript(r#"tell application "System Events" to key code 145"#);
+            }
+
+            // Then press brightness up the appropriate number of times
+            // 16 steps total, so level/6.25 gives us the number of presses
+            let presses = (level as f32 / 6.25).round() as u8;
+            for _ in 0..presses {
+                let _ = run_applescript(r#"tell application "System Events" to key code 144"#);
+            }
+
+            Ok(())
+        }
+    }
 }
 
 // ============================================================================

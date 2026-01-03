@@ -266,6 +266,8 @@ impl ScriptListApp {
             last_scrolled_design_gallery: None,
             // Show warning banner when bun is not available
             show_bun_warning: !bun_available,
+            // Pending confirmation for dangerous actions
+            pending_confirmation: None,
         };
 
         // Build initial alias/shortcut registries (conflicts logged, not shown via HUD on startup)
@@ -970,6 +972,11 @@ impl ScriptListApp {
         let new_text = self.gpui_input_state.read(cx).value().to_string();
         if new_text == self.filter_text {
             return;
+        }
+
+        // Clear pending confirmation when typing (user is changing context)
+        if self.pending_confirmation.is_some() {
+            self.pending_confirmation = None;
         }
 
         let previous_text = std::mem::replace(&mut self.filter_text, new_text.clone());

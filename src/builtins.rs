@@ -40,14 +40,24 @@ pub enum SystemActionType {
     Launchpad,
     ForceQuitApps,
 
-    // Volume controls
-    VolumeUp,
-    VolumeDown,
+    // Volume controls (preset levels)
+    Volume0,
+    Volume25,
+    Volume50,
+    Volume75,
+    Volume100,
     VolumeMute,
 
-    // Brightness controls
-    BrightnessUp,
-    BrightnessDown,
+    // Brightness controls (preset levels)
+    Brightness0,
+    Brightness25,
+    Brightness50,
+    Brightness75,
+    Brightness100,
+
+    // Dev/test actions (only available in debug builds)
+    #[cfg(debug_assertions)]
+    TestConfirmation,
 
     // System utilities
     ToggleDoNotDisturb,
@@ -337,24 +347,38 @@ pub fn get_builtin_entries(config: &BuiltInConfig) -> Vec<BuiltInEntry> {
     ));
     debug!("Added Notes built-in entry");
 
-    // Design Gallery is always available (developer tool)
-    entries.push(BuiltInEntry::new_with_icon(
-        "builtin-design-gallery",
-        "Design Gallery",
-        "Browse separator styles and icon variations",
-        vec![
-            "design",
-            "gallery",
-            "separator",
-            "icon",
-            "style",
-            "theme",
-            "variations",
-        ],
-        BuiltInFeature::DesignGallery,
-        "🎨",
-    ));
-    debug!("Added Design Gallery built-in entry");
+    // Design Gallery is only available in debug builds (developer tool)
+    #[cfg(debug_assertions)]
+    {
+        entries.push(BuiltInEntry::new_with_icon(
+            "builtin-design-gallery",
+            "Design Gallery",
+            "Browse separator styles and icon variations",
+            vec![
+                "design",
+                "gallery",
+                "separator",
+                "icon",
+                "style",
+                "theme",
+                "variations",
+            ],
+            BuiltInFeature::DesignGallery,
+            "🎨",
+        ));
+        debug!("Added Design Gallery built-in entry");
+
+        // Test Confirmation entry for testing confirmation UI
+        entries.push(BuiltInEntry::new_with_icon(
+            "builtin-test-confirmation",
+            "Test Confirmation",
+            "Test the confirmation dialog (dev only)",
+            vec!["test", "confirmation", "dev", "debug"],
+            BuiltInFeature::SystemAction(SystemActionType::TestConfirmation),
+            "🧪",
+        ));
+        debug!("Added Test Confirmation built-in entry");
+    }
 
     // =========================================================================
     // System Actions
@@ -461,23 +485,50 @@ pub fn get_builtin_entries(config: &BuiltInConfig) -> Vec<BuiltInEntry> {
         "⚠️",
     ));
 
-    // Volume controls
+    // Volume controls (preset levels)
     entries.push(BuiltInEntry::new_with_icon(
-        "builtin-volume-up",
-        "Volume Up",
-        "Increase system volume",
-        vec!["volume", "up", "louder", "sound", "audio"],
-        BuiltInFeature::SystemAction(SystemActionType::VolumeUp),
-        "🔊",
+        "builtin-volume-0",
+        "Volume 0%",
+        "Set system volume to 0% (mute)",
+        vec!["volume", "mute", "0", "percent", "zero", "off"],
+        BuiltInFeature::SystemAction(SystemActionType::Volume0),
+        "🔇",
     ));
 
     entries.push(BuiltInEntry::new_with_icon(
-        "builtin-volume-down",
-        "Volume Down",
-        "Decrease system volume",
-        vec!["volume", "down", "quieter", "sound", "audio"],
-        BuiltInFeature::SystemAction(SystemActionType::VolumeDown),
+        "builtin-volume-25",
+        "Volume 25%",
+        "Set system volume to 25%",
+        vec!["volume", "25", "percent", "low", "quiet"],
+        BuiltInFeature::SystemAction(SystemActionType::Volume25),
+        "🔈",
+    ));
+
+    entries.push(BuiltInEntry::new_with_icon(
+        "builtin-volume-50",
+        "Volume 50%",
+        "Set system volume to 50%",
+        vec!["volume", "50", "percent", "half", "medium"],
+        BuiltInFeature::SystemAction(SystemActionType::Volume50),
         "🔉",
+    ));
+
+    entries.push(BuiltInEntry::new_with_icon(
+        "builtin-volume-75",
+        "Volume 75%",
+        "Set system volume to 75%",
+        vec!["volume", "75", "percent", "high", "loud"],
+        BuiltInFeature::SystemAction(SystemActionType::Volume75),
+        "🔉",
+    ));
+
+    entries.push(BuiltInEntry::new_with_icon(
+        "builtin-volume-100",
+        "Volume 100%",
+        "Set system volume to 100% (max)",
+        vec!["volume", "100", "percent", "max", "full"],
+        BuiltInFeature::SystemAction(SystemActionType::Volume100),
+        "🔊",
     ));
 
     entries.push(BuiltInEntry::new_with_icon(
@@ -489,23 +540,90 @@ pub fn get_builtin_entries(config: &BuiltInConfig) -> Vec<BuiltInEntry> {
         "🔇",
     ));
 
-    // Brightness controls
+    // Brightness controls (preset levels)
     entries.push(BuiltInEntry::new_with_icon(
-        "builtin-brightness-up",
-        "Brightness Up",
-        "Increase display brightness",
-        vec!["brightness", "up", "brighter", "display", "screen"],
-        BuiltInFeature::SystemAction(SystemActionType::BrightnessUp),
-        "☀️",
+        "builtin-brightness-0",
+        "Brightness 0%",
+        "Set display brightness to 0% (dark)",
+        vec![
+            "brightness",
+            "0",
+            "percent",
+            "dark",
+            "off",
+            "display",
+            "screen",
+        ],
+        BuiltInFeature::SystemAction(SystemActionType::Brightness0),
+        "🌑",
     ));
 
     entries.push(BuiltInEntry::new_with_icon(
-        "builtin-brightness-down",
-        "Brightness Down",
-        "Decrease display brightness",
-        vec!["brightness", "down", "dimmer", "display", "screen"],
-        BuiltInFeature::SystemAction(SystemActionType::BrightnessDown),
-        "🔅",
+        "builtin-brightness-25",
+        "Brightness 25%",
+        "Set display brightness to 25%",
+        vec![
+            "brightness",
+            "25",
+            "percent",
+            "dim",
+            "low",
+            "display",
+            "screen",
+        ],
+        BuiltInFeature::SystemAction(SystemActionType::Brightness25),
+        "🌘",
+    ));
+
+    entries.push(BuiltInEntry::new_with_icon(
+        "builtin-brightness-50",
+        "Brightness 50%",
+        "Set display brightness to 50%",
+        vec![
+            "brightness",
+            "50",
+            "percent",
+            "half",
+            "medium",
+            "display",
+            "screen",
+        ],
+        BuiltInFeature::SystemAction(SystemActionType::Brightness50),
+        "🌗",
+    ));
+
+    entries.push(BuiltInEntry::new_with_icon(
+        "builtin-brightness-75",
+        "Brightness 75%",
+        "Set display brightness to 75%",
+        vec![
+            "brightness",
+            "75",
+            "percent",
+            "bright",
+            "high",
+            "display",
+            "screen",
+        ],
+        BuiltInFeature::SystemAction(SystemActionType::Brightness75),
+        "🌖",
+    ));
+
+    entries.push(BuiltInEntry::new_with_icon(
+        "builtin-brightness-100",
+        "Brightness 100%",
+        "Set display brightness to 100% (max)",
+        vec![
+            "brightness",
+            "100",
+            "percent",
+            "max",
+            "full",
+            "display",
+            "screen",
+        ],
+        BuiltInFeature::SystemAction(SystemActionType::Brightness100),
+        "☀️",
     ));
 
     // System utilities
@@ -1049,8 +1167,14 @@ mod tests {
         assert!(entries.iter().any(|e| e.id == "builtin-empty-trash"));
         assert!(entries.iter().any(|e| e.id == "builtin-lock-screen"));
         assert!(entries.iter().any(|e| e.id == "builtin-toggle-dark-mode"));
-        assert!(entries.iter().any(|e| e.id == "builtin-volume-up"));
-        assert!(entries.iter().any(|e| e.id == "builtin-brightness-up"));
+        // Volume presets
+        assert!(entries.iter().any(|e| e.id == "builtin-volume-0"));
+        assert!(entries.iter().any(|e| e.id == "builtin-volume-50"));
+        assert!(entries.iter().any(|e| e.id == "builtin-volume-100"));
+        // Brightness presets
+        assert!(entries.iter().any(|e| e.id == "builtin-brightness-0"));
+        assert!(entries.iter().any(|e| e.id == "builtin-brightness-50"));
+        assert!(entries.iter().any(|e| e.id == "builtin-brightness-100"));
         assert!(entries.iter().any(|e| e.id == "builtin-system-preferences"));
     }
 
