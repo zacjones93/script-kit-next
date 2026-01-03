@@ -32,6 +32,7 @@ pub mod theme;
 pub mod toast_manager;
 #[cfg(not(test))]
 pub mod tray;
+pub mod warning_banner;
 pub mod utils;
 pub mod window_manager;
 pub mod window_resize;
@@ -40,6 +41,21 @@ pub mod window_resize;
 pub mod clipboard_history;
 pub mod file_search;
 pub mod window_control;
+
+// Menu bar reader - macOS Accessibility API for reading app menus
+// Provides get_frontmost_menu_bar() with recursive parsing up to 3 levels
+#[cfg(target_os = "macos")]
+pub mod menu_bar;
+
+// Menu executor - Execute menu actions via Accessibility API
+// Navigates AX hierarchy and performs AXPress on menu items
+#[cfg(target_os = "macos")]
+pub mod menu_executor;
+
+// Menu cache - SQLite-backed menu bar data caching
+// Caches application menu hierarchies by bundle_id to avoid expensive rescans
+#[cfg(target_os = "macos")]
+pub mod menu_cache;
 
 // Built-in features registry
 pub mod app_launcher;
