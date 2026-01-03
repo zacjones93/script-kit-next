@@ -61,6 +61,8 @@ cargo check && cargo clippy --all-targets -- -D warnings && cargo test
 | **SDK Preload** | Test scripts import `../../scripts/kit-sdk`; runtime uses embedded SDK extracted to `~/.kenv/sdk/` |
 | **Arrow Key Names** | ALWAYS match BOTH: `"up" \| "arrowup"`, `"down" \| "arrowdown"`, `"left" \| "arrowleft"`, `"right" \| "arrowright"` |
 | **Visual Testing** | Use stdin JSON protocol + `captureScreenshot()` SDK function, save to `.test-screenshots/`, then READ the PNG file to analyze |
+| **Grid Overlay** | Use `{"type": "showGrid", "showBounds": true}` stdin command for component bounds visualization |
+| **Layout Info** | Use `getLayoutInfo()` SDK function to get component tree with bounds and computed styles |
 | **AI Log Mode** | Set `SCRIPT_KIT_AI_LOG=1` for token-efficient compact logs (see below) |
 | **Config Settings** | Font sizes and padding are configurable via `~/.kenv/config.ts` - use `config.get_*()` helpers |
 | **Notes Window** | Separate floating window in `src/notes/`; test via `{"type": "openNotes"}` stdin command |
@@ -232,7 +234,13 @@ echo '{"type": "run", "path": "'$(pwd)'/tests/smoke/test-editor-height.ts"}' | S
 {"type": "show"}
 {"type": "hide"}
 {"type": "setFilter", "text": "search term"}
+{"type": "showGrid", "showBounds": true}
+{"type": "hideGrid"}
+{"type": "openNotes"}
+{"type": "openAi"}
 ```
+
+See **Visual Debugging Tools** section below for detailed grid overlay options.
 
 ### Test Scripts Location
 
@@ -415,6 +423,157 @@ writeFileSync(join(dir, 'screenshot.png'), Buffer.from(screenshot.data, 'base64'
 - System tools capture the entire desktop (privacy/security issue)
 - Cross-platform: works on macOS, Windows, and Linux
 - No temp files: data returned directly as base64 PNG
+
+### Visual Debugging Tools
+
+The app includes powerful visual debugging tools for understanding layout, spacing, and component positioning. These are essential for debugging UI issues that aren't visible in logs.
+
+#### Grid Overlay (stdin command)
+
+The grid overlay renders on top of the UI to visualize:
+- **Component bounds** - Colored boxes around each component
+- **Grid lines** - 8px grid for checking alignment
+- **Alignment guides** - Lines showing when components share edges
+- **Box model** - Padding/margin visualization (CSS DevTools style)
+- **Dimensions** - Component sizes in labels (e.g., "Header (500x45)")
+
+**Enable via stdin:**
+```bash
+# Basic - show component bounds
+echo '{"type": "showGrid", "showBounds": true}' | ./target/debug/script-kit-gpui
+
+# Full debugging - all features
+echo '{"type": "showGrid", "showBounds": true, "showBoxModel": true, "showAlignmentGuides": true, "showDimensions": true}' | ./target/debug/script-kit-gpui
+
+# Hide the overlay
+echo '{"type": "hideGrid"}' | ./target/debug/script-kit-gpui
+```
+
+**ShowGrid options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `gridSize` | number | 8 | Grid line spacing in pixels |
+| `showBounds` | boolean | false | Show component bounding boxes |
+| `showBoxModel` | boolean | false | Show padding (green) and margin (orange) |
+| `showAlignmentGuides` | boolean | false | Show dashed lines for aligned edges |
+| `showDimensions` | boolean | false | Include width x height in labels |
+| `depth` | string | "prompts" | "prompts", "all", or specific component names |
+
+**Color coding for component types:**
+- 🔴 Red: Prompts (ArgPrompt, DivPrompt, EditorPrompt)
+- 🔵 Teal: Inputs (search box, text fields)
+- 🟡 Yellow: Buttons
+- 🟢 Mint: Lists (script list, choice list)
+- 🟣 Plum: Headers
+- 🔵 Sky blue: Containers
+
+**Example workflow for debugging layout:**
+```bash
+# 1. Run your script with the grid overlay enabled
+(echo '{"type": "showGrid", "showBounds": true, "showDimensions": true}'; echo '{"type": "run", "path": "'$(pwd)'/tests/smoke/test-my-layout.ts"}') | SCRIPT_KIT_AI_LOG=1 ./target/debug/script-kit-gpui 2>&1
+```
+
+**Environment variable alternative:**
+```bash
+# Enable grid overlay via env var (useful for persistent debugging)
+SCRIPT_KIT_DEBUG_GRID=1 ./target/debug/script-kit-gpui
+```
+
+#### getLayoutInfo() SDK Function
+
+For programmatic layout inspection, use the `getLayoutInfo()` SDK function. It returns a complete component tree with bounds and computed styles.
+
+**Usage in test scripts:**
+```typescript
+import '../../scripts/kit-sdk';
+
+// Display some UI
+await div(`<div class="p-4">Test content</div>`);
+await new Promise(r => setTimeout(r, 500));
+
+// Get layout information
+const layout = await getLayoutInfo();
+
+console.error(`Window: ${layout.windowWidth}x${layout.windowHeight}`);
+console.error(`Prompt type: ${layout.promptType}`);
+
+for (const component of layout.components) {
+  console.error(`${component.name}: ${component.bounds.width}x${component.bounds.height} at (${component.bounds.x}, ${component.bounds.y})`);
+  
+  if (component.boxModel?.padding) {
+    const p = component.boxModel.padding;
+    console.error(`  padding: ${p.top} ${p.right} ${p.bottom} ${p.left}`);
+  }
+  
+  if (component.flex) {
+    console.error(`  flex: direction=${component.flex.direction}, grow=${component.flex.grow}`);
+  }
+}
+```
+
+**LayoutInfo structure:**
+```typescript
+interface LayoutInfo {
+  windowWidth: number;
+  windowHeight: number;
+  promptType: string;  // "arg", "div", "editor", "mainMenu", etc.
+  components: LayoutComponentInfo[];
+  timestamp: string;   // ISO 8601
+}
+
+interface LayoutComponentInfo {
+  name: string;
+  type: "prompt" | "input" | "button" | "list" | "listItem" | "header" | "container" | "panel" | "other";
+  bounds: { x: number; y: number; width: number; height: number };
+  boxModel?: {
+    padding?: { top: number; right: number; bottom: number; left: number };
+    margin?: { top: number; right: number; bottom: number; left: number };
+    gap?: number;
+  };
+  flex?: {
+    direction?: "row" | "column";
+    grow?: number;
+    shrink?: number;
+    basis?: string;
+    alignItems?: string;
+    justifyContent?: string;
+  };
+  depth: number;       // 0 = root, 1 = child of root, etc.
+  parent?: string;     // Parent component name
+  children: string[];  // Child component names
+  explanation?: string; // Human-readable explanation of sizing
+}
+```
+
+**Combining with screenshots:**
+```typescript
+import '../../scripts/kit-sdk';
+import { writeFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
+
+// Set up UI
+await div(`<div class="p-4 bg-blue-500">Content</div>`);
+await new Promise(r => setTimeout(r, 500));
+
+// Get both layout info AND screenshot
+const [layout, screenshot] = await Promise.all([
+  getLayoutInfo(),
+  captureScreenshot()
+]);
+
+// Log layout details
+console.error(`Layout: ${layout.components.length} components`);
+for (const c of layout.components) {
+  console.error(`  ${c.name}: ${c.bounds.width}x${c.bounds.height}`);
+}
+
+// Save screenshot for visual verification
+const dir = join(process.cwd(), '.test-screenshots');
+mkdirSync(dir, { recursive: true });
+writeFileSync(join(dir, 'debug-layout.png'), Buffer.from(screenshot.data, 'base64'));
+console.error(`[SCREENSHOT] ${join(dir, 'debug-layout.png')}`);
+```
 
 ### Anti-Patterns
 
