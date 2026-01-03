@@ -2331,7 +2331,7 @@ fn test_mixed_content_search() {
 // ============================================
 
 fn create_test_builtins() -> Vec<BuiltInEntry> {
-    use crate::builtins::BuiltInFeature;
+    use crate::builtins::{BuiltInFeature, BuiltInGroup};
     vec![
         BuiltInEntry {
             id: "builtin-clipboard-history".to_string(),
@@ -2345,6 +2345,7 @@ fn create_test_builtins() -> Vec<BuiltInEntry> {
             ],
             feature: BuiltInFeature::ClipboardHistory,
             icon: Some("📋".to_string()),
+            group: BuiltInGroup::Core,
         },
         BuiltInEntry {
             id: "builtin-app-launcher".to_string(),
@@ -2358,6 +2359,7 @@ fn create_test_builtins() -> Vec<BuiltInEntry> {
             ],
             feature: BuiltInFeature::AppLauncher,
             icon: Some("🚀".to_string()),
+            group: BuiltInGroup::Core,
         },
     ]
 }
@@ -2438,7 +2440,7 @@ fn test_fuzzy_search_builtins_no_match() {
 
 #[test]
 fn test_builtin_match_struct() {
-    use crate::builtins::BuiltInFeature;
+    use crate::builtins::{BuiltInFeature, BuiltInGroup};
 
     let entry = BuiltInEntry {
         id: "test".to_string(),
@@ -2447,6 +2449,7 @@ fn test_builtin_match_struct() {
         keywords: vec!["test".to_string()],
         feature: BuiltInFeature::ClipboardHistory,
         icon: None,
+        group: BuiltInGroup::Core,
     };
 
     let builtin_match = BuiltInMatch {
@@ -2460,7 +2463,7 @@ fn test_builtin_match_struct() {
 
 #[test]
 fn test_search_result_builtin_variant() {
-    use crate::builtins::BuiltInFeature;
+    use crate::builtins::{BuiltInFeature, BuiltInGroup};
 
     let entry = BuiltInEntry {
         id: "test".to_string(),
@@ -2469,6 +2472,7 @@ fn test_search_result_builtin_variant() {
         keywords: vec!["test".to_string()],
         feature: BuiltInFeature::AppLauncher,
         icon: Some("🚀".to_string()),
+        group: BuiltInGroup::Core,
     };
 
     let result = SearchResult::BuiltIn(BuiltInMatch { entry, score: 75 });
@@ -4008,6 +4012,7 @@ fn bench_get_grouped_results_repeated_calls() {
             keywords: vec![format!("keyword{}", i)],
             feature: crate::builtins::BuiltInFeature::ClipboardHistory,
             icon: None,
+            group: crate::builtins::BuiltInGroup::Core,
         })
         .collect();
 

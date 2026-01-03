@@ -832,6 +832,61 @@ pub enum Message {
         /// Current input/filter text at time of trigger
         input: String,
     },
+
+    // ============================================================
+    // MENU BAR INTEGRATION
+    // ============================================================
+    /// Request menu bar items from the frontmost app or a specific app
+    ///
+    /// SDK sends this to get the menu bar hierarchy from an application.
+    /// If bundle_id is None, uses the frontmost application.
+    #[serde(rename = "getMenuBar")]
+    GetMenuBar {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        /// Optional bundle ID to get menu bar from a specific app
+        #[serde(rename = "bundleId", skip_serializing_if = "Option::is_none")]
+        bundle_id: Option<String>,
+    },
+
+    /// Response with menu bar items
+    ///
+    /// App sends this back to SDK with the menu bar hierarchy.
+    #[serde(rename = "menuBarResult")]
+    MenuBarResult {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        /// The menu bar items (hierarchical)
+        items: Vec<super::types::MenuBarItemData>,
+    },
+
+    /// Execute a menu action by path
+    ///
+    /// SDK sends this to click a menu item in a specific application.
+    #[serde(rename = "executeMenuAction")]
+    ExecuteMenuAction {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        /// Bundle ID of the target application
+        #[serde(rename = "bundleId")]
+        bundle_id: String,
+        /// Path of menu titles to the target item (e.g., ["File", "New", "Window"])
+        path: Vec<String>,
+    },
+
+    /// Result of a menu action execution
+    ///
+    /// App sends this back to SDK after attempting to execute a menu action.
+    #[serde(rename = "menuActionResult")]
+    MenuActionResult {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        /// Whether the action succeeded
+        success: bool,
+        /// Error message if failed
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
 }
 
 impl Message {
@@ -996,7 +1051,12 @@ impl Message {
             | Message::ScriptletResult { request_id, .. }
             // Test infrastructure
             | Message::SimulateClick { request_id, .. }
-            | Message::SimulateClickResult { request_id, .. } => Some(request_id),
+            | Message::SimulateClickResult { request_id, .. }
+            // Menu bar
+            | Message::GetMenuBar { request_id, .. }
+            | Message::MenuBarResult { request_id, .. }
+            | Message::ExecuteMenuAction { request_id, .. }
+            | Message::MenuActionResult { request_id, .. } => Some(request_id),
             // All other messages don't have request IDs
             _ => None,
         }
@@ -1858,5 +1918,49 @@ impl Message {
     /// Create a HideGrid message
     pub fn hide_grid() -> Self {
         Message::HideGrid
+    }
+
+    // ============================================================
+    // Constructor methods for menu bar integration
+    // ============================================================
+
+    /// Create a GetMenuBar request message
+    pub fn get_menu_bar(request_id: String, bundle_id: Option<String>) -> Self {
+        Message::GetMenuBar {
+            request_id,
+            bundle_id,
+        }
+    }
+
+    /// Create a MenuBarResult response message
+    pub fn menu_bar_result(request_id: String, items: Vec<super::types::MenuBarItemData>) -> Self {
+        Message::MenuBarResult { request_id, items }
+    }
+
+    /// Create an ExecuteMenuAction request message
+    pub fn execute_menu_action(request_id: String, bundle_id: String, path: Vec<String>) -> Self {
+        Message::ExecuteMenuAction {
+            request_id,
+            bundle_id,
+            path,
+        }
+    }
+
+    /// Create a successful MenuActionResult response message
+    pub fn menu_action_success(request_id: String) -> Self {
+        Message::MenuActionResult {
+            request_id,
+            success: true,
+            error: None,
+        }
+    }
+
+    /// Create a failed MenuActionResult response message
+    pub fn menu_action_error(request_id: String, error: String) -> Self {
+        Message::MenuActionResult {
+            request_id,
+            success: false,
+            error: Some(error),
+        }
     }
 }

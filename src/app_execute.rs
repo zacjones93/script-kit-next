@@ -145,6 +145,55 @@ impl ScriptListApp {
                     cx.notify();
                 }
             }
+            builtins::BuiltInFeature::MenuBarAction(action) => {
+                logging::log(
+                    "EXEC",
+                    &format!(
+                        "Executing menu bar action: {} -> {}",
+                        action.bundle_id,
+                        action.menu_path.join(" → ")
+                    ),
+                );
+                // Execute menu action via accessibility API
+                #[cfg(target_os = "macos")]
+                {
+                    match script_kit_gpui::menu_executor::execute_menu_action(
+                        &action.bundle_id,
+                        &action.menu_path,
+                    ) {
+                        Ok(()) => {
+                            logging::log("EXEC", "Menu action executed successfully");
+                            // Hide window and set reset flag
+                            script_kit_gpui::set_main_window_visible(false);
+                            NEEDS_RESET.store(true, Ordering::SeqCst);
+                            cx.hide();
+                        }
+                        Err(e) => {
+                            logging::log("ERROR", &format!("Menu action failed: {}", e));
+                            self.toast_manager.push(
+                                components::toast::Toast::error(
+                                    format!("Menu action failed: {}", e),
+                                    &self.theme,
+                                )
+                                .duration_ms(Some(5000)),
+                            );
+                            cx.notify();
+                        }
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    logging::log("WARN", "Menu bar actions only supported on macOS");
+                    self.toast_manager.push(
+                        components::toast::Toast::warning(
+                            "Menu bar actions are only supported on macOS",
+                            &self.theme,
+                        )
+                        .duration_ms(Some(3000)),
+                    );
+                    cx.notify();
+                }
+            }
         }
     }
 

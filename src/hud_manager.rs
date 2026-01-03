@@ -14,6 +14,7 @@ use gpui::{
 };
 use parking_lot::Mutex;
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -32,6 +33,62 @@ const MAX_SIMULTANEOUS_HUDS: usize = 3;
 const HUD_WIDTH: f32 = 200.0;
 const HUD_HEIGHT: f32 = 36.0;
 
+/// HUD with action button dimensions (wider to fit button)
+#[allow(dead_code)]
+const HUD_ACTION_WIDTH: f32 = 300.0;
+#[allow(dead_code)]
+const HUD_ACTION_HEIGHT: f32 = 40.0;
+
+// =============================================================================
+// HUD Actions - Clickable actions for HUD notifications
+// =============================================================================
+
+/// Action types that can be triggered from a HUD button click
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub enum HudAction {
+    /// Open a file in the configured editor
+    OpenFile(PathBuf),
+    /// Open a URL in the default browser
+    OpenUrl(String),
+    /// Run a shell command
+    RunCommand(String),
+}
+
+impl HudAction {
+    /// Execute the action
+    pub fn execute(&self, editor: Option<&str>) {
+        match self {
+            HudAction::OpenFile(path) => {
+                let editor_cmd = editor.unwrap_or("code");
+                logging::log(
+                    "HUD",
+                    &format!("Opening file {:?} with editor: {}", path, editor_cmd),
+                );
+                match std::process::Command::new(editor_cmd).arg(path).spawn() {
+                    Ok(_) => logging::log("HUD", &format!("Opened file: {:?}", path)),
+                    Err(e) => logging::log("HUD", &format!("Failed to open file: {}", e)),
+                }
+            }
+            HudAction::OpenUrl(url) => {
+                logging::log("HUD", &format!("Opening URL: {}", url));
+                if let Err(e) = open::that(url) {
+                    logging::log("HUD", &format!("Failed to open URL: {}", e));
+                }
+            }
+            HudAction::RunCommand(cmd) => {
+                logging::log("HUD", &format!("Running command: {}", cmd));
+                let parts: Vec<&str> = cmd.split_whitespace().collect();
+                if let Some((program, args)) = parts.split_first() {
+                    if let Err(e) = std::process::Command::new(program).args(args).spawn() {
+                        logging::log("HUD", &format!("Failed to run command: {}", e));
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// A single HUD notification
 #[derive(Clone)]
 pub struct HudNotification {
@@ -39,21 +96,59 @@ pub struct HudNotification {
     pub duration_ms: u64,
     #[allow(dead_code)]
     pub created_at: Instant,
+    /// Optional label for action button (e.g., "Open Logs", "View")
+    #[allow(dead_code)]
+    pub action_label: Option<String>,
+    /// Optional action to execute when button is clicked
+    #[allow(dead_code)]
+    pub action: Option<HudAction>,
+}
+
+impl HudNotification {
+    /// Check if this notification has an action button
+    #[allow(dead_code)]
+    pub fn has_action(&self) -> bool {
+        self.action.is_some() && self.action_label.is_some()
+    }
 }
 
 /// The visual component rendered inside each HUD window
 struct HudView {
     text: String,
+    #[allow(dead_code)]
+    action_label: Option<String>,
+    #[allow(dead_code)]
+    action: Option<HudAction>,
 }
 
 impl HudView {
     fn new(text: String) -> Self {
-        Self { text }
+        Self {
+            text,
+            action_label: None,
+            action: None,
+        }
+    }
+
+    #[allow(dead_code)]
+    fn with_action(text: String, action_label: String, action: HudAction) -> Self {
+        Self {
+            text,
+            action_label: Some(action_label),
+            action: Some(action),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn has_action(&self) -> bool {
+        self.action.is_some() && self.action_label.is_some()
     }
 }
 
 impl Render for HudView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let has_action = self.has_action();
+
         // HUD pill styling: matches main window theme, minimal and clean
         // Similar to Raycast's HUD - simple, elegant, non-intrusive
         div()
@@ -62,21 +157,50 @@ impl Render for HudView {
             .h_full()
             .flex()
             .items_center()
-            .justify_center()
+            .justify_between()
             .px(px(16.))
             .py(px(8.))
+            .gap(px(12.))
             // Use theme-matching dark background (0x1e1e1e with full opacity)
             .bg(rgb(0x1e1e1e))
             .rounded(px(8.)) // Rounded corners matching main window
             // Text styling - system font, smaller size, white text
             .child(
                 div()
+                    .flex_1()
                     .text_sm()
                     .text_color(rgb(0xFFFFFF))
                     .overflow_hidden()
                     .text_ellipsis()
                     .child(self.text.clone()),
             )
+            // Action button (only if action is present)
+            .when(has_action, |el| {
+                let label = self.action_label.clone().unwrap_or_default();
+                let action = self.action.clone();
+                el.child(
+                    div()
+                        .id("hud-action-button")
+                        .px(px(10.))
+                        .py(px(4.))
+                        .bg(rgb(0x0078d4)) // Accent blue
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(rgb(0x1084d8))) // Lighter on hover
+                        .active(|s| s.bg(rgb(0x006cbe))) // Darker on press
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(0xFFFFFF))
+                                .child(label),
+                        )
+                        .on_click(cx.listener(move |_this, _event, _window, _cx| {
+                            if let Some(ref action) = action {
+                                action.execute(None); // TODO: Get editor from config
+                            }
+                        })),
+                )
+            })
     }
 }
 
@@ -151,6 +275,8 @@ pub fn show_hud(text: String, duration_ms: Option<u64>, cx: &mut App) {
             text,
             duration_ms: duration,
             created_at: Instant::now(),
+            action_label: None,
+            action: None,
         });
         return;
     }
@@ -235,6 +361,145 @@ pub fn show_hud(text: String, duration_ms: Option<u64>, cx: &mut App) {
         }
         Err(e) => {
             logging::log("HUD", &format!("Failed to create HUD window: {:?}", e));
+        }
+    }
+}
+
+/// Show a HUD notification with a clickable action button
+///
+/// This creates a HUD with a button that executes an action when clicked.
+/// The HUD is wider to accommodate the button.
+///
+/// # Arguments
+/// * `text` - The message to display
+/// * `duration_ms` - Optional duration in milliseconds (default: 3000ms for action HUDs)
+/// * `action_label` - Label for the action button (e.g., "Open Logs")
+/// * `action` - The action to execute when the button is clicked
+/// * `cx` - GPUI App context
+#[allow(dead_code)]
+pub fn show_hud_with_action(
+    text: String,
+    duration_ms: Option<u64>,
+    action_label: String,
+    action: HudAction,
+    cx: &mut App,
+) {
+    // Action HUDs have longer default duration (3s) since user might click
+    let duration = duration_ms.unwrap_or(3000);
+
+    logging::log(
+        "HUD",
+        &format!(
+            "Showing HUD with action: '{}' [{}] for {}ms",
+            text, action_label, duration
+        ),
+    );
+
+    // Check if we can show immediately or need to queue
+    let should_queue = {
+        let manager = get_hud_manager();
+        let state = manager.lock();
+        state.active_huds.len() >= MAX_SIMULTANEOUS_HUDS
+    };
+
+    if should_queue {
+        logging::log("HUD", "Max HUDs reached, queueing action HUD");
+        let manager = get_hud_manager();
+        let mut state = manager.lock();
+        state.pending_queue.push_back(HudNotification {
+            text,
+            duration_ms: duration,
+            created_at: Instant::now(),
+            action_label: Some(action_label),
+            action: Some(action),
+        });
+        return;
+    }
+
+    // Calculate position - bottom center of screen with mouse
+    let (hud_x, hud_y) = calculate_hud_position(cx);
+
+    // Calculate vertical offset for stacking
+    let stack_offset = {
+        let manager = get_hud_manager();
+        let state = manager.lock();
+        state.active_huds.len() as f32 * HUD_STACK_GAP
+    };
+
+    // Use wider dimensions for action HUDs
+    let hud_width: Pixels = px(HUD_ACTION_WIDTH);
+    let hud_height: Pixels = px(HUD_ACTION_HEIGHT);
+
+    // Adjust x position for wider HUD
+    let adjusted_x = hud_x - (HUD_ACTION_WIDTH - HUD_WIDTH) / 2.0;
+
+    let bounds = gpui::Bounds {
+        origin: point(px(adjusted_x), px(hud_y - stack_offset)),
+        size: size(hud_width, hud_height),
+    };
+
+    let text_for_log = text.clone();
+    let expected_bounds = bounds;
+
+    // Create the HUD window with action button
+    let window_result = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: None,
+            is_movable: false,
+            window_background: WindowBackgroundAppearance::Transparent,
+            focus: false, // Don't steal focus
+            show: true,   // Show immediately
+            ..Default::default()
+        },
+        |_, cx| cx.new(|_| HudView::with_action(text, action_label, action)),
+    );
+
+    match window_result {
+        Ok(window_handle) => {
+            // Configure the window as a floating overlay
+            configure_hud_window_by_bounds(expected_bounds);
+
+            // Clone window handle for the cleanup timer
+            let window_for_cleanup = window_handle;
+
+            // Track the active HUD
+            {
+                let manager = get_hud_manager();
+                let mut state = manager.lock();
+                state.active_huds.push(ActiveHud {
+                    window: window_handle,
+                    created_at: Instant::now(),
+                    duration_ms: duration,
+                });
+            }
+
+            // Schedule cleanup after duration
+            let duration_duration = Duration::from_millis(duration);
+            let cleanup_bounds = expected_bounds;
+            cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+                Timer::after(duration_duration).await;
+
+                // Close the NSWindow directly
+                close_hud_window_by_bounds(cleanup_bounds);
+
+                // Then clean up the tracking state
+                let _ = cx.update(|cx| {
+                    cleanup_expired_huds(cx);
+                });
+
+                // Drop the window handle reference
+                let _ = window_for_cleanup;
+            })
+            .detach();
+
+            logging::log(
+                "HUD",
+                &format!("Action HUD window created for: '{}'", text_for_log),
+            );
+        }
+        Err(e) => {
+            logging::log("HUD", &format!("Failed to create action HUD window: {:?}", e));
         }
     }
 }
@@ -460,6 +725,8 @@ mod tests {
             text: "Test".to_string(),
             duration_ms: 2000,
             created_at: Instant::now(),
+            action_label: None,
+            action: None,
         };
         assert_eq!(notif.text, "Test");
         assert_eq!(notif.duration_ms, 2000);

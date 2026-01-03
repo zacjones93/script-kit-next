@@ -254,8 +254,19 @@ impl ScriptListApp {
                 .h_full();
 
             // Wrap list in a relative container with scrollbar overlay
-            // The list() component with ListSizingBehavior::Infer handles scroll internally
-            // No custom on_scroll_wheel handler needed - let GPUI handle it natively
+            // CUSTOM SCROLL HANDLER: GPUI's list() component has issues measuring unmeasured items
+            // (they appear as 0px height). This causes mouse scroll to fail to reach all items.
+            // Solution: Intercept scroll wheel events and convert to index-based scrolling,
+            // which works correctly like keyboard navigation does.
+            //
+            // Average item height for delta-to-index conversion:
+            // Most items are LIST_ITEM_HEIGHT (48px), headers are SECTION_HEADER_HEIGHT (24px)
+            // Use 44px as a reasonable average that feels natural for scrolling
+            let avg_item_height = 44.0_f32;
+
+            // Capture item count for scroll handler logging
+            let scroll_item_count = item_count;
+
             div()
                 .relative()
                 .flex()
@@ -263,6 +274,38 @@ impl ScriptListApp {
                 .flex_1()
                 .w_full()
                 .h_full()
+                .on_scroll_wheel(cx.listener(
+                    move |this, event: &gpui::ScrollWheelEvent, _window, cx| {
+                        // Convert scroll delta to lines/items
+                        // Lines: direct item count, Pixels: convert based on average item height
+                        let lines = match event.delta {
+                            gpui::ScrollDelta::Lines(point) => point.y,
+                            gpui::ScrollDelta::Pixels(point) => {
+                                // Convert pixels to items using average item height
+                                let pixels: f32 = point.y.into();
+                                pixels / avg_item_height
+                            }
+                        };
+
+                        // Convert to integer item delta (negative = scroll up, positive = scroll down)
+                        // Invert because scroll wheel up (positive delta) should show earlier items
+                        let item_delta = -lines.round() as i32;
+
+                        if item_delta != 0 {
+                            // Use the existing move_selection_by which handles section headers
+                            // and properly updates scroll via scroll_to_selected_if_needed
+                            this.move_selection_by(item_delta, cx);
+
+                            // Log for observability
+                            tracing::trace!(
+                                delta = item_delta,
+                                new_index = this.selected_index,
+                                total_items = scroll_item_count,
+                                "Mouse wheel scroll - index-based"
+                            );
+                        }
+                    },
+                ))
                 .child(variable_height_list)
                 .child(scrollbar)
                 .into_any_element()

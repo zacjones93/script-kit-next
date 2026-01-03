@@ -233,6 +233,47 @@ impl ScriptListApp {
         }
     }
 
+    /// Handle mouse wheel scroll events by converting to item-based scrolling.
+    ///
+    /// This bypasses GPUI's pixel-based scroll which has height calculation issues
+    /// with variable-height items. Instead, we convert the scroll delta to item
+    /// indices and use scroll_to_reveal_item() like keyboard navigation does.
+    ///
+    /// # Arguments
+    /// * `delta_lines` - Scroll delta in "lines" (positive = scroll content up/view down)
+    pub fn handle_scroll_wheel(&mut self, delta_lines: f32, cx: &mut Context<Self>) {
+        // Get current scroll position from ListState
+        let current_item = self.main_list_state.logical_scroll_top().item_ix;
+
+        // Get grouped results to find valid bounds
+        let (grouped_items, _) = self.get_grouped_results_cached();
+        let grouped_items = grouped_items.clone();
+        let max_item = grouped_items.len().saturating_sub(1);
+
+        // Convert delta to items (negative delta = scroll down in content = move to higher indices)
+        // Round to avoid tiny scrolls being ignored
+        let items_to_scroll = (-delta_lines).round() as i32;
+
+        // Calculate new target item, clamping to valid range
+        let new_item = (current_item as i32 + items_to_scroll).clamp(0, max_item as i32) as usize;
+
+        tracing::debug!(
+            target: "SCROLL_STATE",
+            delta_lines,
+            current_item,
+            new_item,
+            items_to_scroll,
+            "Mouse wheel scroll"
+        );
+
+        // Only scroll if we're moving to a different item
+        if new_item != current_item {
+            self.main_list_state.scroll_to_reveal_item(new_item);
+            self.trigger_scroll_activity(cx);
+            cx.notify();
+        }
+    }
+
     /// Ensure the navigation flush task is running. Spawns a background task
     /// that periodically flushes pending navigation deltas.
     fn ensure_nav_flush_task(&mut self, cx: &mut Context<Self>) {

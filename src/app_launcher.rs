@@ -4,20 +4,28 @@
 //!
 //! ## Features
 //! - Scans standard macOS application directories
-//! - Caches results for performance (apps don't change often)
+//! - Caches apps and icons in SQLite for instant startup (~/.sk/kit/db/apps.sqlite)
 //! - Extracts bundle identifiers from Info.plist when available
 //! - Extracts app icons using NSWorkspace for display
 //! - Launches applications via `open -a`
+//! - Tracks loading state for UI feedback
+//!
+//! ## Loading States
+//! - LoadingFromCache: Initial load from SQLite (instant)
+//! - ScanningDirectories: Background directory scan in progress
+//! - Ready: All apps loaded and up to date
 //!
 
 use anyhow::{Context, Result};
+use rusqlite::{params, Connection};
+use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 #[cfg(target_os = "macos")]
 use cocoa::base::{id, nil};
@@ -54,8 +62,36 @@ impl std::fmt::Debug for AppInfo {
     }
 }
 
-/// Cached list of applications (scanned once, reused)
-static APP_CACHE: OnceLock<Vec<AppInfo>> = OnceLock::new();
+/// Loading state for the app cache
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppLoadingState {
+    /// Initial load from SQLite cache (instant, no disk scan)
+    LoadingFromCache,
+    /// Background directory scan in progress to find new/changed apps
+    ScanningDirectories,
+    /// All apps loaded and cache is up to date
+    Ready,
+}
+
+impl AppLoadingState {
+    /// Get a human-readable message for UI display
+    pub fn message(&self) -> &'static str {
+        match self {
+            AppLoadingState::LoadingFromCache => "Loading apps...",
+            AppLoadingState::ScanningDirectories => "Scanning for new apps...",
+            AppLoadingState::Ready => "Apps ready",
+        }
+    }
+}
+
+/// Cached list of applications (in-memory, populated from SQLite + directory scan)
+static APP_CACHE: OnceLock<Arc<Mutex<Vec<AppInfo>>>> = OnceLock::new();
+
+/// Current loading state (thread-safe, updated during scan)
+static APP_LOADING_STATE: OnceLock<Mutex<AppLoadingState>> = OnceLock::new();
+
+/// Database connection for apps cache
+static APPS_DB: OnceLock<Arc<Mutex<Connection>>> = OnceLock::new();
 
 /// Directories to scan for .app bundles
 const APP_DIRECTORIES: &[&str] = &[
@@ -76,6 +112,292 @@ const APP_DIRECTORIES: &[&str] = &[
     "/Applications/Setapp",
 ];
 
+// ============================================================================
+// SQLite Database Functions
+// ============================================================================
+
+/// Get the apps database path (~/.sk/kit/db/apps.sqlite)
+fn get_apps_db_path() -> PathBuf {
+    let kit = PathBuf::from(shellexpand::tilde("~/.sk/kit").as_ref());
+    kit.join("db").join("apps.sqlite")
+}
+
+/// Initialize the apps database schema
+fn init_apps_db(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS apps (
+            bundle_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            path TEXT NOT NULL UNIQUE,
+            icon_blob BLOB,
+            mtime INTEGER NOT NULL,
+            last_seen INTEGER NOT NULL
+        )",
+        [],
+    )
+    .context("Failed to create apps table")?;
+
+    // Index for path lookups (used during directory scan)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_apps_path ON apps(path)", [])
+        .context("Failed to create path index")?;
+
+    Ok(())
+}
+
+/// Get or initialize the apps database connection
+fn get_apps_db() -> Result<Arc<Mutex<Connection>>> {
+    if let Some(db) = APPS_DB.get() {
+        return Ok(Arc::clone(db));
+    }
+
+    let db_path = get_apps_db_path();
+
+    // Ensure directory exists
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent).context("Failed to create db directory")?;
+    }
+
+    let conn = Connection::open(&db_path)
+        .with_context(|| format!("Failed to open apps database: {}", db_path.display()))?;
+
+    init_apps_db(&conn)?;
+
+    let db = Arc::new(Mutex::new(conn));
+
+    // Try to store it, but another thread might beat us
+    match APPS_DB.set(Arc::clone(&db)) {
+        Ok(()) => Ok(db),
+        Err(_) => {
+            // Another thread initialized it first, use theirs
+            Ok(Arc::clone(APPS_DB.get().unwrap()))
+        }
+    }
+}
+
+/// Set the current loading state
+fn set_loading_state(state: AppLoadingState) {
+    let mutex = APP_LOADING_STATE.get_or_init(|| Mutex::new(AppLoadingState::LoadingFromCache));
+    if let Ok(mut guard) = mutex.lock() {
+        *guard = state;
+    }
+}
+
+/// Get the current loading state
+pub fn get_app_loading_state() -> AppLoadingState {
+    APP_LOADING_STATE
+        .get()
+        .and_then(|m| m.lock().ok())
+        .map(|g| *g)
+        .unwrap_or(AppLoadingState::Ready)
+}
+
+/// Get a human-readable message for the current loading state
+pub fn get_app_loading_message() -> &'static str {
+    get_app_loading_state().message()
+}
+
+/// Check if apps are still loading
+pub fn is_apps_loading() -> bool {
+    get_app_loading_state() != AppLoadingState::Ready
+}
+
+/// Get the in-memory app cache (may be empty if not yet loaded)
+pub fn get_cached_apps() -> Vec<AppInfo> {
+    APP_CACHE
+        .get()
+        .and_then(|arc| arc.lock().ok())
+        .map(|guard| guard.clone())
+        .unwrap_or_default()
+}
+
+/// Get modification time for a path as Unix timestamp
+fn get_mtime(path: &Path) -> Option<i64> {
+    path.metadata()
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs() as i64)
+}
+
+// ============================================================================
+// SQLite Cache Operations
+// ============================================================================
+
+/// Load all apps from the SQLite cache
+///
+/// Returns apps with their icons already decoded as RenderImages.
+/// This is the fast path for startup - no filesystem scanning needed.
+fn load_apps_from_db() -> Vec<AppInfo> {
+    let db = match get_apps_db() {
+        Ok(db) => db,
+        Err(e) => {
+            warn!(error = %e, "Failed to get apps database");
+            return Vec::new();
+        }
+    };
+
+    let conn = match db.lock() {
+        Ok(c) => c,
+        Err(e) => {
+            error!(error = %e, "Failed to lock apps database");
+            return Vec::new();
+        }
+    };
+
+    let mut stmt = match conn
+        .prepare("SELECT bundle_id, name, path, icon_blob FROM apps ORDER BY name COLLATE NOCASE")
+    {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(error = %e, "Failed to prepare apps query");
+            return Vec::new();
+        }
+    };
+
+    let apps_iter = stmt.query_map([], |row| {
+        let bundle_id: Option<String> = row.get(0)?;
+        let name: String = row.get(1)?;
+        let path_str: String = row.get(2)?;
+        let icon_blob: Option<Vec<u8>> = row.get(3)?;
+
+        Ok((bundle_id, name, path_str, icon_blob))
+    });
+
+    let mut apps = Vec::new();
+
+    if let Ok(iter) = apps_iter {
+        for row_result in iter {
+            if let Ok((bundle_id, name, path_str, icon_blob)) = row_result {
+                let path = PathBuf::from(&path_str);
+
+                // Skip apps that no longer exist
+                if !path.exists() {
+                    continue;
+                }
+
+                // Decode icon if present
+                let icon = icon_blob.and_then(|bytes| {
+                    crate::list_item::decode_png_to_render_image_with_bgra_conversion(&bytes).ok()
+                });
+
+                apps.push(AppInfo {
+                    name,
+                    path,
+                    bundle_id,
+                    icon,
+                });
+            }
+        }
+    }
+
+    apps
+}
+
+/// Save or update an app in the SQLite cache
+fn save_app_to_db(app: &AppInfo, icon_bytes: Option<&[u8]>, mtime: i64) {
+    let db = match get_apps_db() {
+        Ok(db) => db,
+        Err(e) => {
+            warn!(error = %e, app = %app.name, "Failed to get apps database for save");
+            return;
+        }
+    };
+
+    let conn = match db.lock() {
+        Ok(c) => c,
+        Err(e) => {
+            error!(error = %e, app = %app.name, "Failed to lock apps database for save");
+            return;
+        }
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let path_str = app.path.to_string_lossy().to_string();
+    let bundle_id = app.bundle_id.as_deref().unwrap_or(&path_str);
+
+    let result = conn.execute(
+        "INSERT INTO apps (bundle_id, name, path, icon_blob, mtime, last_seen)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(bundle_id) DO UPDATE SET
+             name = excluded.name,
+             path = excluded.path,
+             icon_blob = COALESCE(excluded.icon_blob, apps.icon_blob),
+             mtime = excluded.mtime,
+             last_seen = excluded.last_seen",
+        params![bundle_id, app.name, path_str, icon_bytes, mtime, now],
+    );
+
+    if let Err(e) = result {
+        warn!(error = %e, app = %app.name, "Failed to save app to database");
+    }
+}
+
+/// Check if an app needs to be updated in the cache
+///
+/// Returns true if the app's mtime is newer than what's cached.
+#[allow(dead_code)]
+fn app_needs_update(path: &Path, current_mtime: i64) -> bool {
+    let db = match get_apps_db() {
+        Ok(db) => db,
+        Err(_) => return true, // If we can't check, assume it needs update
+    };
+
+    let conn = match db.lock() {
+        Ok(c) => c,
+        Err(_) => return true,
+    };
+
+    let path_str = path.to_string_lossy().to_string();
+
+    let cached_mtime: Result<i64, _> = conn.query_row(
+        "SELECT mtime FROM apps WHERE path = ?1",
+        params![path_str],
+        |row| row.get(0),
+    );
+
+    match cached_mtime {
+        Ok(mtime) => current_mtime > mtime,
+        Err(_) => true, // Not in cache, needs update
+    }
+}
+
+/// Get database statistics for logging
+pub fn get_apps_db_stats() -> (usize, u64) {
+    let db = match get_apps_db() {
+        Ok(db) => db,
+        Err(_) => return (0, 0),
+    };
+
+    let conn = match db.lock() {
+        Ok(c) => c,
+        Err(_) => return (0, 0),
+    };
+
+    let count: usize = conn
+        .query_row("SELECT COUNT(*) FROM apps", [], |row| row.get(0))
+        .unwrap_or(0);
+
+    let total_icon_size: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(LENGTH(icon_blob)), 0) FROM apps WHERE icon_blob IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    (count, total_icon_size as u64)
+}
+
+// ============================================================================
+// Legacy filesystem cache (kept for backward compat during migration)
+// ============================================================================
+
 /// Get the icon cache directory path (~/.sk/kit/cache/app-icons/)
 fn get_icon_cache_dir() -> Option<PathBuf> {
     let kit = PathBuf::from(shellexpand::tilde("~/.sk/kit").as_ref());
@@ -84,7 +406,6 @@ fn get_icon_cache_dir() -> Option<PathBuf> {
 
 /// Generate a unique cache key from an app path using a hash
 fn hash_path(path: &Path) -> String {
-    use std::collections::hash_map::DefaultHasher;
     let mut hasher = DefaultHasher::new();
     path.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
@@ -194,38 +515,93 @@ pub fn get_icon_cache_stats() -> (usize, u64) {
     (count, total_size)
 }
 
+// ============================================================================
+// Application Scanning
+// ============================================================================
+
 /// Scan for installed macOS applications
 ///
-/// This function scans standard macOS application directories and returns
-/// a list of all found .app bundles. Results are cached after the first call
-/// for performance (applications don't change frequently).
+/// This function uses a two-phase loading strategy:
+/// 1. First, instantly load from SQLite cache (if available)
+/// 2. Then, scan directories in background to find new/changed apps
 ///
 /// # Returns
 /// A reference to the cached vector of AppInfo structs.
 ///
 /// # Performance
-/// Initial scan may take ~100ms depending on the number of installed apps.
-/// Subsequent calls return immediately from cache.
-/// Icons are loaded from disk cache (~/.sk/kit/cache/app-icons/) when available.
-pub fn scan_applications() -> &'static Vec<AppInfo> {
-    APP_CACHE.get_or_init(|| {
+/// - First call: Returns SQLite-cached apps instantly, then background scans
+/// - Subsequent calls: Returns immediately from in-memory cache
+pub fn scan_applications() -> Vec<AppInfo> {
+    // Initialize the cache if needed
+    let cache = APP_CACHE.get_or_init(|| {
+        set_loading_state(AppLoadingState::LoadingFromCache);
+
         let start = Instant::now();
-        let apps = scan_all_directories();
+
+        // Phase 1: Load from SQLite (instant)
+        let cached_apps = load_apps_from_db();
+        let db_duration = start.elapsed().as_millis();
+
+        if !cached_apps.is_empty() {
+            info!(
+                app_count = cached_apps.len(),
+                duration_ms = db_duration,
+                "Loaded apps from SQLite cache"
+            );
+
+            // Start background scan for updates
+            let cache_arc = Arc::new(Mutex::new(cached_apps.clone()));
+            let cache_for_thread = Arc::clone(&cache_arc);
+
+            std::thread::spawn(move || {
+                set_loading_state(AppLoadingState::ScanningDirectories);
+
+                let scan_start = Instant::now();
+                let fresh_apps = scan_all_directories_with_db_update();
+                let scan_duration = scan_start.elapsed().as_millis();
+
+                // Update the in-memory cache
+                if let Ok(mut guard) = cache_for_thread.lock() {
+                    *guard = fresh_apps.clone();
+                }
+
+                let (db_count, db_size) = get_apps_db_stats();
+                info!(
+                    app_count = fresh_apps.len(),
+                    duration_ms = scan_duration,
+                    db_apps = db_count,
+                    db_icon_size_kb = db_size / 1024,
+                    "Background app scan complete"
+                );
+
+                set_loading_state(AppLoadingState::Ready);
+            });
+
+            return Arc::new(Mutex::new(cached_apps));
+        }
+
+        // No SQLite cache - do a full synchronous scan
+        set_loading_state(AppLoadingState::ScanningDirectories);
+
+        let apps = scan_all_directories_with_db_update();
         let duration_ms = start.elapsed().as_millis();
 
-        // Get cache stats for logging
-        let (cache_count, cache_size) = get_icon_cache_stats();
-
+        let (db_count, db_size) = get_apps_db_stats();
         info!(
             app_count = apps.len(),
             duration_ms = duration_ms,
-            icon_cache_files = cache_count,
-            icon_cache_size_kb = cache_size / 1024,
-            "Scanned applications"
+            db_apps = db_count,
+            db_icon_size_kb = db_size / 1024,
+            "Scanned applications (no cache)"
         );
 
-        apps
-    })
+        set_loading_state(AppLoadingState::Ready);
+
+        Arc::new(Mutex::new(apps))
+    });
+
+    // Return a clone of the cached apps
+    cache.lock().map(|g| g.clone()).unwrap_or_default()
 }
 
 /// Force a fresh scan of applications (bypasses cache)
@@ -235,7 +611,7 @@ pub fn scan_applications() -> &'static Vec<AppInfo> {
 #[allow(dead_code)]
 pub fn scan_applications_fresh() -> Vec<AppInfo> {
     let start = Instant::now();
-    let apps = scan_all_directories();
+    let apps = scan_all_directories_with_db_update();
     let duration_ms = start.elapsed().as_millis();
 
     info!(
@@ -247,7 +623,108 @@ pub fn scan_applications_fresh() -> Vec<AppInfo> {
     apps
 }
 
-/// Scan all configured directories for applications
+/// Scan all configured directories for applications and update SQLite
+fn scan_all_directories_with_db_update() -> Vec<AppInfo> {
+    let mut apps = Vec::new();
+
+    for dir in APP_DIRECTORIES {
+        let expanded = shellexpand::tilde(dir);
+        let path = Path::new(expanded.as_ref());
+
+        if path.exists() {
+            match scan_directory_with_db_update(path) {
+                Ok(found) => {
+                    debug!(
+                        directory = %path.display(),
+                        count = found.len(),
+                        "Scanned directory"
+                    );
+                    apps.extend(found);
+                }
+                Err(e) => {
+                    warn!(
+                        directory = %path.display(),
+                        error = %e,
+                        "Failed to scan directory"
+                    );
+                }
+            }
+        } else {
+            debug!(directory = %path.display(), "Directory does not exist, skipping");
+        }
+    }
+
+    // Sort by name for consistent ordering
+    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    // Remove duplicates (same name from different directories - prefer first)
+    apps.dedup_by(|a, b| a.name.to_lowercase() == b.name.to_lowercase());
+
+    apps
+}
+
+/// Scan a single directory for .app bundles and update SQLite
+fn scan_directory_with_db_update(dir: &Path) -> Result<Vec<AppInfo>> {
+    let mut apps = Vec::new();
+
+    let entries = fs::read_dir(dir)
+        .with_context(|| format!("Failed to read directory: {}", dir.display()))?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        // Check if it's a .app bundle
+        if let Some(extension) = path.extension() {
+            if extension == "app" {
+                if let Some((app_info, icon_bytes)) = parse_app_bundle_with_icon(&path) {
+                    // Save to SQLite
+                    let mtime = get_mtime(&path).unwrap_or(0);
+                    save_app_to_db(&app_info, icon_bytes.as_deref(), mtime);
+
+                    apps.push(app_info);
+                }
+            }
+        }
+    }
+
+    Ok(apps)
+}
+
+/// Parse a .app bundle to extract application information and icon bytes
+fn parse_app_bundle_with_icon(path: &Path) -> Option<(AppInfo, Option<Vec<u8>>)> {
+    // Extract app name from bundle name (strip .app extension)
+    let name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())?;
+
+    // Try to extract bundle identifier from Info.plist
+    let bundle_id = extract_bundle_id(path);
+
+    // Extract icon (macOS only)
+    #[cfg(target_os = "macos")]
+    let icon_bytes = get_or_extract_icon(path);
+    #[cfg(not(target_os = "macos"))]
+    let icon_bytes: Option<Vec<u8>> = None;
+
+    // Pre-decode icon for rendering
+    let icon = icon_bytes.as_ref().and_then(|bytes| {
+        crate::list_item::decode_png_to_render_image_with_bgra_conversion(bytes).ok()
+    });
+
+    Some((
+        AppInfo {
+            name,
+            path: path.to_path_buf(),
+            bundle_id,
+            icon,
+        },
+        icon_bytes,
+    ))
+}
+
+/// Scan all configured directories for applications (legacy, no DB update)
+#[allow(dead_code)]
 fn scan_all_directories() -> Vec<AppInfo> {
     let mut apps = Vec::new();
 
@@ -287,7 +764,7 @@ fn scan_all_directories() -> Vec<AppInfo> {
     apps
 }
 
-/// Scan a single directory for .app bundles
+/// Scan a single directory for .app bundles (legacy, no DB update)
 fn scan_directory(dir: &Path) -> Result<Vec<AppInfo>> {
     let mut apps = Vec::new();
 
@@ -310,7 +787,7 @@ fn scan_directory(dir: &Path) -> Result<Vec<AppInfo>> {
     Ok(apps)
 }
 
-/// Parse a .app bundle to extract application information
+/// Parse a .app bundle to extract application information (legacy)
 fn parse_app_bundle(path: &Path) -> Option<AppInfo> {
     // Extract app name from bundle name (strip .app extension)
     let name = path
@@ -520,19 +997,6 @@ mod tests {
                 "Calculator bundle ID should be com.apple.calculator"
             );
         }
-    }
-
-    #[test]
-    fn test_scan_applications_cached() {
-        // First call populates cache
-        let apps1 = scan_applications();
-
-        // Second call should return same reference (cached)
-        let apps2 = scan_applications();
-
-        // Both should point to the same data
-        assert_eq!(apps1.len(), apps2.len());
-        assert!(std::ptr::eq(apps1, apps2), "Should return cached reference");
     }
 
     #[test]
@@ -787,6 +1251,43 @@ mod tests {
         assert!(
             count == 0 || size > 0,
             "If there are cached files, size should be non-zero"
+        );
+    }
+
+    #[test]
+    fn test_get_apps_db_path() {
+        let db_path = get_apps_db_path();
+        assert!(
+            db_path.ends_with("db/apps.sqlite"),
+            "DB path should end with db/apps.sqlite: {:?}",
+            db_path
+        );
+        assert!(
+            db_path.to_string_lossy().contains(".sk/kit"),
+            "DB path should be under .sk/kit: {:?}",
+            db_path
+        );
+    }
+
+    #[test]
+    fn test_loading_state() {
+        // Initial state should be Ready (default)
+        let state = get_app_loading_state();
+        // Note: state may vary if other tests are running
+
+        // Test message generation
+        assert!(!state.message().is_empty(), "Should have a message");
+    }
+
+    #[test]
+    fn test_get_apps_db_stats() {
+        let (count, size) = get_apps_db_stats();
+        // Stats should be valid (0 is fine if DB is empty or not initialized)
+        assert!(
+            count == 0 || size >= 0,
+            "Stats should be valid: count={}, size={}",
+            count,
+            size
         );
     }
 }

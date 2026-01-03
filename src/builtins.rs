@@ -8,6 +8,30 @@
 use crate::config::BuiltInConfig;
 use tracing::debug;
 
+/// Menu bar action details for executing menu commands
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MenuBarActionInfo {
+    /// The bundle ID of the app (e.g., "com.apple.Safari")
+    pub bundle_id: String,
+    /// The path to the menu item (e.g., ["File", "New Window"])
+    pub menu_path: Vec<String>,
+    /// Whether the menu item is enabled
+    pub enabled: bool,
+    /// Keyboard shortcut if any (e.g., "⌘N")
+    pub shortcut: Option<String>,
+}
+
+/// Groups for categorizing built-in entries in the UI
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(dead_code)] // MenuBar variant will be used when menu bar integration is complete
+pub enum BuiltInGroup {
+    /// Core built-in features (Clipboard History, Window Switcher, etc.)
+    #[default]
+    Core,
+    /// Menu bar items from the frontmost application
+    MenuBar,
+}
+
 /// Types of built-in features
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)] // Some variants reserved for future use
@@ -26,6 +50,8 @@ pub enum BuiltInFeature {
     AiChat,
     /// Notes window for quick notes and scratchpad
     Notes,
+    /// Menu bar action from the frontmost application
+    MenuBarAction(MenuBarActionInfo),
 }
 
 /// A built-in feature entry that appears in the main search
@@ -43,10 +69,13 @@ pub struct BuiltInEntry {
     pub feature: BuiltInFeature,
     /// Optional icon (emoji) to display
     pub icon: Option<String>,
+    /// Group for categorization in the UI (will be used when menu bar integration is complete)
+    #[allow(dead_code)]
+    pub group: BuiltInGroup,
 }
 
 impl BuiltInEntry {
-    /// Create a new built-in entry
+    /// Create a new built-in entry (Core group, no icon)
     #[allow(dead_code)]
     fn new(
         id: impl Into<String>,
@@ -62,10 +91,11 @@ impl BuiltInEntry {
             keywords: keywords.into_iter().map(String::from).collect(),
             feature,
             icon: None,
+            group: BuiltInGroup::Core,
         }
     }
 
-    /// Create a new built-in entry with an icon
+    /// Create a new built-in entry with an icon (Core group)
     fn new_with_icon(
         id: impl Into<String>,
         name: impl Into<String>,
@@ -81,6 +111,29 @@ impl BuiltInEntry {
             keywords: keywords.into_iter().map(String::from).collect(),
             feature,
             icon: Some(icon.into()),
+            group: BuiltInGroup::Core,
+        }
+    }
+
+    /// Create a new built-in entry with icon and group
+    #[allow(dead_code)]
+    pub fn new_with_group(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        keywords: Vec<String>,
+        feature: BuiltInFeature,
+        icon: Option<String>,
+        group: BuiltInGroup,
+    ) -> Self {
+        BuiltInEntry {
+            id: id.into(),
+            name: name.into(),
+            description: description.into(),
+            keywords,
+            feature,
+            icon,
+            group,
         }
     }
 }

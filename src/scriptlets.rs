@@ -19,6 +19,7 @@ use crate::schema_parser::Schema;
 use crate::scriptlet_metadata::parse_codefence_metadata;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use tracing::debug;
 
 /// Valid tool types that can be used in code fences
@@ -53,6 +54,175 @@ pub const VALID_TOOLS: &[&str] = &[
 
 /// Shell tools (tools that execute in a shell environment)
 pub const SHELL_TOOLS: &[&str] = &["bash", "zsh", "sh", "fish", "cmd", "powershell", "pwsh"];
+
+// ============================================================================
+// Bundle Frontmatter (YAML at top of markdown files)
+// ============================================================================
+
+/// Frontmatter metadata for a scriptlet bundle (markdown file)
+/// This is parsed from YAML at the top of the file, delimited by `---`
+#[allow(dead_code)] // Public API for future use
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct BundleFrontmatter {
+    /// Bundle name
+    pub name: Option<String>,
+    /// Bundle description
+    pub description: Option<String>,
+    /// Author of the bundle
+    pub author: Option<String>,
+    /// Default icon for scriptlets in this bundle
+    pub icon: Option<String>,
+    /// Any additional fields
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_yaml::Value>,
+}
+
+/// Parse YAML frontmatter from the beginning of markdown content
+///
+/// Frontmatter is delimited by `---` at the start and end:
+/// ```markdown
+/// ---
+/// name: My Bundle
+/// icon: Star
+/// ---
+/// # Content starts here
+/// ```
+#[allow(dead_code)] // Public API for future use
+pub fn parse_bundle_frontmatter(content: &str) -> Option<BundleFrontmatter> {
+    let trimmed = content.trim_start();
+
+    // Must start with ---
+    if !trimmed.starts_with("---") {
+        return None;
+    }
+
+    // Find the closing ---
+    let after_first = &trimmed[3..];
+    let end_pos = after_first.find("\n---")?;
+
+    let yaml_content = &after_first[..end_pos].trim();
+
+    match serde_yaml::from_str::<BundleFrontmatter>(yaml_content) {
+        Ok(fm) => Some(fm),
+        Err(e) => {
+            debug!(error = %e, "Failed to parse bundle frontmatter");
+            None
+        }
+    }
+}
+
+/// Get a default icon for a tool type
+#[allow(dead_code)] // Public API for future use
+pub fn tool_type_to_icon(tool: &str) -> &'static str {
+    match tool {
+        "bash" | "zsh" | "sh" | "fish" => "terminal",
+        "python" => "snake",
+        "ruby" => "gem",
+        "node" | "js" | "ts" | "kit" => "file-code",
+        "open" => "external-link",
+        "edit" => "edit",
+        "paste" => "clipboard",
+        "type" => "keyboard",
+        "template" => "file-text",
+        "transform" => "refresh-cw",
+        "applescript" => "apple",
+        "powershell" | "pwsh" | "cmd" => "terminal",
+        "perl" => "code",
+        "php" => "code",
+        "deno" | "bun" => "file-code",
+        _ => "file",
+    }
+}
+
+/// Resolve the icon for a scriptlet using priority order:
+/// 1. Scriptlet-level metadata icon
+/// 2. Bundle frontmatter default icon
+/// 3. Tool-type default icon
+#[allow(dead_code)] // Public API for future use
+pub fn resolve_scriptlet_icon(
+    metadata: &ScriptletMetadata,
+    frontmatter: Option<&BundleFrontmatter>,
+    tool: &str,
+) -> String {
+    // Check scriptlet metadata first (via extra field for now)
+    if let Some(icon) = metadata.extra.get("icon") {
+        return icon.clone();
+    }
+
+    // Check bundle frontmatter
+    if let Some(fm) = frontmatter {
+        if let Some(ref icon) = fm.icon {
+            return icon.clone();
+        }
+    }
+
+    // Fall back to tool default
+    tool_type_to_icon(tool).to_string()
+}
+
+// ============================================================================
+// Validation Error Types
+// ============================================================================
+
+/// Error encountered during scriptlet validation.
+/// Allows per-scriptlet validation with graceful degradation -
+/// valid scriptlets can still be loaded even when others fail.
+#[allow(dead_code)] // Public API for future use
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ScriptletValidationError {
+    /// Path to the source file
+    pub file_path: PathBuf,
+    /// Name of the scriptlet that failed (if identifiable)
+    pub scriptlet_name: Option<String>,
+    /// Line number where the error occurred (1-based)
+    pub line_number: Option<usize>,
+    /// Description of what went wrong
+    pub error_message: String,
+}
+
+#[allow(dead_code)] // Public API for future use
+impl ScriptletValidationError {
+    /// Create a new validation error
+    pub fn new(
+        file_path: impl Into<PathBuf>,
+        scriptlet_name: Option<String>,
+        line_number: Option<usize>,
+        error_message: impl Into<String>,
+    ) -> Self {
+        Self {
+            file_path: file_path.into(),
+            scriptlet_name,
+            line_number,
+            error_message: error_message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for ScriptletValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.file_path.display())?;
+        if let Some(line) = self.line_number {
+            write!(f, ":{}", line)?;
+        }
+        if let Some(ref name) = self.scriptlet_name {
+            write!(f, " [{}]", name)?;
+        }
+        write!(f, ": {}", self.error_message)
+    }
+}
+
+/// Result of parsing scriptlets from a markdown file with validation.
+/// Contains both successfully parsed scriptlets and any validation errors encountered.
+#[allow(dead_code)] // Public API for future use
+#[derive(Clone, Debug, Default)]
+pub struct ScriptletParseResult {
+    /// Successfully parsed scriptlets
+    pub scriptlets: Vec<Scriptlet>,
+    /// Validation errors for scriptlets that failed to parse
+    pub errors: Vec<ScriptletValidationError>,
+    /// Bundle-level frontmatter (if present)
+    pub frontmatter: Option<BundleFrontmatter>,
+}
 
 /// Metadata extracted from HTML comments in scriptlets
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -509,6 +679,242 @@ fn split_by_headers(content: &str) -> Vec<MarkdownSection<'_>> {
         let start = line_starts[current_start];
         sections.push(MarkdownSection {
             text: &content[start..],
+        });
+    }
+
+    sections
+}
+
+// ============================================================================
+// Validation-Aware Parsing
+// ============================================================================
+
+/// Parse markdown file into scriptlets with validation and graceful degradation.
+///
+/// Unlike `parse_markdown_as_scriptlets`, this function:
+/// - Returns both valid scriptlets AND validation errors
+/// - Continues parsing after individual scriptlet validation failures
+/// - Parses bundle-level frontmatter
+/// - Resolves icons using the priority order (scriptlet > frontmatter > tool default)
+#[allow(dead_code)] // Public API for future use
+pub fn parse_scriptlets_with_validation(
+    content: &str,
+    source_path: Option<&str>,
+) -> ScriptletParseResult {
+    let mut result = ScriptletParseResult::default();
+    let file_path = PathBuf::from(source_path.unwrap_or("<unknown>"));
+
+    // Parse bundle-level frontmatter
+    result.frontmatter = parse_bundle_frontmatter(content);
+
+    let mut current_group = String::new();
+    let mut global_prepend = String::new();
+
+    // Split by headers while preserving the header type and line numbers
+    let sections = split_by_headers_with_line_numbers(content);
+
+    for section in sections {
+        let section_text = section.text;
+        let section_start_line = section.line_number;
+        let first_line = section_text.lines().next().unwrap_or("");
+
+        if first_line.starts_with("## ") {
+            // H2: Individual scriptlet
+            let name = first_line
+                .strip_prefix("## ")
+                .unwrap_or("")
+                .trim()
+                .to_string();
+
+            if name.is_empty() {
+                result.errors.push(ScriptletValidationError::new(
+                    &file_path,
+                    None,
+                    Some(section_start_line),
+                    "Empty scriptlet name (H2 header with no text)",
+                ));
+                continue;
+            }
+
+            // Try to parse this scriptlet, catching any validation errors
+            match parse_single_scriptlet(
+                section_text,
+                &name,
+                &current_group,
+                &global_prepend,
+                source_path,
+                result.frontmatter.as_ref(),
+                section_start_line,
+                &file_path,
+            ) {
+                Ok(scriptlet) => result.scriptlets.push(scriptlet),
+                Err(error) => result.errors.push(error),
+            }
+        } else if first_line.starts_with("# ") {
+            // H1: Group header
+            let group_name = first_line
+                .strip_prefix("# ")
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            current_group = group_name;
+
+            // Check for global prepend code block
+            if let Some((_, code)) = extract_code_block_nested(section_text) {
+                global_prepend = code;
+            } else {
+                global_prepend.clear();
+            }
+        }
+    }
+
+    result
+}
+
+/// Parse a single scriptlet from a section, returning either a Scriptlet or a validation error
+#[allow(dead_code)] // Used by parse_scriptlets_with_validation
+#[allow(clippy::too_many_arguments)]
+fn parse_single_scriptlet(
+    section_text: &str,
+    name: &str,
+    current_group: &str,
+    global_prepend: &str,
+    source_path: Option<&str>,
+    frontmatter: Option<&BundleFrontmatter>,
+    section_start_line: usize,
+    file_path: &PathBuf,
+) -> Result<Scriptlet, ScriptletValidationError> {
+    // Try codefence metadata first (new format)
+    let codefence_result = parse_codefence_metadata(section_text);
+    let typed_metadata = codefence_result.metadata;
+    let schema = codefence_result.schema;
+
+    // Check for codefence parse errors - log but don't fail
+    for error in &codefence_result.errors {
+        debug!(error = %error, scriptlet = %name, "Codefence parse warning");
+    }
+
+    // Also parse HTML comment metadata (legacy format, for backward compatibility)
+    let metadata = parse_html_comment_metadata(section_text);
+
+    // Extract code block - prefer codefence result if available
+    let code_block = if let Some(ref code_block) = codefence_result.code {
+        Some((code_block.language.clone(), code_block.content.clone()))
+    } else {
+        extract_code_block_nested(section_text)
+    };
+
+    let (tool_str, mut code) = code_block.ok_or_else(|| {
+        ScriptletValidationError::new(
+            file_path,
+            Some(name.to_string()),
+            Some(section_start_line),
+            "No code block found in scriptlet",
+        )
+    })?;
+
+    // Prepend global code if exists
+    if !global_prepend.is_empty() {
+        code = format!("{}\n{}", global_prepend, code);
+    }
+
+    // Default tool type to "ts" if empty
+    let tool = if tool_str.is_empty() {
+        "ts".to_string()
+    } else {
+        tool_str
+    };
+
+    // Check if tool is valid - emit warning but don't fail
+    if !VALID_TOOLS.contains(&tool.as_str()) {
+        debug!(tool = %tool, name = %name, "Unknown tool type in scriptlet");
+    }
+
+    // Resolve icon using priority order
+    let _resolved_icon = resolve_scriptlet_icon(&metadata, frontmatter, &tool);
+
+    let inputs = extract_named_inputs(&code);
+    let command = slugify(name);
+
+    Ok(Scriptlet {
+        name: name.to_string(),
+        command,
+        tool,
+        scriptlet_content: code,
+        inputs,
+        group: current_group.to_string(),
+        preview: None,
+        metadata,
+        typed_metadata,
+        schema,
+        kit: None,
+        source_path: source_path.map(|s| s.to_string()),
+    })
+}
+
+/// Section of markdown content with its header level and line number
+#[allow(dead_code)] // Used by split_by_headers_with_line_numbers
+struct MarkdownSectionWithLine<'a> {
+    text: &'a str,
+    line_number: usize, // 1-based line number
+}
+
+/// Split markdown content by headers, preserving header lines and line numbers
+#[allow(dead_code)] // Used by parse_scriptlets_with_validation
+fn split_by_headers_with_line_numbers(content: &str) -> Vec<MarkdownSectionWithLine<'_>> {
+    let mut sections = Vec::new();
+    let mut current_start = 0;
+    let mut current_start_line = 1; // 1-based
+    let mut in_fence = false;
+    let mut fence_type: Option<FenceType> = None;
+    let mut fence_count = 0;
+
+    let lines: Vec<&str> = content.lines().collect();
+    let line_starts: Vec<usize> = std::iter::once(0)
+        .chain(content.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
+
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+
+        // Track fence state
+        if !in_fence {
+            if let Some(fence_info) = detect_fence_start(trimmed) {
+                in_fence = true;
+                fence_type = Some(fence_info.0);
+                fence_count = fence_info.1;
+                continue;
+            }
+        } else if is_matching_fence_end(trimmed, fence_type.unwrap(), fence_count) {
+            in_fence = false;
+            fence_type = None;
+            fence_count = 0;
+            continue;
+        }
+
+        // Only split on headers outside of fences
+        if !in_fence && (trimmed.starts_with("# ") || trimmed.starts_with("## ")) {
+            if i > 0 {
+                let start = line_starts[current_start];
+                let end = line_starts[i];
+                if end > start {
+                    sections.push(MarkdownSectionWithLine {
+                        text: &content[start..end],
+                        line_number: current_start_line,
+                    });
+                }
+            }
+            current_start = i;
+            current_start_line = i + 1; // Convert to 1-based
+        }
+    }
+
+    // Add remaining content
+    if current_start < lines.len() {
+        let start = line_starts[current_start];
+        sections.push(MarkdownSectionWithLine {
+            text: &content[start..],
+            line_number: current_start_line,
         });
     }
 

@@ -177,6 +177,29 @@ pub struct CommandConfig {
     pub hidden: Option<bool>,
 }
 
+/// Check if a string is a valid command ID format.
+///
+/// Valid command IDs start with one of:
+/// - `builtin/` - Built-in Script Kit features
+/// - `app/` - macOS applications (by bundle identifier)
+/// - `script/` - User scripts (by filename)
+/// - `scriptlet/` - Inline scriptlets (by UUID or name)
+#[allow(dead_code)]
+pub fn is_valid_command_id(id: &str) -> bool {
+    id.starts_with("builtin/")
+        || id.starts_with("app/")
+        || id.starts_with("script/")
+        || id.starts_with("scriptlet/")
+}
+
+/// Convert a command ID to its deeplink URL.
+///
+/// The deeplink format is: `kit://commands/{commandId}`
+#[allow(dead_code)]
+pub fn command_id_to_deeplink(command_id: &str) -> String {
+    format!("kit://commands/{}", command_id)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub hotkey: HotkeyConfig,
@@ -234,6 +257,9 @@ pub struct Config {
     /// Hotkey for opening AI Chat window (default: Cmd+Shift+Space)
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "aiHotkey")]
     pub ai_hotkey: Option<HotkeyConfig>,
+    /// Per-command configuration overrides (shortcuts, visibility)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commands: Option<HashMap<String, CommandConfig>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -358,6 +384,27 @@ impl Config {
         self.ai_hotkey
             .clone()
             .unwrap_or_else(HotkeyConfig::default_ai_hotkey)
+    }
+
+    /// Returns command configuration for a specific command ID, or None if not configured.
+    #[allow(dead_code)]
+    pub fn get_command_config(&self, command_id: &str) -> Option<&CommandConfig> {
+        self.commands.as_ref().and_then(|cmds| cmds.get(command_id))
+    }
+
+    /// Check if a command should be hidden from the main menu.
+    #[allow(dead_code)]
+    pub fn is_command_hidden(&self, command_id: &str) -> bool {
+        self.get_command_config(command_id)
+            .and_then(|c| c.hidden)
+            .unwrap_or(false)
+    }
+
+    /// Get the shortcut for a command, if configured.
+    #[allow(dead_code)]
+    pub fn get_command_shortcut(&self, command_id: &str) -> Option<&HotkeyConfig> {
+        self.get_command_config(command_id)
+            .and_then(|c| c.shortcut.as_ref())
     }
 }
 
