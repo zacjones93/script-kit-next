@@ -63,6 +63,7 @@ mod theme;
 mod transitions;
 mod tray;
 mod utils;
+mod warning_banner;
 mod watcher;
 mod window_manager;
 mod window_resize;
@@ -147,6 +148,7 @@ use prompts::{
     SelectPrompt, TemplatePrompt,
 };
 use tray::{TrayManager, TrayMenuAction};
+use warning_banner::{WarningBanner, WarningBannerColors};
 use window_resize::{
     defer_resize_to_view, height_for_view, initial_window_height, reset_resize_debounce,
     resize_first_window_to_height, ViewType,
@@ -658,6 +660,8 @@ struct ScriptListApp {
     // Window focus tracking - for detecting focus lost and auto-dismissing prompts
     // When window loses focus while in a dismissable prompt, close and reset
     was_window_focused: bool,
+    // Show warning banner when bun is not available
+    show_bun_warning: bool,
     // Scroll stabilization: track last scrolled-to index for each scroll handle
     #[allow(dead_code)]
     last_scrolled_main: Option<usize>,
@@ -897,11 +901,57 @@ impl Render for ScriptListApp {
         // Build component bounds for the current view (for debug overlay)
         let component_bounds = self.build_component_bounds(window_size);
 
+        // Build warning banner if needed (bun not available)
+        let warning_banner = if self.show_bun_warning {
+            let banner_colors = WarningBannerColors::from_theme(&self.theme);
+            let entity = cx.entity().downgrade();
+            let entity_for_dismiss = entity.clone();
+            
+            Some(
+                div()
+                    .w_full()
+                    .px(px(12.))
+                    .pt(px(8.))
+                    .child(
+                        WarningBanner::new("bun is not installed. Click to download from bun.sh", banner_colors)
+                            .on_click(Box::new(move |_event, _window, cx| {
+                                if let Some(app) = entity.upgrade() {
+                                    app.update(cx, |this, _cx| {
+                                        this.open_bun_website();
+                                    });
+                                }
+                            }))
+                            .on_dismiss(Box::new(move |_event, _window, cx| {
+                                if let Some(app) = entity_for_dismiss.upgrade() {
+                                    app.update(cx, |this, cx| {
+                                        this.dismiss_bun_warning(cx);
+                                    });
+                                }
+                            })),
+                    ),
+            )
+        } else {
+            None
+        };
+
         div()
             .w_full()
             .h_full()
             .relative()
-            .child(main_content)
+            .flex()
+            .flex_col()
+            // Warning banner appears at the top when bun is not available
+            .when_some(warning_banner, |container, banner| {
+                container.child(banner)
+            })
+            // Main content takes remaining space
+            .child(
+                div()
+                    .flex_1()
+                    .w_full()
+                    .min_h(px(0.))
+                    .child(main_content)
+            )
             .when_some(grid_config, |container, config| {
                 let overlay_bounds = gpui::Bounds {
                     origin: gpui::point(px(0.), px(0.)),
@@ -1223,6 +1273,9 @@ fn main() {
         let app_entity_holder: Arc<Mutex<Option<Entity<ScriptListApp>>>> = Arc::new(Mutex::new(None));
         let app_entity_for_closure = app_entity_holder.clone();
 
+        // Capture bun_available for use in window creation
+        let bun_available = setup_result.bun_available;
+        
         let window: WindowHandle<Root> = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -1235,7 +1288,7 @@ fn main() {
             },
             |window, cx| {
                 logging::log("APP", "Window opened, creating ScriptListApp wrapped in Root");
-                let view = cx.new(|cx| ScriptListApp::new(config_for_app, window, cx));
+                let view = cx.new(|cx| ScriptListApp::new(config_for_app, bun_available, window, cx));
                 // Store the entity for external access
                 *app_entity_for_closure.lock().unwrap() = Some(view.clone());
                 cx.new(|cx| Root::new(view, window, cx))

@@ -362,16 +362,17 @@ pub fn set_max_text_content_len(max_len: usize) {
     MAX_TEXT_CONTENT_LEN.store(value, Ordering::Relaxed);
 }
 
-/// Get the database path (~/.sk/kit/clipboard-history.db)
+/// Get the database path (~/.sk/kit/db/clipboard-history.sqlite)
 fn get_db_path() -> Result<PathBuf> {
     let kit_dir = PathBuf::from(shellexpand::tilde("~/.sk/kit").as_ref());
+    let db_dir = kit_dir.join("db");
 
-    // Create ~/.sk/kit if it doesn't exist
-    if !kit_dir.exists() {
-        std::fs::create_dir_all(&kit_dir).context("Failed to create ~/.sk/kit directory")?;
+    // Create ~/.sk/kit/db if it doesn't exist
+    if !db_dir.exists() {
+        std::fs::create_dir_all(&db_dir).context("Failed to create ~/.sk/kit/db directory")?;
     }
 
-    Ok(kit_dir.join("clipboard-history.db"))
+    Ok(db_dir.join("clipboard-history.sqlite"))
 }
 
 /// Get or create the database connection
@@ -1518,13 +1519,13 @@ mod tests {
     fn test_db_path_format() {
         // Test the path format WITHOUT creating directories
         // This avoids polluting ~/.sk/kit in CI environments
-        let expected_filename = "clipboard-history.db";
+        let expected_filename = "clipboard-history.sqlite";
         let kit_dir = PathBuf::from(shellexpand::tilde("~/.sk/kit").as_ref());
-        let expected_path = kit_dir.join(expected_filename);
+        let expected_path = kit_dir.join("db").join(expected_filename);
 
         // Verify the path format is correct (without calling get_db_path which creates dirs)
         assert!(expected_path.to_string_lossy().contains(expected_filename));
-        assert!(expected_path.to_string_lossy().contains(".sk/kit"));
+        assert!(expected_path.to_string_lossy().contains(".sk/kit/db"));
     }
 
     #[test]

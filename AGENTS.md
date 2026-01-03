@@ -201,6 +201,113 @@ export const metadata = {
 
 ---
 
+## Scriptlet Bundle Frontmatter
+
+Scriptlet bundles (`.md` files in `~/.sk/kit/snippets/`) can include YAML frontmatter to provide metadata for tools. This enables rich display in the UI with custom names, descriptions, icons, and author attribution.
+
+### Frontmatter Format
+
+```markdown
+---
+name: My API Tools
+description: Collection of useful API utilities
+author: John Doe
+icon: api
+---
+
+# My API Tools
+
+## Tool 1
+```tool:fetch-user```
+// Tool implementation...
+```
+
+### Field Descriptions
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | No | Display name for the bundle (overrides filename) |
+| `description` | string | No | Brief description shown in UI |
+| `author` | string | No | Author name for attribution |
+| `icon` | string | No | Icon identifier (see Default Icon Mapping below) |
+
+### Backward Compatibility
+
+- **Frontmatter is optional** - bundles without frontmatter continue to work
+- **Graceful degradation** - invalid frontmatter is logged but doesn't break parsing
+- **Filename fallback** - if `name` is not specified, the filename (without `.md`) is used
+- **Default icons** - if `icon` is not specified, icons are inferred from tool types
+
+### Validation Behavior
+
+When parsing bundle frontmatter, the system provides helpful error messages:
+
+| Error | Behavior |
+|-------|----------|
+| Missing closing `---` | Warning logged with line number, frontmatter skipped |
+| Invalid YAML syntax | Warning logged with specific error, frontmatter skipped |
+| Missing required fields | N/A (all fields are optional) |
+| Unknown fields | Silently ignored for forward compatibility |
+
+**Error notifications**: Validation errors are shown to users via HUD notifications, including the line number where the error occurred. This helps authors quickly fix malformed frontmatter.
+
+### Default Icon Mapping
+
+When no explicit icon is specified in frontmatter, icons are automatically assigned based on tool type:
+
+| Tool Type | Default Icon | Description |
+|-----------|--------------|-------------|
+| `template` | `text-cursor-input` | Text expansion templates |
+| `tool` | `wrench` | General-purpose tools |
+| `snippet` | `code` | Code snippets |
+| `script` | `terminal` | Executable scripts |
+| `prompt` | `message-circle` | AI prompts |
+| `action` | `zap` | Quick actions |
+| (fallback) | `file-text` | Unknown/other types |
+
+### Icon Resolution Priority
+
+Icons are resolved in the following order (first match wins):
+
+1. **Explicit frontmatter icon** - `icon: custom-icon` in frontmatter
+2. **Tool-type default** - Based on the tool's type (see table above)
+3. **Bundle-level fallback** - `file-text` for bundles without type info
+
+```rust
+// Example resolution in Rust
+pub fn resolve_scriptlet_icon(
+    frontmatter_icon: Option<&str>,
+    tool_type: Option<&str>,
+) -> &'static str {
+    frontmatter_icon
+        .unwrap_or_else(|| tool_type_to_icon(tool_type))
+}
+```
+
+### Troubleshooting
+
+**Problem: Frontmatter not being parsed**
+- Ensure frontmatter starts on line 1 with exactly `---`
+- Check that the closing `---` is on its own line
+- Verify YAML syntax (proper indentation, quotes around special characters)
+
+**Problem: Icon not showing**
+- Verify the icon name matches an available icon in the icon set
+- Check logs for `[CACHE]` entries showing icon resolution
+- Use one of the default icons from the mapping table above
+
+**Problem: Validation error shown in HUD**
+- Check the line number in the error message
+- Common issues: missing colon after field name, unquoted special characters
+- Example fix: `description: Uses "quotes"` → `description: 'Uses "quotes"'`
+
+**Problem: Bundle metadata not updating**
+- The scriptlet cache may need to be refreshed
+- Modify the bundle file to trigger a cache update
+- Check `~/.sk/kit/logs/script-kit-gpui.jsonl` for cache-related logs
+
+---
+
 ## CRITICAL: Autonomous Testing Protocol
 
 <critical>
@@ -1162,7 +1269,7 @@ src/
   ai/           # AI chat window module (separate floating window)
     mod.rs      # Module exports and documentation
     window.rs   # AiApp view, open/close functions
-    storage.rs  # SQLite persistence (ai-chats.db)
+    storage.rs  # SQLite persistence (db/ai-chats.sqlite)
     model.rs    # Chat, Message, ChatId, MessageRole
     providers.rs # Provider trait, Anthropic/OpenAI implementations
     config.rs   # Environment detection for API keys
@@ -1292,7 +1399,7 @@ The Notes feature is a **completely separate floating window** from the main Scr
 | **Location** | `src/notes/` module |
 | **UI Framework** | gpui-component library (Input, Sidebar, Button, etc.) |
 | **Window Type** | Floating panel (`NSFloatingWindowLevel` on macOS) |
-| **Storage** | SQLite database at `~/.sk/kit/notes.db` |
+| **Storage** | SQLite database at `~/.sk/kit/db/notes.sqlite` |
 | **Theme** | Syncs with Script Kit's `~/.sk/kit/theme.json` |
 
 #### File Structure
@@ -1418,7 +1525,7 @@ The AI feature is a **BYOK (Bring Your Own Key) chat window** - a separate float
 | **Location** | `src/ai/` module |
 | **UI Framework** | gpui-component library (Input, Button, markdown rendering) |
 | **Window Type** | Floating panel (`NSFloatingWindowLevel` on macOS) |
-| **Storage** | SQLite database at `~/.sk/kit/ai-chats.db` |
+| **Storage** | SQLite database at `~/.sk/kit/db/ai-chats.sqlite` |
 | **Theme** | Syncs with Script Kit's `~/.sk/kit/theme.json` |
 | **Model** | BYOK - uses user's own API keys |
 

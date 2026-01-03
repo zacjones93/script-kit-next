@@ -1,5 +1,5 @@
 impl ScriptListApp {
-    fn new(config: config::Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(config: config::Config, bun_available: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // PERF: Measure script loading time
         let load_start = std::time::Instant::now();
         let scripts = scripts::read_scripts();
@@ -264,6 +264,8 @@ impl ScriptListApp {
             last_scrolled_clipboard: None,
             last_scrolled_window: None,
             last_scrolled_design_gallery: None,
+            // Show warning banner when bun is not available
+            show_bun_warning: !bun_available,
         };
 
         // Build initial alias/shortcut registries (conflicts logged, not shown via HUD on startup)
@@ -370,6 +372,24 @@ impl ScriptListApp {
             ),
         );
         cx.notify();
+    }
+
+    /// Dismiss the bun warning banner
+    fn dismiss_bun_warning(&mut self, cx: &mut Context<Self>) {
+        logging::log("APP", "Bun warning banner dismissed by user");
+        self.show_bun_warning = false;
+        cx.notify();
+    }
+
+    /// Open bun.sh in the default browser
+    fn open_bun_website(&self) {
+        logging::log("APP", "Opening https://bun.sh in default browser");
+        if let Err(e) = std::process::Command::new("open")
+            .arg("https://bun.sh")
+            .spawn()
+        {
+            logging::log("APP", &format!("Failed to open bun.sh: {}", e));
+        }
     }
 
     /// Handle incremental scriptlet file change
