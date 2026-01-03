@@ -9,6 +9,23 @@ impl ScriptListApp {
             &format!("Executing built-in: {} (id: {})", entry.name, entry.id),
         );
 
+        // Check if this command requires confirmation
+        if self.config.requires_confirmation(&entry.id) {
+            // Check if we're already in confirmation mode for this entry
+            if self.pending_confirmation.as_ref() == Some(&entry.id) {
+                // User confirmed - clear pending and proceed with execution
+                logging::log("EXEC", &format!("Confirmed: {}", entry.id));
+                self.pending_confirmation = None;
+                // Fall through to execute
+            } else {
+                // First press - enter confirmation mode
+                logging::log("EXEC", &format!("Awaiting confirmation: {}", entry.id));
+                self.pending_confirmation = Some(entry.id.clone());
+                cx.notify();
+                return; // Don't execute yet
+            }
+        }
+
         match &entry.feature {
             builtins::BuiltInFeature::ClipboardHistory => {
                 logging::log("EXEC", "Opening Clipboard History");
@@ -224,14 +241,34 @@ impl ScriptListApp {
                         SystemActionType::Launchpad => system_actions::launchpad(),
                         SystemActionType::ForceQuitApps => system_actions::force_quit_apps(),
 
-                        // Volume controls
-                        SystemActionType::VolumeUp => system_actions::volume_up(),
-                        SystemActionType::VolumeDown => system_actions::volume_down(),
+                        // Volume controls (preset levels)
+                        SystemActionType::Volume0 => system_actions::set_volume(0),
+                        SystemActionType::Volume25 => system_actions::set_volume(25),
+                        SystemActionType::Volume50 => system_actions::set_volume(50),
+                        SystemActionType::Volume75 => system_actions::set_volume(75),
+                        SystemActionType::Volume100 => system_actions::set_volume(100),
                         SystemActionType::VolumeMute => system_actions::volume_mute(),
 
-                        // Brightness controls
-                        SystemActionType::BrightnessUp => system_actions::brightness_up(),
-                        SystemActionType::BrightnessDown => system_actions::brightness_down(),
+                        // Brightness controls (preset levels)
+                        SystemActionType::Brightness0 => system_actions::set_brightness(0),
+                        SystemActionType::Brightness25 => system_actions::set_brightness(25),
+                        SystemActionType::Brightness50 => system_actions::set_brightness(50),
+                        SystemActionType::Brightness75 => system_actions::set_brightness(75),
+                        SystemActionType::Brightness100 => system_actions::set_brightness(100),
+
+                        // Dev/test actions
+                        #[cfg(debug_assertions)]
+                        SystemActionType::TestConfirmation => {
+                            self.toast_manager.push(
+                                components::toast::Toast::success(
+                                    "Confirmation test passed!",
+                                    &self.theme,
+                                )
+                                .duration_ms(Some(3000)),
+                            );
+                            cx.notify();
+                            return; // Don't hide window for test
+                        }
 
                         // System utilities
                         SystemActionType::ToggleDoNotDisturb => {
@@ -303,7 +340,7 @@ impl ScriptListApp {
             }
 
             // =========================================================================
-            // Window Actions (for frontmost window)
+            // Window Actions (for frontmost window of the PREVIOUS app)
             // =========================================================================
             builtins::BuiltInFeature::WindowAction(action_type) => {
                 logging::log(
@@ -311,74 +348,83 @@ impl ScriptListApp {
                     &format!("Executing window action: {:?}", action_type),
                 );
 
-                // Get the frontmost window first
-                match window_control::list_windows() {
-                    Ok(windows) => {
-                        if let Some(frontmost) = windows.first() {
-                            use builtins::WindowActionType;
-                            use window_control::TilePosition;
+                // Get the frontmost window of the app that was active before Script Kit.
+                // Since Script Kit is an LSUIElement (accessory app), it doesn't take
+                // menu bar ownership. The menu bar owner is the previously active app.
+                match window_control::get_frontmost_window_of_previous_app() {
+                    Ok(Some(target_window)) => {
+                        use builtins::WindowActionType;
+                        use window_control::TilePosition;
 
-                            let result = match action_type {
-                                WindowActionType::TileLeft => window_control::tile_window(
-                                    frontmost.id,
-                                    TilePosition::LeftHalf,
-                                ),
-                                WindowActionType::TileRight => window_control::tile_window(
-                                    frontmost.id,
-                                    TilePosition::RightHalf,
-                                ),
-                                WindowActionType::TileTop => {
-                                    window_control::tile_window(frontmost.id, TilePosition::TopHalf)
-                                }
-                                WindowActionType::TileBottom => window_control::tile_window(
-                                    frontmost.id,
-                                    TilePosition::BottomHalf,
-                                ),
-                                WindowActionType::Maximize => {
-                                    window_control::maximize_window(frontmost.id)
-                                }
-                                WindowActionType::Minimize => {
-                                    window_control::minimize_window(frontmost.id)
-                                }
-                            };
+                        logging::log(
+                            "EXEC",
+                            &format!(
+                                "Target window: {} - {} (id: {})",
+                                target_window.app, target_window.title, target_window.id
+                            ),
+                        );
 
-                            match result {
-                                Ok(()) => {
-                                    logging::log("EXEC", "Window action executed successfully");
-                                    // Hide window after action
-                                    script_kit_gpui::set_main_window_visible(false);
-                                    NEEDS_RESET.store(true, Ordering::SeqCst);
-                                    cx.hide();
-                                }
-                                Err(e) => {
-                                    logging::log("ERROR", &format!("Window action failed: {}", e));
-                                    self.toast_manager.push(
-                                        components::toast::Toast::error(
-                                            format!("Window action failed: {}", e),
-                                            &self.theme,
-                                        )
-                                        .duration_ms(Some(5000)),
-                                    );
-                                    cx.notify();
-                                }
+                        let result = match action_type {
+                            WindowActionType::TileLeft => window_control::tile_window(
+                                target_window.id,
+                                TilePosition::LeftHalf,
+                            ),
+                            WindowActionType::TileRight => window_control::tile_window(
+                                target_window.id,
+                                TilePosition::RightHalf,
+                            ),
+                            WindowActionType::TileTop => {
+                                window_control::tile_window(target_window.id, TilePosition::TopHalf)
                             }
-                        } else {
-                            logging::log("WARN", "No windows available for window action");
-                            self.toast_manager.push(
-                                components::toast::Toast::warning(
-                                    "No windows available",
-                                    &self.theme,
-                                )
-                                .duration_ms(Some(3000)),
-                            );
-                            cx.notify();
+                            WindowActionType::TileBottom => window_control::tile_window(
+                                target_window.id,
+                                TilePosition::BottomHalf,
+                            ),
+                            WindowActionType::Maximize => {
+                                window_control::maximize_window(target_window.id)
+                            }
+                            WindowActionType::Minimize => {
+                                window_control::minimize_window(target_window.id)
+                            }
+                        };
+
+                        match result {
+                            Ok(()) => {
+                                logging::log("EXEC", "Window action executed successfully");
+                                // Hide window after action
+                                script_kit_gpui::set_main_window_visible(false);
+                                NEEDS_RESET.store(true, Ordering::SeqCst);
+                                cx.hide();
+                            }
+                            Err(e) => {
+                                logging::log("ERROR", &format!("Window action failed: {}", e));
+                                self.toast_manager.push(
+                                    components::toast::Toast::error(
+                                        format!("Window action failed: {}", e),
+                                        &self.theme,
+                                    )
+                                    .duration_ms(Some(5000)),
+                                );
+                                cx.notify();
+                            }
                         }
                     }
+                    Ok(None) => {
+                        logging::log("WARN", "No windows found for previous app");
+                        self.toast_manager.push(
+                            components::toast::Toast::warning(
+                                "No windows available to manage",
+                                &self.theme,
+                            )
+                            .duration_ms(Some(3000)),
+                        );
+                        cx.notify();
+                    }
                     Err(e) => {
-                        logging::log("ERROR", &format!("Failed to list windows: {}", e));
+                        logging::log("ERROR", &format!("Failed to get target window: {}", e));
                         self.toast_manager.push(
                             components::toast::Toast::error(
-                                format!("Failed to list windows: {}", e),
+                                format!("Failed to find target window: {}", e),
                                 &self.theme,
                             )
                             .duration_ms(Some(5000)),

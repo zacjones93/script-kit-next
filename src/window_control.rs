@@ -581,6 +581,89 @@ pub fn list_windows() -> Result<Vec<WindowInfo>> {
     Ok(windows)
 }
 
+/// Get the PID of the application that owns the menu bar.
+///
+/// When Script Kit (an accessory/LSUIElement app) is active, it does NOT take
+/// menu bar ownership. The previously active "regular" app still owns the menu bar.
+/// This is exactly what we need for window actions - we want to act on the
+/// window that was focused before Script Kit was shown.
+///
+/// # Returns
+/// The process identifier (PID) of the menu bar owning application.
+///
+/// # Errors
+/// Returns error if no menu bar owner is found or if the PID is invalid.
+#[instrument]
+pub fn get_menu_bar_owner_pid() -> Result<i32> {
+    unsafe {
+        use objc::runtime::{Class, Object};
+        use objc::{msg_send, sel, sel_impl};
+
+        let workspace_class = Class::get("NSWorkspace").context("Failed to get NSWorkspace")?;
+        let workspace: *mut Object = msg_send![workspace_class, sharedWorkspace];
+        let menu_owner: *mut Object = msg_send![workspace, menuBarOwningApplication];
+
+        if menu_owner.is_null() {
+            bail!("No menu bar owning application found");
+        }
+
+        let pid: i32 = msg_send![menu_owner, processIdentifier];
+
+        if pid <= 0 {
+            bail!("Invalid process identifier for menu bar owner");
+        }
+
+        // Log for debugging
+        let name: *mut Object = msg_send![menu_owner, localizedName];
+        let name_str = if !name.is_null() {
+            let utf8: *const i8 = msg_send![name, UTF8String];
+            if !utf8.is_null() {
+                std::ffi::CStr::from_ptr(utf8).to_str().unwrap_or("unknown")
+            } else {
+                "unknown"
+            }
+        } else {
+            "unknown"
+        };
+
+        info!(pid, app_name = name_str, "Got menu bar owner");
+        Ok(pid)
+    }
+}
+
+/// Get the frontmost window of the menu bar owning application.
+///
+/// This is the key function for window actions from Script Kit. When the user
+/// executes "Tile Window Left" etc., we want to act on the window they were
+/// using before invoking Script Kit, not Script Kit's own window.
+///
+/// Since Script Kit is an LSUIElement (accessory app), it doesn't take menu bar
+/// ownership. The menu bar owner is the previously active app.
+///
+/// # Returns
+/// The first (frontmost) window of the menu bar owning application, or None if
+/// no windows are found.
+#[instrument]
+pub fn get_frontmost_window_of_previous_app() -> Result<Option<WindowInfo>> {
+    let target_pid = get_menu_bar_owner_pid()?;
+    let windows = list_windows()?;
+
+    let target_window = windows.into_iter().find(|w| w.pid == target_pid);
+
+    if let Some(ref w) = target_window {
+        info!(
+            window_id = w.id,
+            app = %w.app,
+            title = %w.title,
+            "Found frontmost window of previous app"
+        );
+    } else {
+        warn!(target_pid, "No windows found for menu bar owner");
+    }
+
+    Ok(target_window)
+}
+
 /// Move a window to a new position.
 ///
 /// # Arguments
