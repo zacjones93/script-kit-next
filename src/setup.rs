@@ -1092,14 +1092,8 @@ fn ensure_tsconfig_paths(tsconfig_path: &Path, warnings: &mut Vec<String>) {
         return;
     }
 
-    // Set the new @scriptkit/sdk path
+    // Set the @scriptkit/sdk path
     config["compilerOptions"]["paths"]["@scriptkit/sdk"] = kit_path;
-
-    // Remove old path variants if they exist (migration)
-    if let Some(paths) = config["compilerOptions"]["paths"].as_object_mut() {
-        paths.remove("@johnlindquist/kit");
-        paths.remove("@scriptkit/kit");
-    }
 
     match serde_json::to_string_pretty(&config) {
         Ok(json_str) => {
