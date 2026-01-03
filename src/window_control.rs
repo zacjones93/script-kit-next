@@ -937,7 +937,100 @@ pub fn focus_window(window_id: u32) -> Result<()> {
 
 /// Get the visible display bounds (excluding menu bar and dock) for the display
 /// containing the given point.
+///
+/// Uses NSScreen.visibleFrame to get accurate bounds that account for:
+/// - Menu bar (on main display)
+/// - Dock (on any edge, any display)
+/// - Notch area (on newer MacBooks)
 fn get_visible_display_bounds(x: i32, y: i32) -> Bounds {
+    // Use NSScreen to get accurate visible frame
+    unsafe {
+        use objc::runtime::{Class, Object};
+        use objc::{msg_send, sel, sel_impl};
+
+        let nsscreen_class = match Class::get("NSScreen") {
+            Some(c) => c,
+            None => return get_visible_display_bounds_fallback(x, y),
+        };
+
+        // Get all screens
+        let screens: *mut Object = msg_send![nsscreen_class, screens];
+        if screens.is_null() {
+            return get_visible_display_bounds_fallback(x, y);
+        }
+
+        let screen_count: usize = msg_send![screens, count];
+
+        // Find the screen containing the point
+        for i in 0..screen_count {
+            let screen: *mut Object = msg_send![screens, objectAtIndex: i];
+            if screen.is_null() {
+                continue;
+            }
+
+            // Get the full frame (in Cocoa coordinates - origin at bottom-left)
+            let frame: CGRect = msg_send![screen, frame];
+
+            // Convert point to Cocoa coordinates for comparison
+            // Cocoa Y increases upward, CoreGraphics Y increases downward
+            // For the main screen, Cocoa origin.y is 0 at bottom
+            // We need to check if (x, y) in CG coords falls within this screen
+
+            // Get the main screen height for coordinate conversion
+            let main_screen: *mut Object = msg_send![nsscreen_class, mainScreen];
+            let main_frame: CGRect = msg_send![main_screen, frame];
+            let main_height = main_frame.size.height;
+
+            // Convert CG y to Cocoa y
+            let cocoa_y = main_height - y as f64;
+
+            // Check if point is within this screen's frame
+            if (x as f64) >= frame.origin.x
+                && (x as f64) < frame.origin.x + frame.size.width
+                && cocoa_y >= frame.origin.y
+                && cocoa_y < frame.origin.y + frame.size.height
+            {
+                // Get the visible frame (excludes menu bar and dock)
+                let visible_frame: CGRect = msg_send![screen, visibleFrame];
+
+                // Convert Cocoa coordinates back to CoreGraphics coordinates
+                // CG origin is at top-left of main screen
+                // Cocoa origin.y is distance from bottom of main screen
+                // CG y = main_height - (cocoa_y + height)
+                let cg_y = main_height - (visible_frame.origin.y + visible_frame.size.height);
+
+                debug!(
+                    screen_index = i,
+                    frame_x = frame.origin.x,
+                    frame_y = frame.origin.y,
+                    frame_w = frame.size.width,
+                    frame_h = frame.size.height,
+                    visible_x = visible_frame.origin.x,
+                    visible_y = visible_frame.origin.y,
+                    visible_w = visible_frame.size.width,
+                    visible_h = visible_frame.size.height,
+                    cg_y = cg_y,
+                    "Found screen for point ({}, {})",
+                    x,
+                    y
+                );
+
+                return Bounds {
+                    x: visible_frame.origin.x as i32,
+                    y: cg_y as i32,
+                    width: visible_frame.size.width as u32,
+                    height: visible_frame.size.height as u32,
+                };
+            }
+        }
+    }
+
+    // Fallback if no screen found
+    get_visible_display_bounds_fallback(x, y)
+}
+
+/// Fallback method using CGDisplay when NSScreen is unavailable
+fn get_visible_display_bounds_fallback(x: i32, y: i32) -> Bounds {
     // Get all displays
     if let Ok(display_ids) = CGDisplay::active_displays() {
         for display_id in display_ids {
@@ -950,17 +1043,10 @@ fn get_visible_display_bounds(x: i32, y: i32) -> Bounds {
                 && y >= frame.origin.y as i32
                 && y < (frame.origin.y + frame.size.height) as i32
             {
-                // For the visible area, we need to account for menu bar (22-24px on main)
-                // and dock (varies). For simplicity, use reasonable defaults.
-                // A more complete implementation would query NSScreen.visibleFrame
-
                 let is_main = display_id == CGDisplay::main().id;
 
-                // Menu bar is only on main display, typically 25 pixels
+                // Conservative estimates for menu bar and dock
                 let menu_bar_height = if is_main { 25 } else { 0 };
-
-                // Dock can be on any edge - for simplicity assume bottom, ~70px when visible
-                // In practice, you'd query NSScreen.visibleFrame
                 let dock_height = if is_main { 70 } else { 0 };
 
                 return Bounds {
@@ -973,14 +1059,14 @@ fn get_visible_display_bounds(x: i32, y: i32) -> Bounds {
         }
     }
 
-    // Fallback to main display
+    // Final fallback to main display
     let main = CGDisplay::main();
     let frame = main.bounds();
     Bounds {
         x: frame.origin.x as i32,
-        y: frame.origin.y as i32 + 25, // Account for menu bar
+        y: frame.origin.y as i32 + 25,
         width: frame.size.width as u32,
-        height: (frame.size.height - 95.0) as u32, // Account for menu bar and dock
+        height: (frame.size.height - 95.0) as u32,
     }
 }
 

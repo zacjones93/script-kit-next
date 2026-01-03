@@ -2238,17 +2238,6 @@ fn main() {
                                     }
                                 });
                             }
-                            Some(TrayMenuAction::NewNote) => {
-                                logging::log("TRAY", "New Note menu item clicked");
-                                let _ = cx.update(|cx| {
-                                    if let Err(e) = notes::quick_capture(cx) {
-                                        logging::log(
-                                            "TRAY",
-                                            &format!("Failed to quick capture note: {}", e),
-                                        );
-                                    }
-                                });
-                            }
                             Some(TrayMenuAction::OpenAiChat) => {
                                 logging::log("TRAY", "AI Chat menu item clicked");
                                 let _ = cx.update(|cx| {
@@ -2277,6 +2266,34 @@ fn main() {
                                 {
                                     Ok(_) => logging::log("TRAY", &format!("Spawned editor: {}", editor)),
                                     Err(e) => logging::log("TRAY", &format!("Failed to spawn editor '{}': {}", editor, e)),
+                                }
+                            }
+                            Some(TrayMenuAction::OpenOnGitHub) => {
+                                logging::log("TRAY", "Open on GitHub menu item clicked");
+                                let url = "https://github.com/script-kit/app";
+                                if let Err(e) = open::that(url) {
+                                    logging::log("TRAY", &format!("Failed to open GitHub URL: {}", e));
+                                }
+                            }
+                            Some(TrayMenuAction::OpenManual) => {
+                                logging::log("TRAY", "Manual menu item clicked");
+                                let url = "https://scriptkit.com";
+                                if let Err(e) = open::that(url) {
+                                    logging::log("TRAY", &format!("Failed to open manual URL: {}", e));
+                                }
+                            }
+                            Some(TrayMenuAction::JoinCommunity) => {
+                                logging::log("TRAY", "Join Community menu item clicked");
+                                let url = "https://discord.gg/scriptkit";
+                                if let Err(e) = open::that(url) {
+                                    logging::log("TRAY", &format!("Failed to open Discord URL: {}", e));
+                                }
+                            }
+                            Some(TrayMenuAction::FollowUs) => {
+                                logging::log("TRAY", "Follow Us menu item clicked");
+                                let url = "https://twitter.com/scriptkitapp";
+                                if let Err(e) = open::that(url) {
+                                    logging::log("TRAY", &format!("Failed to open Twitter URL: {}", e));
                                 }
                             }
                             Some(TrayMenuAction::Quit) => {

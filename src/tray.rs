@@ -23,10 +23,13 @@ const LOGO_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="32" hei
 pub enum TrayMenuAction {
     OpenScriptKit,
     OpenNotes,
-    NewNote,
     OpenAiChat,
-    LaunchAtLogin,
+    OpenOnGitHub,
+    OpenManual,
+    JoinCommunity,
+    FollowUs,
     Settings,
+    LaunchAtLogin,
     Quit,
 }
 
@@ -36,10 +39,15 @@ pub struct TrayManager {
     tray_icon: TrayIcon,
     open_script_kit_id: String,
     open_notes_id: String,
-    new_note_id: String,
     open_ai_chat_id: String,
-    launch_at_login_item: CheckMenuItem,
+    open_on_github_id: String,
+    open_manual_id: String,
+    join_community_id: String,
+    follow_us_id: String,
     settings_id: String,
+    launch_at_login_item: CheckMenuItem,
+    #[allow(dead_code)]
+    version_id: String,
     quit_id: String,
 }
 
@@ -57,10 +65,14 @@ impl TrayManager {
             menu,
             open_id,
             open_notes_id,
-            new_note_id,
             open_ai_chat_id,
-            launch_at_login_item,
+            open_on_github_id,
+            open_manual_id,
+            join_community_id,
+            follow_us_id,
             settings_id,
+            launch_at_login_item,
+            version_id,
             quit_id,
         ) = Self::create_menu()?;
 
@@ -76,10 +88,14 @@ impl TrayManager {
             tray_icon,
             open_script_kit_id: open_id,
             open_notes_id,
-            new_note_id,
             open_ai_chat_id,
-            launch_at_login_item,
+            open_on_github_id,
+            open_manual_id,
+            join_community_id,
+            follow_us_id,
             settings_id,
+            launch_at_login_item,
+            version_id,
             quit_id,
         })
     }
@@ -111,9 +127,31 @@ impl TrayManager {
     }
 
     /// Creates the tray menu with standard items
+    ///
+    /// Menu structure (Raycast-style):
+    /// 1. Open Script Kit
+    /// 2. ---
+    /// 3. Open Notes
+    /// 4. Open AI Chat
+    /// 5. ---
+    /// 6. Open on GitHub
+    /// 7. Manual
+    /// 8. Join Community
+    /// 9. Follow Us
+    /// 10. ---
+    /// 11. Settings
+    /// 12. ---
+    /// 13. Launch at Login (checkmark)
+    /// 14. Version 0.1.0 (disabled)
+    /// 15. ---
+    /// 16. Quit Script Kit
     #[allow(clippy::type_complexity)]
     fn create_menu() -> Result<(
         Menu,
+        String,
+        String,
+        String,
+        String,
         String,
         String,
         String,
@@ -126,9 +164,17 @@ impl TrayManager {
 
         // Create menu items
         let open_item = MenuItem::new("Open Script Kit", true, None);
-        let open_notes_item = MenuItem::new("Notes", true, None);
-        let new_note_item = MenuItem::new("New Note", true, None);
-        let open_ai_chat_item = MenuItem::new("AI Chat", true, None);
+        let open_notes_item = MenuItem::new("Open Notes", true, None);
+        let open_ai_chat_item = MenuItem::new("Open AI Chat", true, None);
+
+        // External links
+        let open_on_github_item = MenuItem::new("Open on GitHub", true, None);
+        let open_manual_item = MenuItem::new("Manual", true, None);
+        let join_community_item = MenuItem::new("Join Community", true, None);
+        let follow_us_item = MenuItem::new("Follow Us", true, None);
+
+        // Settings
+        let settings_item = MenuItem::new("Settings", true, None);
 
         // Create check menu item for Launch at Login with current state
         let launch_at_login_item = CheckMenuItem::new(
@@ -138,45 +184,78 @@ impl TrayManager {
             None, // no accelerator
         );
 
-        let settings_item = MenuItem::new("Settings", true, None);
-        let quit_item = MenuItem::new("Quit", true, None);
+        // Version display (disabled, informational only)
+        let version_item = MenuItem::new("Version 0.1.0", false, None);
+
+        let quit_item = MenuItem::new("Quit Script Kit", true, None);
 
         // Store IDs for event matching
         let open_id = open_item.id().0.clone();
         let open_notes_id = open_notes_item.id().0.clone();
-        let new_note_id = new_note_item.id().0.clone();
         let open_ai_chat_id = open_ai_chat_item.id().0.clone();
+        let open_on_github_id = open_on_github_item.id().0.clone();
+        let open_manual_id = open_manual_item.id().0.clone();
+        let join_community_id = join_community_item.id().0.clone();
+        let follow_us_id = follow_us_item.id().0.clone();
         let settings_id = settings_item.id().0.clone();
+        let version_id = version_item.id().0.clone();
         let quit_id = quit_item.id().0.clone();
 
-        // Add items to menu
+        // Add items to menu in Raycast-style order
+        // Section 1: Main action
         menu.append(&open_item).context("Failed to add Open item")?;
         menu.append(&PredefinedMenuItem::separator())
             .context("Failed to add separator")?;
+
+        // Section 2: App features
         menu.append(&open_notes_item)
-            .context("Failed to add Notes item")?;
-        menu.append(&new_note_item)
-            .context("Failed to add New Note item")?;
+            .context("Failed to add Open Notes item")?;
         menu.append(&open_ai_chat_item)
-            .context("Failed to add AI Chat item")?;
+            .context("Failed to add Open AI Chat item")?;
         menu.append(&PredefinedMenuItem::separator())
             .context("Failed to add separator")?;
-        menu.append(&launch_at_login_item)
-            .context("Failed to add Launch at Login item")?;
+
+        // Section 3: External links
+        menu.append(&open_on_github_item)
+            .context("Failed to add Open on GitHub item")?;
+        menu.append(&open_manual_item)
+            .context("Failed to add Manual item")?;
+        menu.append(&join_community_item)
+            .context("Failed to add Join Community item")?;
+        menu.append(&follow_us_item)
+            .context("Failed to add Follow Us item")?;
+        menu.append(&PredefinedMenuItem::separator())
+            .context("Failed to add separator")?;
+
+        // Section 4: Settings
         menu.append(&settings_item)
             .context("Failed to add Settings item")?;
         menu.append(&PredefinedMenuItem::separator())
             .context("Failed to add separator")?;
+
+        // Section 5: App state
+        menu.append(&launch_at_login_item)
+            .context("Failed to add Launch at Login item")?;
+        menu.append(&version_item)
+            .context("Failed to add Version item")?;
+        menu.append(&PredefinedMenuItem::separator())
+            .context("Failed to add separator")?;
+
+        // Section 6: Quit
         menu.append(&quit_item).context("Failed to add Quit item")?;
 
         Ok((
             menu,
             open_id,
             open_notes_id,
-            new_note_id,
             open_ai_chat_id,
-            launch_at_login_item,
+            open_on_github_id,
+            open_manual_id,
+            join_community_id,
+            follow_us_id,
             settings_id,
+            launch_at_login_item,
+            version_id,
             quit_id,
         ))
     }
@@ -196,18 +275,24 @@ impl TrayManager {
             Some(TrayMenuAction::OpenScriptKit)
         } else if id == &self.open_notes_id {
             Some(TrayMenuAction::OpenNotes)
-        } else if id == &self.new_note_id {
-            Some(TrayMenuAction::NewNote)
         } else if id == &self.open_ai_chat_id {
             Some(TrayMenuAction::OpenAiChat)
+        } else if id == &self.open_on_github_id {
+            Some(TrayMenuAction::OpenOnGitHub)
+        } else if id == &self.open_manual_id {
+            Some(TrayMenuAction::OpenManual)
+        } else if id == &self.join_community_id {
+            Some(TrayMenuAction::JoinCommunity)
+        } else if id == &self.follow_us_id {
+            Some(TrayMenuAction::FollowUs)
+        } else if id == &self.settings_id {
+            Some(TrayMenuAction::Settings)
         } else if id == &self.launch_at_login_item.id().0 {
             // Toggle login item and update checkmark
             if let Ok(new_state) = login_item::toggle_login_item() {
                 self.launch_at_login_item.set_checked(new_state);
             }
             Some(TrayMenuAction::LaunchAtLogin)
-        } else if id == &self.settings_id {
-            Some(TrayMenuAction::Settings)
         } else if id == &self.quit_id {
             Some(TrayMenuAction::Quit)
         } else {
