@@ -241,6 +241,7 @@ impl ScriptListApp {
     ///
     /// # Arguments
     /// * `delta_lines` - Scroll delta in "lines" (positive = scroll content up/view down)
+    #[allow(dead_code)]
     pub fn handle_scroll_wheel(&mut self, delta_lines: f32, cx: &mut Context<Self>) {
         // Get current scroll position from ListState
         let current_item = self.main_list_state.logical_scroll_top().item_ix;

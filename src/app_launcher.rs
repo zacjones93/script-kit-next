@@ -75,6 +75,7 @@ pub enum AppLoadingState {
 
 impl AppLoadingState {
     /// Get a human-readable message for UI display
+    #[allow(dead_code)]
     pub fn message(&self) -> &'static str {
         match self {
             AppLoadingState::LoadingFromCache => "Loading apps...",
@@ -183,6 +184,7 @@ fn set_loading_state(state: AppLoadingState) {
 }
 
 /// Get the current loading state
+#[allow(dead_code)]
 pub fn get_app_loading_state() -> AppLoadingState {
     APP_LOADING_STATE
         .get()
@@ -192,16 +194,19 @@ pub fn get_app_loading_state() -> AppLoadingState {
 }
 
 /// Get a human-readable message for the current loading state
+#[allow(dead_code)]
 pub fn get_app_loading_message() -> &'static str {
     get_app_loading_state().message()
 }
 
 /// Check if apps are still loading
+#[allow(dead_code)]
 pub fn is_apps_loading() -> bool {
     get_app_loading_state() != AppLoadingState::Ready
 }
 
 /// Get the in-memory app cache (may be empty if not yet loaded)
+#[allow(dead_code)]
 pub fn get_cached_apps() -> Vec<AppInfo> {
     APP_CACHE
         .get()
@@ -268,27 +273,25 @@ fn load_apps_from_db() -> Vec<AppInfo> {
     let mut apps = Vec::new();
 
     if let Ok(iter) = apps_iter {
-        for row_result in iter {
-            if let Ok((bundle_id, name, path_str, icon_blob)) = row_result {
-                let path = PathBuf::from(&path_str);
+        for (bundle_id, name, path_str, icon_blob) in iter.flatten() {
+            let path = PathBuf::from(&path_str);
 
-                // Skip apps that no longer exist
-                if !path.exists() {
-                    continue;
-                }
-
-                // Decode icon if present
-                let icon = icon_blob.and_then(|bytes| {
-                    crate::list_item::decode_png_to_render_image_with_bgra_conversion(&bytes).ok()
-                });
-
-                apps.push(AppInfo {
-                    name,
-                    path,
-                    bundle_id,
-                    icon,
-                });
+            // Skip apps that no longer exist
+            if !path.exists() {
+                continue;
             }
+
+            // Decode icon if present
+            let icon = icon_blob.and_then(|bytes| {
+                crate::list_item::decode_png_to_render_image_with_bgra_conversion(&bytes).ok()
+            });
+
+            apps.push(AppInfo {
+                name,
+                path,
+                bundle_id,
+                icon,
+            });
         }
     }
 
@@ -1078,6 +1081,8 @@ mod tests {
         let apps = scan_applications();
         let mut names: Vec<_> = apps.iter().map(|a| a.name.to_lowercase()).collect();
         let original_len = names.len();
+        // Must sort before dedup since dedup only removes consecutive duplicates
+        names.sort();
         names.dedup();
 
         assert_eq!(
@@ -1282,12 +1287,8 @@ mod tests {
     #[test]
     fn test_get_apps_db_stats() {
         let (count, size) = get_apps_db_stats();
-        // Stats should be valid (0 is fine if DB is empty or not initialized)
-        assert!(
-            count == 0 || size >= 0,
-            "Stats should be valid: count={}, size={}",
-            count,
-            size
-        );
+        // Stats should be valid - size is usize so always >= 0
+        // Just verify the function returns without error
+        let _ = (count, size);
     }
 }
