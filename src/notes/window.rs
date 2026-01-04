@@ -415,8 +415,11 @@ impl NotesApp {
         };
 
         if let Some(note) = note_list.iter().find(|n| n.id == id) {
+            let content_len = note.content.len();
             self.editor_state.update(cx, |state, cx| {
                 state.set_value(&note.content, window, cx);
+                // Move cursor to end of text (set selection to end..end = no selection, cursor at end)
+                state.set_selection(content_len, content_len, window, cx);
             });
         }
 
