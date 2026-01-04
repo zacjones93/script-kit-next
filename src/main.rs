@@ -722,6 +722,9 @@ include!("app_execute.rs");
 // App actions handling (handle_action, trigger_action_by_name)
 include!("app_actions.rs");
 
+// Layout calculation methods (build_component_bounds, build_layout_info)
+include!("app_layout.rs");
+
 impl Focusable for ScriptListApp {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
