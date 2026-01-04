@@ -6,7 +6,10 @@
 
 use anyhow::{Context, Result};
 use tray_icon::{
-    menu::{CheckMenuItem, Menu, MenuEvent, MenuEventReceiver, MenuItem, PredefinedMenuItem},
+    menu::{
+        CheckMenuItem, IconMenuItem, Menu, MenuEvent, MenuEventReceiver, MenuItem, NativeIcon,
+        PredefinedMenuItem,
+    },
     Icon, TrayIcon, TrayIconBuilder,
 };
 
@@ -162,19 +165,40 @@ impl TrayManager {
     )> {
         let menu = Menu::new();
 
-        // Create menu items
-        let open_item = MenuItem::new("Open Script Kit", true, None);
-        let open_notes_item = MenuItem::new("Open Notes", true, None);
-        let open_ai_chat_item = MenuItem::new("Open AI Chat", true, None);
+        // Create menu items with native icons (macOS only)
+        // Native icons are ignored on Windows/Linux but the menu items still work
+        let open_item =
+            IconMenuItem::with_native_icon("Open Script Kit", true, Some(NativeIcon::Home), None);
+        let open_notes_item =
+            IconMenuItem::with_native_icon("Open Notes", true, Some(NativeIcon::Bookmarks), None);
+        let open_ai_chat_item = IconMenuItem::with_native_icon(
+            "Open AI Chat",
+            true,
+            Some(NativeIcon::IChatTheater),
+            None,
+        );
 
         // External links
-        let open_on_github_item = MenuItem::new("Open on GitHub", true, None);
-        let open_manual_item = MenuItem::new("Manual", true, None);
-        let join_community_item = MenuItem::new("Join Community", true, None);
-        let follow_us_item = MenuItem::new("Follow Us", true, None);
+        let open_on_github_item =
+            IconMenuItem::with_native_icon("Open on GitHub", true, Some(NativeIcon::Network), None);
+        let open_manual_item =
+            IconMenuItem::with_native_icon("Manual", true, Some(NativeIcon::Info), None);
+        let join_community_item = IconMenuItem::with_native_icon(
+            "Join Community",
+            true,
+            Some(NativeIcon::UserGroup),
+            None,
+        );
+        let follow_us_item =
+            IconMenuItem::with_native_icon("Follow Us", true, Some(NativeIcon::Share), None);
 
         // Settings
-        let settings_item = MenuItem::new("Settings", true, None);
+        let settings_item = IconMenuItem::with_native_icon(
+            "Settings",
+            true,
+            Some(NativeIcon::PreferencesGeneral),
+            None,
+        );
 
         // Create check menu item for Launch at Login with current state
         let launch_at_login_item = CheckMenuItem::new(
@@ -187,7 +211,8 @@ impl TrayManager {
         // Version display (disabled, informational only)
         let version_item = MenuItem::new("Version 0.1.0", false, None);
 
-        let quit_item = MenuItem::new("Quit Script Kit", true, None);
+        let quit_item =
+            IconMenuItem::with_native_icon("Quit Script Kit", true, Some(NativeIcon::Remove), None);
 
         // Store IDs for event matching
         let open_id = open_item.id().0.clone();

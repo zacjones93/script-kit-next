@@ -2323,7 +2323,7 @@ fn main() {
                             }
                             Some(TrayMenuAction::JoinCommunity) => {
                                 logging::log("TRAY", "Join Community menu item clicked");
-                                let url = "https://discord.gg/scriptkit";
+                                let url = "https://discord.gg/qnUX4XqJQd";
                                 if let Err(e) = open::that(url) {
                                     logging::log("TRAY", &format!("Failed to open Discord URL: {}", e));
                                 }
