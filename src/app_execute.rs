@@ -619,6 +619,50 @@ impl ScriptListApp {
                     }
                 }
             }
+
+            // =========================================================================
+            // Frecency/Suggested Commands
+            // =========================================================================
+            builtins::BuiltInFeature::FrecencyCommand(cmd_type) => {
+                logging::log(
+                    "EXEC",
+                    &format!("Executing frecency command: {:?}", cmd_type),
+                );
+
+                use builtins::FrecencyCommandType;
+
+                match cmd_type {
+                    FrecencyCommandType::ClearSuggested => {
+                        // Clear all frecency data
+                        self.frecency_store.clear();
+                        if let Err(e) = self.frecency_store.save() {
+                            logging::log("ERROR", &format!("Failed to save frecency data: {}", e));
+                            self.toast_manager.push(
+                                components::toast::Toast::error(
+                                    format!("Failed to clear suggested: {}", e),
+                                    &self.theme,
+                                )
+                                .duration_ms(Some(5000)),
+                            );
+                        } else {
+                            logging::log("EXEC", "Cleared all suggested items");
+                            // Invalidate the grouped cache so the UI updates
+                            self.invalidate_grouped_cache();
+                            // Reset the main input and window to clean state
+                            self.reset_to_script_list(cx);
+                            self.toast_manager.push(
+                                components::toast::Toast::success(
+                                    "Suggested items cleared",
+                                    &self.theme,
+                                )
+                                .duration_ms(Some(3000)),
+                            );
+                        }
+                        // Note: cx.notify() is called by reset_to_script_list, but we still need it for error case
+                        cx.notify();
+                    }
+                }
+            }
         }
     }
 

@@ -80,42 +80,58 @@ impl Default for ProcessLimits {
 }
 
 // ============================================
-// FRECENCY CONFIG
+// SUGGESTED CONFIG
 // ============================================
 
-/// Configuration for frecency scoring (recent items ranking)
+/// Configuration for the "Suggested" section (frecency-based ranking)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FrecencyConfig {
-    /// Whether frecency tracking is enabled (default: true)
-    #[serde(default = "default_frecency_enabled")]
+pub struct SuggestedConfig {
+    /// Whether the Suggested section is shown (default: true)
+    #[serde(default = "default_suggested_enabled")]
     pub enabled: bool,
-    /// Half-life in days for frecency decay (default: 7.0)
+    /// Maximum number of items to show in SUGGESTED section (default: 10)
+    #[serde(default = "default_suggested_max_items")]
+    pub max_items: usize,
+    /// Minimum score threshold for items to appear in Suggested (default: 0.1)
+    /// Items with scores below this won't appear even if there's room
+    #[serde(default = "default_suggested_min_score")]
+    pub min_score: f64,
+    /// Half-life in days for score decay (default: 7.0)
     /// Lower values = more weight on recent items
     /// Higher values = more weight on frequently used items
-    #[serde(default = "default_frecency_half_life_days")]
+    #[serde(default = "default_suggested_half_life_days")]
     pub half_life_days: f64,
-    /// Maximum number of items to show in RECENT section (default: 10)
-    #[serde(default = "default_frecency_max_recent_items")]
-    pub max_recent_items: usize,
+    /// Whether to track script usage for suggestions (default: true)
+    /// If false, no new usage is recorded but existing data is preserved
+    #[serde(default = "default_suggested_track_usage")]
+    pub track_usage: bool,
 }
 
-fn default_frecency_enabled() -> bool {
-    DEFAULT_FRECENCY_ENABLED
+fn default_suggested_enabled() -> bool {
+    DEFAULT_SUGGESTED_ENABLED
 }
-fn default_frecency_half_life_days() -> f64 {
-    DEFAULT_FRECENCY_HALF_LIFE_DAYS
+fn default_suggested_max_items() -> usize {
+    DEFAULT_SUGGESTED_MAX_ITEMS
 }
-fn default_frecency_max_recent_items() -> usize {
-    DEFAULT_FRECENCY_MAX_RECENT_ITEMS
+fn default_suggested_min_score() -> f64 {
+    DEFAULT_SUGGESTED_MIN_SCORE
+}
+fn default_suggested_half_life_days() -> f64 {
+    DEFAULT_SUGGESTED_HALF_LIFE_DAYS
+}
+fn default_suggested_track_usage() -> bool {
+    DEFAULT_SUGGESTED_TRACK_USAGE
 }
 
-impl Default for FrecencyConfig {
+impl Default for SuggestedConfig {
     fn default() -> Self {
-        FrecencyConfig {
-            enabled: DEFAULT_FRECENCY_ENABLED,
-            half_life_days: DEFAULT_FRECENCY_HALF_LIFE_DAYS,
-            max_recent_items: DEFAULT_FRECENCY_MAX_RECENT_ITEMS,
+        SuggestedConfig {
+            enabled: DEFAULT_SUGGESTED_ENABLED,
+            max_items: DEFAULT_SUGGESTED_MAX_ITEMS,
+            min_score: DEFAULT_SUGGESTED_MIN_SCORE,
+            half_life_days: DEFAULT_SUGGESTED_HALF_LIFE_DAYS,
+            track_usage: DEFAULT_SUGGESTED_TRACK_USAGE,
         }
     }
 }
@@ -276,9 +292,9 @@ pub struct Config {
         rename = "clipboardHistoryMaxTextLength"
     )]
     pub clipboard_history_max_text_length: Option<usize>,
-    /// Frecency configuration for recent items ranking
+    /// Suggested section configuration (frecency-based ranking)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub frecency: Option<FrecencyConfig>,
+    pub suggested: Option<SuggestedConfig>,
     /// Hotkey for opening Notes window (default: Cmd+Shift+N)
     #[serde(
         default,
@@ -310,7 +326,7 @@ impl Default for Config {
             built_ins: None,          // Will use BuiltInConfig::default() via getter
             process_limits: None,     // Will use ProcessLimits::default() via getter
             clipboard_history_max_text_length: None, // Will use default via getter
-            frecency: None,           // Will use FrecencyConfig::default() via getter
+            suggested: None,          // Will use SuggestedConfig::default() via getter
             notes_hotkey: None,       // Will use HotkeyConfig::default_notes_hotkey() via getter
             ai_hotkey: None,          // Will use HotkeyConfig::default_ai_hotkey() via getter
             commands: None,           // No per-command overrides by default
@@ -373,9 +389,9 @@ impl Config {
         self.process_limits.clone().unwrap_or_default()
     }
 
-    /// Returns the frecency configuration, or defaults if not configured
-    pub fn get_frecency(&self) -> FrecencyConfig {
-        self.frecency.clone().unwrap_or_default()
+    /// Returns the suggested section configuration, or defaults if not configured
+    pub fn get_suggested(&self) -> SuggestedConfig {
+        self.suggested.clone().unwrap_or_default()
     }
 
     /// Returns the notes hotkey configuration, or default (Cmd+Shift+N) if not configured

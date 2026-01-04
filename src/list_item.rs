@@ -45,7 +45,7 @@ pub const SECTION_HEADER_HEIGHT: f32 = 24.0;
 /// The usize in Item variant is the index into the flat results array.
 #[derive(Clone, Debug)]
 pub enum GroupedListItem {
-    /// A section header (e.g., "RECENT", "MAIN")
+    /// A section header (e.g., "SUGGESTED", "MAIN")
     SectionHeader(String),
     /// A regular list item - usize is the index in the flat results array
     Item(usize),

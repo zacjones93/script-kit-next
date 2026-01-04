@@ -2,7 +2,7 @@
 //! Group Separator Style Variations
 //!
 //! This module provides 25+ named separator styles for group headers in the main menu list.
-//! Each separator defines how to visually separate group sections like "RECENT" and "MAIN".
+//! Each separator defines how to visually separate group sections like "SUGGESTED" and "MAIN".
 //!
 //! # Visual Guide
 //!

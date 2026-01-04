@@ -25,10 +25,12 @@ pub const DEFAULT_CLIPBOARD_HISTORY_MAX_TEXT_LENGTH: usize = 100_000;
 /// Default process limits
 pub const DEFAULT_HEALTH_CHECK_INTERVAL_MS: u64 = 5000;
 
-/// Default frecency settings
-pub const DEFAULT_FRECENCY_HALF_LIFE_DAYS: f64 = 7.0;
-pub const DEFAULT_FRECENCY_MAX_RECENT_ITEMS: usize = 10;
-pub const DEFAULT_FRECENCY_ENABLED: bool = true;
+/// Default suggested section settings
+pub const DEFAULT_SUGGESTED_ENABLED: bool = true;
+pub const DEFAULT_SUGGESTED_MAX_ITEMS: usize = 10;
+pub const DEFAULT_SUGGESTED_MIN_SCORE: f64 = 0.1;
+pub const DEFAULT_SUGGESTED_HALF_LIFE_DAYS: f64 = 7.0;
+pub const DEFAULT_SUGGESTED_TRACK_USAGE: bool = true;
 
 /// Commands that require confirmation before execution by default.
 /// Users can override this behavior per-command in config.ts using `confirmationRequired`.

@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::SuggestedConfig;
 use std::sync::Arc;
 
 /// Helper to wrap Vec<Script> into Vec<Arc<Script>> for tests
@@ -776,6 +777,7 @@ fn test_fuzzy_search_unified_scripts_first() {
         SearchResult::BuiltIn(_) => panic!("Script should be first"),
         SearchResult::App(_) => panic!("Script should be first"),
         SearchResult::Window(_) => panic!("Script should be first"),
+        SearchResult::Agent(_) => panic!("Script should be first"),
     }
 }
 
@@ -2157,6 +2159,7 @@ fn test_unified_search_ties_scripts_first() {
         SearchResult::BuiltIn(_) => panic!("Expected Script first"),
         SearchResult::App(_) => panic!("Expected Script first"),
         SearchResult::Window(_) => panic!("Expected Script first"),
+        SearchResult::Agent(_) => panic!("Expected Script first"),
     }
 }
 
@@ -2750,7 +2753,7 @@ fn test_get_grouped_results_search_mode_flat_list() {
         &apps,
         &frecency_store,
         "open",
-        10,
+        &SuggestedConfig::default(),
         &[],
         None,
     );
@@ -2800,7 +2803,7 @@ fn test_get_grouped_results_empty_filter_grouped_view() {
         &apps,
         &frecency_store,
         "",
-        10,
+        &SuggestedConfig::default(),
         &[],
         None,
     );
@@ -2808,7 +2811,7 @@ fn test_get_grouped_results_empty_filter_grouped_view() {
     // Results should contain all items
     assert_eq!(results.len(), 2);
 
-    // Grouped should have SCRIPTS section (no RECENT since frecency is empty)
+    // Grouped should have SCRIPTS section (no SUGGESTED since frecency is empty)
     assert!(!grouped.is_empty());
 
     // First item should be SCRIPTS section header (since inputs are scripts only)
@@ -2857,7 +2860,7 @@ fn test_get_grouped_results_with_frecency() {
     let mut frecency_store = FrecencyStore::new();
     frecency_store.record_use("/beta.ts");
 
-    // Empty filter should return grouped view with RECENT section
+    // Empty filter should return grouped view with SUGGESTED section
     let (grouped, results) = get_grouped_results(
         &scripts,
         &scriptlets,
@@ -2865,7 +2868,7 @@ fn test_get_grouped_results_with_frecency() {
         &apps,
         &frecency_store,
         "",
-        10,
+        &SuggestedConfig::default(),
         &[],
         None,
     );
@@ -2873,7 +2876,7 @@ fn test_get_grouped_results_with_frecency() {
     // Results should contain all items
     assert_eq!(results.len(), 3);
 
-    // Grouped should have both RECENT and SCRIPTS sections
+    // Grouped should have both SUGGESTED and SCRIPTS sections
     let section_headers: Vec<&str> = grouped
         .iter()
         .filter_map(|item| match item {
@@ -2882,7 +2885,7 @@ fn test_get_grouped_results_with_frecency() {
         })
         .collect();
 
-    assert!(section_headers.contains(&"RECENT"));
+    assert!(section_headers.contains(&"SUGGESTED"));
     assert!(section_headers.contains(&"SCRIPTS"));
 }
 
@@ -2892,7 +2895,7 @@ fn test_get_grouped_results_frecency_script_appears_before_builtins() {
     // regardless of frecency scores.
     //
     // Expected behavior: When a script has frecency > 0, it should appear
-    // in the RECENT section BEFORE builtins in MAIN.
+    // in the SUGGESTED section BEFORE builtins in MAIN.
     //
     // Bug scenario: User frequently uses "test-script", but Clipboard History
     // still appears as the first choice when opening Script Kit.
@@ -2935,20 +2938,20 @@ fn test_get_grouped_results_frecency_script_appears_before_builtins() {
         &apps,
         &frecency_store,
         "",
-        10,
+        &SuggestedConfig::default(),
         &[],
         None,
     );
 
     // Verify structure:
-    // grouped[0] = SectionHeader("RECENT")
+    // grouped[0] = SectionHeader("SUGGESTED")
     // grouped[1] = Item(idx) where results[idx] is the frecency script
     // Then type-based sections: SCRIPTS, COMMANDS, etc.
 
-    // First should be RECENT header
+    // First should be SUGGESTED header
     assert!(
-        matches!(&grouped[0], GroupedListItem::SectionHeader(s) if s == "RECENT"),
-        "First item should be RECENT section header, got {:?}",
+        matches!(&grouped[0], GroupedListItem::SectionHeader(s) if s == "SUGGESTED"),
+        "First item should be SUGGESTED section header, got {:?}",
         grouped[0]
     );
 
@@ -2977,7 +2980,7 @@ fn test_get_grouped_results_frecency_script_appears_before_builtins() {
         })
         .collect();
 
-    // Should have RECENT, SCRIPTS, and COMMANDS sections
+    // Should have SUGGESTED, SCRIPTS, and COMMANDS sections
     assert!(
         section_headers.contains(&"SCRIPTS"),
         "Should have SCRIPTS section for non-recent script. Headers: {:?}",
@@ -3006,10 +3009,10 @@ fn test_get_grouped_results_frecency_script_appears_before_builtins() {
         })
         .collect();
 
-    // Builtins should be in COMMANDS, not RECENT
+    // Builtins should be in COMMANDS, not SUGGESTED
     assert!(
         commands_items.contains(&"Clipboard History"),
-        "Clipboard History should be in COMMANDS section, not RECENT. COMMANDS items: {:?}",
+        "Clipboard History should be in COMMANDS section, not SUGGESTED. COMMANDS items: {:?}",
         commands_items
     );
     assert!(
@@ -3023,7 +3026,7 @@ fn test_get_grouped_results_frecency_script_appears_before_builtins() {
 fn test_get_grouped_results_builtin_with_frecency_vs_script_frecency() {
     // This test captures a more nuanced bug scenario:
     // When BOTH a builtin (Clipboard History) AND a script have frecency,
-    // the script with higher frecency should appear first in RECENT.
+    // the script with higher frecency should appear first in SUGGESTED.
     //
     // Bug: Clipboard History appears first even when user scripts have
     // higher/more recent frecency scores.
@@ -3059,24 +3062,24 @@ fn test_get_grouped_results_builtin_with_frecency_vs_script_frecency() {
         &apps,
         &frecency_store,
         "",
-        10,
+        &SuggestedConfig::default(),
         &[],
         None,
     );
 
-    // Both should be in RECENT, but script should come FIRST (higher frecency)
+    // Both should be in SUGGESTED, but script should come FIRST (higher frecency)
     assert!(
-        matches!(&grouped[0], GroupedListItem::SectionHeader(s) if s == "RECENT"),
-        "First item should be RECENT header"
+        matches!(&grouped[0], GroupedListItem::SectionHeader(s) if s == "SUGGESTED"),
+        "First item should be SUGGESTED header"
     );
 
-    // The first ITEM in RECENT should be the user script (higher frecency)
+    // The first ITEM in SUGGESTED should be the user script (higher frecency)
     assert!(
         matches!(&grouped[1], GroupedListItem::Item(idx) if {
             let result = &results[*idx];
             matches!(result, SearchResult::Script(sm) if sm.script.name == "my-frequent-script")
         }),
-        "First item in RECENT should be 'my-frequent-script' (highest frecency), got: {}",
+        "First item in SUGGESTED should be 'my-frequent-script' (highest frecency), got: {}",
         if let GroupedListItem::Item(idx) = &grouped[1] {
             results[*idx].name().to_string()
         } else {
@@ -3084,12 +3087,12 @@ fn test_get_grouped_results_builtin_with_frecency_vs_script_frecency() {
         }
     );
 
-    // Clipboard History should be second in RECENT (lower frecency)
+    // Clipboard History should be second in SUGGESTED (lower frecency)
     assert!(
         matches!(&grouped[2], GroupedListItem::Item(idx) if {
             results[*idx].name() == "Clipboard History"
         }),
-        "Second item in RECENT should be 'Clipboard History' (lower frecency), got: {}",
+        "Second item in SUGGESTED should be 'Clipboard History' (lower frecency), got: {}",
         if let GroupedListItem::Item(idx) = &grouped[2] {
             results[*idx].name().to_string()
         } else {
@@ -3103,7 +3106,7 @@ fn test_get_grouped_results_selection_priority_with_frecency() {
     // This test verifies the SELECTION behavior, not just grouping.
     //
     // Bug: When user opens Script Kit, the FIRST SELECTABLE item should be
-    // the most recently used item (from RECENT), not the first item in MAIN.
+    // the most recently used item (from SUGGESTED), not the first item in MAIN.
     //
     // The grouped list structure determines what gets selected initially.
     // With frecency, the first Item (not SectionHeader) should be the
@@ -3146,7 +3149,7 @@ fn test_get_grouped_results_selection_priority_with_frecency() {
         &apps,
         &frecency_store,
         "",
-        10,
+        &SuggestedConfig::default(),
         &[],
         None,
     );
@@ -3176,7 +3179,7 @@ fn test_get_grouped_results_selection_priority_with_frecency() {
     );
 
     // Verify the structure explicitly
-    // grouped[0] = SectionHeader("RECENT")
+    // grouped[0] = SectionHeader("SUGGESTED")
     // grouped[1] = Item(zebra-script) <- THIS should be first selection
     // grouped[2] = SectionHeader("SCRIPTS") or next type-based section
     // grouped[3+] = Other items sorted alphabetically within their sections
@@ -3189,11 +3192,11 @@ fn test_get_grouped_results_selection_priority_with_frecency() {
         })
         .collect();
 
-    // First 3 items should be: RECENT header, frecency item, SCRIPTS header (for non-recent scripts)
+    // First 3 items should be: SUGGESTED header, frecency item, SCRIPTS header (for non-recent scripts)
     assert_eq!(
         &grouped_names[..3],
-        &["[RECENT]", "zebra-script", "[SCRIPTS]"],
-        "First 3 items should be: RECENT header, frecency item, SCRIPTS header. Got: {:?}",
+        &["[SUGGESTED]", "zebra-script", "[SCRIPTS]"],
+        "First 3 items should be: SUGGESTED header, frecency item, SCRIPTS header. Got: {:?}",
         grouped_names
     );
 }
@@ -3245,7 +3248,7 @@ fn test_get_grouped_results_no_frecency_items_in_type_sections() {
         &apps,
         &frecency_store,
         "",
-        10,
+        &SuggestedConfig::default(),
         &[],
         None,
     );
@@ -3297,7 +3300,7 @@ fn test_get_grouped_results_empty_inputs() {
         &apps,
         &frecency_store,
         "",
-        10,
+        &SuggestedConfig::default(),
         &[],
         None,
     );
@@ -3343,7 +3346,7 @@ fn test_get_grouped_results_items_reference_correct_indices() {
         &apps,
         &frecency_store,
         "",
-        10,
+        &SuggestedConfig::default(),
         &[],
         None,
     );
@@ -4074,7 +4077,7 @@ fn bench_get_grouped_results_repeated_calls() {
         &apps,
         &frecency_store,
         "",
-        10,
+        &SuggestedConfig::default(),
         &[],
         None,
     );
@@ -4089,7 +4092,7 @@ fn bench_get_grouped_results_repeated_calls() {
             &apps,
             &frecency_store,
             "",
-            10,
+            &SuggestedConfig::default(),
             &[],
             None,
         );
@@ -4106,7 +4109,7 @@ fn bench_get_grouped_results_repeated_calls() {
             &apps,
             &frecency_store,
             "scr",
-            10,
+            &SuggestedConfig::default(),
             &[],
             None,
         );
@@ -4384,7 +4387,7 @@ fn test_get_grouped_results_respects_frecency_ordering() {
         &apps,
         &frecency_store,
         "",
-        10,
+        &SuggestedConfig::default(),
         &[],
         None,
     );
@@ -4395,7 +4398,7 @@ fn test_get_grouped_results_respects_frecency_ordering() {
     // Record use for Gamma (should become "recent")
     frecency_store.record_use("/test/gamma.ts");
 
-    // Now get_grouped_results should show Gamma in RECENT section
+    // Now get_grouped_results should show Gamma in SUGGESTED section
     let (grouped2, results2) = get_grouped_results(
         &scripts,
         &scriptlets,
@@ -4403,29 +4406,29 @@ fn test_get_grouped_results_respects_frecency_ordering() {
         &apps,
         &frecency_store,
         "",
-        10,
+        &SuggestedConfig::default(),
         &[],
         None,
     );
 
-    // Should now have RECENT header, at least one recent item, MAIN header, remaining items
-    // The first section header should be "RECENT"
+    // Should now have SUGGESTED header, at least one recent item, MAIN header, remaining items
+    // The first section header should be "SUGGESTED"
     let first_header = grouped2.iter().find_map(|item| match item {
         GroupedListItem::SectionHeader(s) => Some(s.clone()),
         _ => None,
     });
     assert_eq!(
         first_header,
-        Some("RECENT".to_string()),
-        "After recording use, RECENT section should appear"
+        Some("SUGGESTED".to_string()),
+        "After recording use, SUGGESTED section should appear"
     );
 
-    // Find the first item after the RECENT header - it should be Gamma
+    // Find the first item after the SUGGESTED header - it should be Gamma
     let mut found_recent_header = false;
     let mut first_recent_item: Option<&SearchResult> = None;
     for item in grouped2.iter() {
         match item {
-            GroupedListItem::SectionHeader(s) if s == "RECENT" => {
+            GroupedListItem::SectionHeader(s) if s == "SUGGESTED" => {
                 found_recent_header = true;
             }
             GroupedListItem::Item(idx) if found_recent_header && first_recent_item.is_none() => {
@@ -4438,12 +4441,12 @@ fn test_get_grouped_results_respects_frecency_ordering() {
 
     assert!(
         first_recent_item.is_some(),
-        "Should have at least one item in RECENT section"
+        "Should have at least one item in SUGGESTED section"
     );
     assert_eq!(
         first_recent_item.unwrap().name(),
         "Gamma Script",
-        "The most recently used script should appear first in RECENT section"
+        "The most recently used script should appear first in SUGGESTED section"
     );
 }
 
@@ -4476,7 +4479,7 @@ fn test_get_grouped_results_updates_after_frecency_change() {
         &apps,
         &frecency_store,
         "",
-        10,
+        &SuggestedConfig::default(),
         &[],
         None,
     );
@@ -4507,17 +4510,17 @@ fn test_get_grouped_results_updates_after_frecency_change() {
         &apps,
         &frecency_store,
         "",
-        10,
+        &SuggestedConfig::default(),
         &[],
         None,
     );
 
-    // Find items in RECENT section
+    // Find items in SUGGESTED section
     let mut in_recent_section = false;
     let mut recent_items: Vec<&str> = vec![];
     for item in grouped2.iter() {
         match item {
-            GroupedListItem::SectionHeader(s) if s == "RECENT" => {
+            GroupedListItem::SectionHeader(s) if s == "SUGGESTED" => {
                 in_recent_section = true;
             }
             GroupedListItem::SectionHeader(_) => {
@@ -4532,11 +4535,11 @@ fn test_get_grouped_results_updates_after_frecency_change() {
         }
     }
 
-    // Second Script should now be first in RECENT (higher frecency score)
+    // Second Script should now be first in SUGGESTED (higher frecency score)
     assert!(!recent_items.is_empty(), "Should have recent items");
     assert_eq!(
         recent_items[0], "Second Script",
-        "Script with higher frecency (more uses) should appear first in RECENT"
+        "Script with higher frecency (more uses) should appear first in SUGGESTED"
     );
 }
 
@@ -4581,7 +4584,7 @@ fn test_frecency_cache_invalidation_required() {
         &apps,
         &frecency_store,
         filter_text,
-        10,
+        &SuggestedConfig::default(),
         &[],
         None,
     );
@@ -4608,7 +4611,7 @@ fn test_frecency_cache_invalidation_required() {
             &apps,
             &frecency_store,
             filter_text,
-            10,
+            &SuggestedConfig::default(),
             &[],
             None,
         )
@@ -4624,7 +4627,7 @@ fn test_frecency_cache_invalidation_required() {
             &apps,
             &frecency_store,
             filter_text,
-            10,
+            &SuggestedConfig::default(),
             &[],
             None,
         )
@@ -4642,7 +4645,7 @@ fn test_frecency_cache_invalidation_required() {
         &apps,
         &frecency_store,
         filter_text,
-        10,
+        &SuggestedConfig::default(),
         &[],
         None,
     );
@@ -4652,7 +4655,7 @@ fn test_frecency_cache_invalidation_required() {
     let mut in_recent = false;
     for item in correct_grouped.iter() {
         match item {
-            GroupedListItem::SectionHeader(s) if s == "RECENT" => in_recent = true,
+            GroupedListItem::SectionHeader(s) if s == "SUGGESTED" => in_recent = true,
             GroupedListItem::SectionHeader(_) => in_recent = false,
             GroupedListItem::Item(idx) if in_recent => {
                 if let Some(r) = correct_results.get(*idx) {
@@ -4668,7 +4671,7 @@ fn test_frecency_cache_invalidation_required() {
     let mut in_recent_buggy = false;
     for item in buggy_grouped.iter() {
         match item {
-            GroupedListItem::SectionHeader(s) if s == "RECENT" => in_recent_buggy = true,
+            GroupedListItem::SectionHeader(s) if s == "SUGGESTED" => in_recent_buggy = true,
             GroupedListItem::SectionHeader(_) => in_recent_buggy = false,
             GroupedListItem::Item(idx) if in_recent_buggy => {
                 if let Some(r) = buggy_results.get(*idx) {
@@ -4679,26 +4682,26 @@ fn test_frecency_cache_invalidation_required() {
         }
     }
 
-    // The CORRECT results should show ScriptB in RECENT section
+    // The CORRECT results should show ScriptB in SUGGESTED section
     // (because we just recorded a use for it)
     assert!(
         correct_recent_items.contains(&"ScriptB"),
-        "CORRECT behavior: ScriptB should appear in RECENT section after record_use()"
+        "CORRECT behavior: ScriptB should appear in SUGGESTED section after record_use()"
     );
 
-    // The BUGGY cached results do NOT show ScriptB in RECENT
+    // The BUGGY cached results do NOT show ScriptB in SUGGESTED
     // (because the cache wasn't invalidated)
     //
     // THIS ASSERTION DEMONSTRATES THE BUG:
-    // The buggy code returns stale results that don't include ScriptB in RECENT
+    // The buggy code returns stale results that don't include ScriptB in SUGGESTED
     assert!(!buggy_recent_items.contains(&"ScriptB"),
-            "BUG VERIFICATION: Cached results don't contain ScriptB in RECENT (cache wasn't invalidated). \
+            "BUG VERIFICATION: Cached results don't contain ScriptB in SUGGESTED (cache wasn't invalidated). \
              This assertion demonstrates the bug exists - it should be removed after the fix.");
 
     // The REAL test that should PASS after the fix is applied:
     // When invalidate_grouped_cache() is called after record_use(),
     // the next call to get_grouped_results_cached() should return fresh results
-    // that include ScriptB in RECENT.
+    // that include ScriptB in SUGGESTED.
     //
     // Uncomment this after applying the fix:
     // assert_eq!(buggy_recent_items, correct_recent_items,
@@ -4784,7 +4787,7 @@ fn test_frecency_change_invalidates_cache() {
                 apps,
                 frecency_store,
                 filter_text,
-                10,
+                &SuggestedConfig::default(),
                 &[],
                 None,
             );
@@ -4819,13 +4822,13 @@ fn test_frecency_change_invalidates_cache() {
         filter_text,
     );
 
-    // Verify initial state: no RECENT section (no frecency data)
+    // Verify initial state: no SUGGESTED section (no frecency data)
     let initial_has_recent = initial_grouped
         .iter()
-        .any(|item| matches!(item, GroupedListItem::SectionHeader(s) if s == "RECENT"));
+        .any(|item| matches!(item, GroupedListItem::SectionHeader(s) if s == "SUGGESTED"));
     assert!(
         !initial_has_recent,
-        "Initially there should be no RECENT section"
+        "Initially there should be no SUGGESTED section"
     );
 
     // === THIS IS WHERE THE BUG HAPPENS ===
@@ -4837,7 +4840,7 @@ fn test_frecency_change_invalidates_cache() {
     // This mock simulates the fixed behavior:
     cache.invalidate();
 
-    // Query again - should return fresh results with BetaScript in RECENT
+    // Query again - should return fresh results with BetaScript in SUGGESTED
     let (second_grouped, second_results) = cache.get_cached(
         &scripts,
         &scriptlets,
@@ -4847,12 +4850,12 @@ fn test_frecency_change_invalidates_cache() {
         filter_text,
     );
 
-    // Extract RECENT items from second query
+    // Extract SUGGESTED items from second query
     let mut recent_items: Vec<&str> = vec![];
     let mut in_recent = false;
     for item in second_grouped.iter() {
         match item {
-            GroupedListItem::SectionHeader(s) if s == "RECENT" => in_recent = true,
+            GroupedListItem::SectionHeader(s) if s == "SUGGESTED" => in_recent = true,
             GroupedListItem::SectionHeader(_) => in_recent = false,
             GroupedListItem::Item(idx) if in_recent => {
                 if let Some(r) = second_results.get(*idx) {
@@ -4865,12 +4868,12 @@ fn test_frecency_change_invalidates_cache() {
 
     // === VERIFY CACHE INVALIDATION WORKS ===
     // After frecency_store.record_use() and cache.invalidate(),
-    // the RECENT section should contain BetaScript.
+    // the SUGGESTED section should contain BetaScript.
     assert!(
         recent_items.contains(&"BetaScript"),
         "After frecency_store.record_use('/test/beta.ts') and cache invalidation, \
-             BetaScript should appear in RECENT section. \
-             Got RECENT items: {:?}.",
+             BetaScript should appear in SUGGESTED section. \
+             Got SUGGESTED items: {:?}.",
         recent_items
     );
 }

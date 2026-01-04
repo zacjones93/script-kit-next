@@ -98,6 +98,26 @@ impl ScriptListApp {
                             self.last_output =
                                 Some(SharedString::from("Cannot reveal windows in Finder"));
                         }
+                        scripts::SearchResult::Agent(agent_match) => {
+                            let path_str = agent_match.agent.path.to_string_lossy().to_string();
+                            std::thread::spawn(move || {
+                                use std::process::Command;
+                                match Command::new("open").arg("-R").arg(&path_str).spawn() {
+                                    Ok(_) => logging::log(
+                                        "UI",
+                                        &format!("Revealed agent in Finder: {}", path_str),
+                                    ),
+                                    Err(e) => logging::log(
+                                        "ERROR",
+                                        &format!("Failed to reveal agent in Finder: {}", e),
+                                    ),
+                                }
+                            });
+                            self.last_output = Some(SharedString::from("Revealed agent in Finder"));
+                            script_kit_gpui::set_main_window_visible(false);
+                            NEEDS_RESET.store(true, Ordering::SeqCst);
+                            cx.hide();
+                        }
                     }
                 } else {
                     self.last_output = Some(SharedString::from("No item selected"));
@@ -126,6 +146,9 @@ impl ScriptListApp {
                         scripts::SearchResult::Window(_) => {
                             self.last_output = Some(SharedString::from("Cannot copy window path"));
                             None
+                        }
+                        scripts::SearchResult::Agent(agent_match) => {
+                            Some(agent_match.agent.path.to_string_lossy().to_string())
                         }
                     };
 
@@ -233,6 +256,13 @@ impl ScriptListApp {
                         }
                         scripts::SearchResult::Window(_) => {
                             self.last_output = Some(SharedString::from("Cannot edit windows"));
+                        }
+                        scripts::SearchResult::Agent(agent_match) => {
+                            self.edit_script(&agent_match.agent.path);
+                            // Hide window after opening editor and set reset flag
+                            script_kit_gpui::set_main_window_visible(false);
+                            NEEDS_RESET.store(true, Ordering::SeqCst);
+                            cx.hide();
                         }
                     }
                 } else {

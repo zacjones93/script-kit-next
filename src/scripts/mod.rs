@@ -28,7 +28,7 @@ mod search;
 mod types;
 
 // Re-export core types (always used)
-pub use types::{Script, Scriptlet, SearchResult};
+pub use types::{AgentMatch, Script, Scriptlet, SearchResult};
 
 // Re-export loader functions (always used)
 pub use loader::read_scripts;

@@ -12,9 +12,9 @@ impl ScriptListApp {
         let theme = theme::load_theme();
         // Config is now passed in from main() to avoid duplicate load (~100-300ms savings)
 
-        // Load frecency data for recently-used script tracking
-        let frecency_config = config.get_frecency();
-        let mut frecency_store = FrecencyStore::with_config(&frecency_config);
+        // Load frecency data for suggested section tracking
+        let suggested_config = config.get_suggested();
+        let mut frecency_store = FrecencyStore::with_config(&suggested_config);
         frecency_store.load().ok(); // Ignore errors - starts fresh if file doesn't exist
 
         // Load built-in entries based on config
@@ -727,7 +727,7 @@ impl ScriptListApp {
         );
 
         let start = std::time::Instant::now();
-        let max_recent_items = self.config.get_frecency().max_recent_items;
+        let suggested_config = self.config.get_suggested();
         
         // Get menu bar items from the background tracker (pre-fetched when apps activate)
         #[cfg(target_os = "macos")]
@@ -754,7 +754,7 @@ impl ScriptListApp {
             &self.apps,
             &self.frecency_store,
             &self.computed_filter_text,
-            max_recent_items,
+            &suggested_config,
             &menu_bar_items,
             menu_bar_bundle_id.as_deref(),
         );
@@ -944,6 +944,9 @@ impl ScriptListApp {
                     scripts::SearchResult::Window(wm) => {
                         format!("window:{}:{}", wm.window.app, wm.window.title)
                     }
+                    scripts::SearchResult::Agent(am) => {
+                        format!("agent:{}", am.agent.path.to_string_lossy())
+                    }
                 };
                 self.frecency_store.record_use(&frecency_path);
                 self.frecency_store.save().ok(); // Best-effort save
@@ -981,6 +984,17 @@ impl ScriptListApp {
                             &format!("Focusing window: {}", window_match.window.title),
                         );
                         self.execute_window_focus(&window_match.window, cx);
+                    }
+                    scripts::SearchResult::Agent(agent_match) => {
+                        logging::log(
+                            "EXEC",
+                            &format!("Agent selected: {}", agent_match.agent.name),
+                        );
+                        // TODO: Implement agent execution via mdflow
+                        self.last_output = Some(SharedString::from(format!(
+                            "Agent execution not yet implemented: {}",
+                            agent_match.agent.name
+                        )));
                     }
                 }
             }

@@ -5,9 +5,22 @@
 ## Overview
 
 This plan covers:
-1. **Terminology refactor**: Rename all "scriptlet" references to "extension"
-2. **Manifest alignment**: Add Raycast-compatible fields for easy porting
+1. **Terminology refactor**: Proper separation of Extension (bundle) vs Command (H2 section)
+2. **Manifest alignment**: Add Raycast-compatible fields at BOTH extension and command levels
 3. **Example extensions**: CleanShot and Chrome extensions as proof-of-concept
+
+## Key Terminology (Corrected)
+
+| Concept | Raycast Term | Script Kit Term | Definition |
+|---------|--------------|-----------------|------------|
+| Bundle/Package | Extension | Extension | The `.md` file with frontmatter |
+| Runnable entry | Command | Command | Each H2 section within an extension |
+| Bundle metadata | Manifest | ExtensionManifest | YAML frontmatter at file top |
+| Command metadata | Command properties | CommandMetadata | Per-H2 metadata block |
+
+**CRITICAL**: `Scriptlet` → `Command` (NOT `Extension`). An extension *contains* commands.
+
+---
 
 ## Current State
 
@@ -17,90 +30,59 @@ This plan covers:
 |-----------|----------|--------|
 | Scriptlet parsing | `src/scriptlets.rs` | ✅ Complete |
 | Codefence metadata | `src/scriptlet_metadata.rs` | ✅ Complete |
-| Bundle frontmatter | `src/scriptlets.rs:66-78` | ✅ Basic (name, description, author, icon) |
+| Bundle frontmatter | `src/scriptlets.rs:66-78` | ✅ Basic |
 | Typed metadata | `src/metadata_parser.rs` | ✅ Complete |
 | Schema parsing | `src/schema_parser.rs` | ✅ Complete |
 | Cache layer | `src/scriptlet_cache.rs` | ✅ Complete |
-| Test fixtures | `tests/fixtures/test-scriptlets.md` | ✅ Complete |
-
-### Current Frontmatter Fields (BundleFrontmatter)
-
-```rust
-pub struct BundleFrontmatter {
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub author: Option<String>,
-    pub icon: Option<String>,
-    pub extra: HashMap<String, serde_yaml::Value>,  // Catch-all
-}
-```
-
-### Current TypedMetadata Fields
-
-```rust
-pub struct TypedMetadata {
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub author: Option<String>,
-    pub enter: Option<String>,
-    pub alias: Option<String>,
-    pub icon: Option<String>,
-    pub shortcut: Option<String>,
-    pub tags: Vec<String>,
-    pub hidden: bool,
-    pub placeholder: Option<String>,
-    pub cron: Option<String>,
-    pub schedule: Option<String>,
-    pub watch: Vec<String>,
-    pub background: bool,
-    pub system: bool,
-    pub extra: HashMap<String, serde_json::Value>,
-}
-```
 
 ---
 
 ## Phase 1: Raycast Manifest Alignment
 
-### Required Fields for Raycast Parity
+### 1.1 Extension-Level Fields (Bundle Frontmatter)
 
 Based on [Raycast manifest documentation](https://developers.raycast.com/information/manifest):
-
-#### Extension-Level (Bundle Frontmatter)
 
 | Raycast Field | Type | Required | Script Kit Mapping | Status |
 |---------------|------|----------|-------------------|--------|
 | `name` | string | Yes | `name` | ✅ Have |
-| `title` | string | Yes | `title` (display name) | ❌ Need |
+| `title` | string | Yes | `title` | ❌ Need |
 | `description` | string | Yes | `description` | ✅ Have |
 | `icon` | string | Yes | `icon` | ✅ Have |
 | `author` | string | Yes | `author` | ✅ Have |
 | `license` | string | Yes | `license` | ❌ Need |
 | `categories` | string[] | Yes | `categories` | ❌ Need |
+| `platforms` | string[] | Yes | `platforms` | ❌ Need (accept, warn if not macOS) |
 | `keywords` | string[] | No | `keywords` | ❌ Need |
 | `contributors` | string[] | No | `contributors` | ❌ Need |
+| `pastContributors` | string[] | No | Accept in `extra` | ✅ Via flatten |
+| `owner` | string | No | Accept in `extra` | ✅ Via flatten |
+| `access` | string | No | Accept in `extra` | ✅ Via flatten |
+| `commands` | array | Yes | Generated from H2s | ✅ Implicit |
+| `tools` | array | No | Accept in `extra` | ✅ Via flatten |
+| `ai` | object | No | Accept in `extra` | ✅ Via flatten |
+| `external` | string[] | No | Accept in `extra` | ✅ Via flatten |
+| `preferences` | array | No | `preferences` | ❌ Need |
 
-#### Command-Level (Individual Extensions in Bundle)
+### 1.2 Command-Level Fields (Per-H2 Metadata)
+
+**This is the big gap we need to fill.** Each H2 section needs these fields:
 
 | Raycast Field | Type | Required | Script Kit Mapping | Status |
 |---------------|------|----------|-------------------|--------|
-| `name` | string | Yes | `command` (slug) | ✅ Have |
-| `title` | string | Yes | `name` (display) | ✅ Have |
-| `description` | string | Yes | `description` | ✅ Have (in metadata) |
-| `mode` | enum | Yes | Inferred from tool | ✅ Implicit |
-| `icon` | string | No | `icon` | ✅ Have |
+| `name` | string | Yes | `command` (slug from H2) | ✅ Have |
+| `title` | string | Yes | H2 header text | ✅ Have |
+| `description` | string | Yes | `description` in metadata | ✅ Have |
+| `mode` | enum | Yes | Inferred from tool type | ✅ Implicit |
 | `subtitle` | string | No | `subtitle` | ❌ Need |
+| `icon` | string | No | `icon` | ✅ Have |
 | `keywords` | string[] | No | `keywords` | ❌ Need |
 | `interval` | string | No | `cron`/`schedule` | ✅ Have |
+| `arguments` | array | No | `inputs` from `{{var}}` | ✅ Have |
+| `preferences` | array | No | Command-level prefs | ❌ Need |
+| `disabledByDefault` | bool | No | `disabled` | ❌ Need |
 
-#### Preferences (Extension Settings)
-
-| Raycast Field | Type | Required | Script Kit Mapping | Status |
-|---------------|------|----------|-------------------|--------|
-| `preferences` | array | No | `preferences` | ❌ Need |
-| `arguments` | array | No | `inputs` (from `{{var}}`) | ✅ Have |
-
-### New BundleFrontmatter Structure
+### 1.3 New Struct Definitions
 
 ```rust
 /// Extension bundle metadata (YAML frontmatter)
@@ -115,7 +97,7 @@ pub struct ExtensionManifest {
     pub title: String,
     /// Full description
     pub description: String,
-    /// 512x512 PNG icon path or icon name
+    /// Icon path or icon name (supports both)
     pub icon: String,
     /// Author's handle/username
     pub author: String,
@@ -125,41 +107,125 @@ pub struct ExtensionManifest {
     /// Categories for discovery
     #[serde(default)]
     pub categories: Vec<String>,
+    /// Supported platforms (accept but warn if not macOS)
+    #[serde(default)]
+    pub platforms: Vec<String>,
     
     // === Optional ===
-    /// Additional search keywords
     #[serde(default)]
     pub keywords: Vec<String>,
-    /// Active contributors
     #[serde(default)]
     pub contributors: Vec<String>,
-    /// Extension version
     pub version: Option<String>,
-    /// Repository URL
     pub repository: Option<String>,
-    /// Homepage URL  
     pub homepage: Option<String>,
-    /// Extension-wide preferences
     #[serde(default)]
     pub preferences: Vec<Preference>,
     
     // === Script Kit specific ===
-    /// Required permissions (clipboard, accessibility, etc.)
     #[serde(default)]
     pub permissions: Vec<String>,
-    /// Minimum Script Kit version
+    /// Minimum Script Kit version (semver)
+    #[serde(alias = "min_version")]
     pub min_version: Option<String>,
+    /// Schema version for future format evolution
+    pub manifest_version: Option<u32>,
     
-    /// Catch-all for unknown fields
+    /// Catch-all for unknown/future Raycast fields
     #[serde(flatten)]
     pub extra: HashMap<String, serde_yaml::Value>,
 }
 
-fn default_license() -> String {
-    "MIT".to_string()
+/// Command metadata (per-H2 section)
+/// Mirrors Raycast command properties
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandMetadata {
+    // === From H2 header ===
+    /// Command slug (auto-generated from title)
+    pub name: String,
+    /// Display title (the H2 header text)  
+    pub title: String,
+    
+    // === From metadata block ===
+    pub description: Option<String>,
+    pub subtitle: Option<String>,
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    
+    /// Command mode: "view" (default), "no-view", "menu-bar"
+    #[serde(default = "default_mode")]
+    pub mode: CommandMode,
+    
+    /// Background interval (e.g., "1m", "1h", "1d")
+    pub interval: Option<String>,
+    /// Cron expression (Script Kit extension)
+    pub cron: Option<String>,
+    /// Natural language schedule (Script Kit extension)
+    pub schedule: Option<String>,
+    
+    /// Typed arguments (up to 3 in Raycast)
+    #[serde(default)]
+    pub arguments: Vec<Argument>,
+    
+    /// Command-level preferences (override/extend extension prefs)
+    #[serde(default)]
+    pub preferences: Vec<Preference>,
+    
+    /// If true, user must enable manually
+    #[serde(default)]
+    pub disabled_by_default: bool,
+    
+    // === Script Kit extensions ===
+    pub shortcut: Option<String>,
+    pub alias: Option<String>,
+    pub expand: Option<String>,
+    #[serde(default)]
+    pub hidden: bool,
+    
+    /// Catch-all for unknown fields
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
-/// User preference definition
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CommandMode {
+    #[default]
+    View,
+    NoView,
+    MenuBar,
+}
+
+fn default_mode() -> CommandMode {
+    CommandMode::View
+}
+
+/// Typed argument definition (Raycast compatible)
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Argument {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub arg_type: ArgumentType,
+    pub placeholder: String,
+    #[serde(default)]
+    pub required: bool,
+    /// For dropdown type
+    #[serde(default)]
+    pub data: Vec<PreferenceOption>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ArgumentType {
+    Text,
+    Password,
+    Dropdown,
+}
+
+/// Preference definition (Raycast compatible)
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Preference {
@@ -168,11 +234,14 @@ pub struct Preference {
     pub description: String,
     #[serde(rename = "type")]
     pub pref_type: PreferenceType,
+    #[serde(default)]
     pub required: bool,
     #[serde(default)]
     pub default: Option<serde_json::Value>,
     pub placeholder: Option<String>,
-    /// For dropdown type
+    /// Label for checkbox type
+    pub label: Option<String>,
+    /// Options for dropdown type
     #[serde(default)]
     pub data: Vec<PreferenceOption>,
 }
@@ -184,6 +253,7 @@ pub enum PreferenceType {
     Password,
     Checkbox,
     Dropdown,
+    #[serde(rename = "appPicker")]
     AppPicker,
     File,
     Directory,
@@ -194,11 +264,13 @@ pub struct PreferenceOption {
     pub title: String,
     pub value: String,
 }
+
+fn default_license() -> String {
+    "MIT".to_string()
+}
 ```
 
-### Valid Categories
-
-Match Raycast's categories for compatibility:
+### 1.4 Valid Categories
 
 ```rust
 pub const VALID_CATEGORIES: &[&str] = &[
@@ -232,50 +304,42 @@ pub const VALID_CATEGORIES: &[&str] = &[
 | `src/scriptlet_metadata.rs` | `src/extension_metadata.rs` |
 | `src/scriptlet_cache.rs` | `src/extension_cache.rs` |
 | `src/scriptlet_tests.rs` | `src/extension_tests.rs` |
-| `tests/fixtures/test-scriptlets.md` | `tests/fixtures/test-extensions.md` |
-| `tests/smoke/test-scriptlet-*.ts` | `tests/smoke/test-extension-*.ts` |
-| `docs/SCRIPTLET_TOOL_MAP.md` | `docs/EXTENSION_TOOL_MAP.md` |
 
 ### Directory Renames
 
 | Current | New |
 |---------|-----|
 | `~/.sk/kit/snippets/` | `~/.sk/kit/extensions/` |
-| (future) `~/.sk/kit/scriptlets/` | `~/.sk/kit/extensions/` |
 
-### Struct/Type Renames
+### Struct/Type Renames (CORRECTED)
 
-| Current | New |
-|---------|-----|
-| `Scriptlet` | `Extension` |
-| `ScriptletMetadata` | `ExtensionMetadata` |
-| `ScriptletMatch` | `ExtensionMatch` |
-| `BundleFrontmatter` | `ExtensionManifest` |
-| `ScriptletValidationError` | `ExtensionValidationError` |
-| `ScriptletParseResult` | `ExtensionParseResult` |
+| Current | New | Raycast Equivalent |
+|---------|-----|-------------------|
+| `Scriptlet` | `Command` | Command |
+| `ScriptletMetadata` | `CommandMetadata` | Command properties |
+| `ScriptletMatch` | `CommandMatch` | - |
+| `BundleFrontmatter` | `ExtensionManifest` | Manifest |
+| `ScriptletValidationError` | `CommandValidationError` | - |
+| `ScriptletParseResult` | `ExtensionParseResult` | - |
 
 ### Function Renames
 
 | Current | New |
 |---------|-----|
 | `load_scriptlets()` | `load_extensions()` |
-| `parse_scriptlet_section()` | `parse_extension_section()` |
-| `fuzzy_search_scriptlets()` | `fuzzy_search_extensions()` |
-| `read_scriptlets_from_file()` | `read_extensions_from_file()` |
-| `parse_markdown_as_scriptlets()` | `parse_markdown_as_extensions()` |
-| `resolve_scriptlet_icon()` | `resolve_extension_icon()` |
+| `parse_scriptlet_section()` | `parse_command()` |
+| `fuzzy_search_scriptlets()` | `fuzzy_search_commands()` |
+| `parse_markdown_as_scriptlets()` | `parse_extension()` |
 
 ### Backward Compatibility
 
-Keep type aliases for transition period:
-
 ```rust
-// Deprecated aliases for backward compatibility
-#[deprecated(since = "2.0.0", note = "Use Extension instead")]
-pub type Scriptlet = Extension;
+// Deprecated aliases
+#[deprecated(since = "2.0.0", note = "Use Command instead")]
+pub type Scriptlet = Command;
 
-#[deprecated(since = "2.0.0", note = "Use ExtensionMetadata instead")]  
-pub type ScriptletMetadata = ExtensionMetadata;
+#[deprecated(since = "2.0.0", note = "Use CommandMetadata instead")]  
+pub type ScriptletMetadata = CommandMetadata;
 ```
 
 ---
@@ -287,17 +351,13 @@ pub type ScriptletMetadata = ExtensionMetadata;
 ```
 ~/.sk/kit/examples/extensions/
 ├── cleanshot.md        # CleanShot X integration
-├── chrome.md           # Chrome browser integration
+├── chrome.md           # Chrome browser integration  
 └── README.md           # Examples documentation
 ```
 
 ### 3.1 CleanShot Extension
 
-**Purpose**: Integrate with CleanShot X app for screenshots and recordings.
-
-**Manifest**:
-
-```yaml
+```markdown
 ---
 name: cleanshot
 title: CleanShot X
@@ -313,161 +373,157 @@ keywords:
   - screen recording
   - annotation
   - capture
-permissions:
-  - accessibility
-preferences:
-  - name: outputFolder
-    title: Output Folder
-    description: Where to save captures
-    type: directory
-    required: false
-    default: ~/Desktop
----
-```
-
-**Commands**:
-
-| Command | Raycast Equivalent | Implementation |
-|---------|-------------------|----------------|
-| Capture Area | ✅ | `open cleanshot://capture-area` |
-| Capture Fullscreen | ✅ | `open cleanshot://capture-fullscreen` |
-| Capture Window | ✅ | `open cleanshot://capture-window` |
-| Capture Previous Area | ✅ | `open cleanshot://capture-previous-area` |
-| Record Screen | ✅ | `open cleanshot://record-screen` |
-| Record GIF | ✅ | `open cleanshot://record-gif` |
-| Self Timer | ✅ | `open cleanshot://self-timer` |
-| Scrolling Capture | ✅ | `open cleanshot://scrolling-capture` |
-| Capture Text (OCR) | ✅ | `open cleanshot://capture-text` |
-| Toggle Desktop Icons | ✅ | `open cleanshot://toggle-desktop-icons` |
-| Open from Clipboard | ✅ | `open cleanshot://open-from-clipboard` |
-| All-In-One | ✅ | `open cleanshot://all-in-one` |
-| Pin Screenshot | ✅ | `open cleanshot://pin-screenshot` |
-| Restore Recently Closed | ✅ | `open cleanshot://restore-recently-closed` |
-| Open History | ✅ | `open cleanshot://open-history` |
-
-**Example Extension File**:
-
-```markdown
----
-name: cleanshot
-title: CleanShot X
-description: Capture screenshots, recordings, and annotations with CleanShot X
-icon: camera
-author: scriptkit
-license: MIT
-categories:
-  - Productivity
-  - Media
-keywords:
-  - screenshot
-  - capture
-  - recording
+platforms:
+  - macOS
 ---
 
 # CleanShot X
 
 ## Capture Area
-<!-- Description: Capture a selected area of the screen -->
-<!-- Shortcut: cmd shift 4 -->
+
+```metadata
+{ "description": "Capture a selected area of the screen", "mode": "no-view" }
+```
 
 ```open
 cleanshot://capture-area
 ```
 
 ## Capture Fullscreen
-<!-- Description: Capture the entire screen -->
+
+```metadata
+{ "description": "Capture the entire screen", "mode": "no-view" }
+```
 
 ```open
 cleanshot://capture-fullscreen
 ```
 
 ## Capture Window
-<!-- Description: Capture a specific window -->
+
+```metadata
+{ "description": "Capture a specific window", "mode": "no-view" }
+```
 
 ```open
 cleanshot://capture-window
 ```
 
 ## Record Screen
-<!-- Description: Start a screen recording -->
-<!-- Shortcut: cmd shift 5 -->
+
+```metadata
+{ "description": "Start a screen recording", "mode": "no-view" }
+```
 
 ```open
 cleanshot://record-screen
 ```
 
 ## Record GIF
-<!-- Description: Record screen as animated GIF -->
+
+```metadata
+{ "description": "Record screen as animated GIF", "mode": "no-view" }
+```
 
 ```open
 cleanshot://record-gif
 ```
 
 ## Scrolling Capture
-<!-- Description: Capture scrolling content -->
+
+```metadata
+{ "description": "Capture scrolling content", "mode": "no-view" }
+```
 
 ```open
 cleanshot://scrolling-capture
 ```
 
 ## Capture Text (OCR)
-<!-- Description: Capture and extract text from screen -->
+
+```metadata
+{ "description": "Capture and extract text from screen", "mode": "no-view" }
+```
 
 ```open
 cleanshot://capture-text
 ```
 
 ## Toggle Desktop Icons
-<!-- Description: Show or hide desktop icons -->
+
+```metadata
+{ "description": "Show or hide desktop icons", "mode": "no-view" }
+```
 
 ```open
 cleanshot://toggle-desktop-icons
 ```
 
 ## Open from Clipboard
-<!-- Description: Open image from clipboard in editor -->
+
+```metadata
+{ "description": "Open image from clipboard in editor", "mode": "no-view" }
+```
 
 ```open
 cleanshot://open-from-clipboard
 ```
 
 ## All-In-One
-<!-- Description: Open all capture options overlay -->
+
+```metadata
+{ "description": "Open all capture options overlay", "mode": "no-view" }
+```
 
 ```open
 cleanshot://all-in-one
 ```
 
 ## Pin Screenshot
-<!-- Description: Pin a screenshot to screen -->
+
+```metadata
+{ "description": "Pin a screenshot to screen", "mode": "no-view" }
+```
 
 ```open
 cleanshot://pin-screenshot
 ```
 
 ## Open History
-<!-- Description: Open CleanShot capture history -->
+
+```metadata
+{ "description": "Open CleanShot capture history", "mode": "view" }
+```
 
 ```open
 cleanshot://open-history
 ```
 
 ## Restore Recently Closed
-<!-- Description: Restore last closed capture -->
+
+```metadata
+{ "description": "Restore last closed capture", "mode": "no-view" }
+```
 
 ```open
 cleanshot://restore-recently-closed
 ```
 
 ## Self Timer
-<!-- Description: Capture with countdown timer -->
+
+```metadata
+{ "description": "Capture with countdown timer", "mode": "no-view" }
+```
 
 ```open
 cleanshot://self-timer
 ```
 
 ## Capture Previous Area
-<!-- Description: Capture the same area as last time -->
+
+```metadata
+{ "description": "Capture the same area as last time", "mode": "no-view" }
+```
 
 ```open
 cleanshot://capture-previous-area
@@ -476,52 +532,6 @@ cleanshot://capture-previous-area
 
 ### 3.2 Chrome Extension
 
-**Purpose**: Search and interact with Google Chrome browser.
-
-**Manifest**:
-
-```yaml
----
-name: chrome
-title: Google Chrome
-description: Search bookmarks, history, tabs, and control Chrome
-icon: chrome
-author: scriptkit
-license: MIT
-categories:
-  - Applications
-  - Productivity
-  - Web
-keywords:
-  - browser
-  - bookmarks
-  - history
-  - tabs
-permissions:
-  - accessibility
----
-```
-
-**Commands**:
-
-| Command | Raycast Equivalent | Implementation |
-|---------|-------------------|----------------|
-| Search Bookmarks | ✅ | SQLite query + fuzzy search |
-| Search History | ✅ | SQLite query + fuzzy search |
-| Search Tabs | ✅ | AppleScript/JXA |
-| Open New Tab | ✅ | AppleScript |
-| New Incognito Window | ✅ | AppleScript |
-| Search Downloads | ✅ | SQLite query |
-
-**Technical Details**:
-
-Chrome stores data in SQLite databases:
-- Bookmarks: `~/Library/Application Support/Google/Chrome/Default/Bookmarks` (JSON)
-- History: `~/Library/Application Support/Google/Chrome/Default/History` (SQLite)
-- Downloads: Same History DB, `downloads` table
-
-**Example Extension File**:
-
 ```markdown
 ---
 name: chrome
@@ -537,22 +547,48 @@ keywords:
   - browser
   - bookmarks
   - history
+  - tabs
+platforms:
+  - macOS
+preferences:
+  - name: profile
+    title: Chrome Profile
+    description: Which Chrome profile to use
+    type: dropdown
+    required: false
+    default: Default
+    data:
+      - title: Default
+        value: Default
+      - title: Profile 1
+        value: "Profile 1"
+      - title: Profile 2
+        value: "Profile 2"
 ---
 
 # Google Chrome
 
 ## Search Bookmarks
-<!-- Description: Search and open Chrome bookmarks -->
-<!-- Shortcut: cmd shift b -->
+
+```metadata
+{ 
+  "description": "Search and open Chrome bookmarks",
+  "mode": "view",
+  "keywords": ["favorites", "saved"]
+}
+```
 
 ```ts
 import { readFileSync, existsSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
+// Get profile from preferences (default to "Default")
+const profile = await getPreference("profile") || "Default";
+
 const bookmarksPath = join(
   homedir(),
-  'Library/Application Support/Google/Chrome/Default/Bookmarks'
+  `Library/Application Support/Google/Chrome/${profile}/Bookmarks`
 );
 
 interface BookmarkNode {
@@ -617,18 +653,25 @@ await open(selected);
 ```
 
 ## Search History
-<!-- Description: Search Chrome browsing history -->
+
+```metadata
+{ 
+  "description": "Search Chrome browsing history",
+  "mode": "view"
+}
+```
 
 ```ts
 import { homedir } from 'os';
 import { join } from 'path';
-import { execSync, spawn } from 'child_process';
 import { copyFileSync, unlinkSync, existsSync } from 'fs';
 import Database from 'bun:sqlite';
 
+const profile = await getPreference("profile") || "Default";
+
 const historyPath = join(
   homedir(),
-  'Library/Application Support/Google/Chrome/Default/History'
+  `Library/Application Support/Google/Chrome/${profile}/History`
 );
 
 if (!existsSync(historyPath)) {
@@ -677,7 +720,14 @@ await open(selected);
 ```
 
 ## Search Open Tabs
-<!-- Description: Search and switch to open Chrome tabs -->
+
+```metadata
+{ 
+  "description": "Search and switch to open Chrome tabs",
+  "mode": "view",
+  "keywords": ["switch", "window"]
+}
+```
 
 ```ts
 const script = `
@@ -723,7 +773,10 @@ end tell
 ```
 
 ## New Tab
-<!-- Description: Open a new Chrome tab -->
+
+```metadata
+{ "description": "Open a new Chrome tab", "mode": "no-view" }
+```
 
 ```applescript
 tell application "Google Chrome"
@@ -735,7 +788,10 @@ end tell
 ```
 
 ## New Incognito Window
-<!-- Description: Open a new Chrome incognito window -->
+
+```metadata
+{ "description": "Open a new Chrome incognito window", "mode": "no-view" }
+```
 
 ```applescript
 tell application "Google Chrome"
@@ -745,7 +801,10 @@ end tell
 ```
 
 ## Close Current Tab
-<!-- Description: Close the current Chrome tab -->
+
+```metadata
+{ "description": "Close the current Chrome tab", "mode": "no-view" }
+```
 
 ```applescript
 tell application "Google Chrome"
@@ -758,51 +817,134 @@ end tell
 
 ---
 
-## Phase 4: Implementation Tasks
+## Phase 4: Decisions (Based on Expert Feedback)
 
-### 4.1 Manifest Updates (Priority: High)
+### 4.1 Preference Storage: JSON per Extension
 
-- [ ] Add new fields to `BundleFrontmatter` / `ExtensionManifest`
-- [ ] Add `Preference` and `PreferenceType` structs
-- [ ] Add `VALID_CATEGORIES` constant
-- [ ] Update frontmatter parser to handle new fields
-- [ ] Add validation for required fields
+**Decision**: Use JSON file per extension.
+
+```
+~/.sk/kit/preferences/
+├── cleanshot.json
+├── chrome.json
+└── ...
+```
+
+**Rationale**:
+- Preferences are small, keyed, rarely need relational queries
+- JSON is portable, debuggable, easy to version/migrate
+- SQLite is overkill for key-value prefs
+
+**Secret handling**: Store passwords/API keys in macOS Keychain, not JSON.
+
+### 4.2 Icon Format: Support Both Names and Paths
+
+**Decision**: Accept both icon names and file paths.
+
+**Resolution logic**:
+```rust
+fn resolve_icon(value: &str) -> IconSource {
+    if value.starts_with("./") 
+       || value.starts_with("/") 
+       || value.contains("/")
+       || value.ends_with(".png") 
+       || value.ends_with(".svg") {
+        IconSource::Path(value.to_string())
+    } else {
+        IconSource::Named(value.to_string())
+    }
+}
+```
+
+Command-level `icon` overrides extension-level `icon`.
+
+### 4.3 minVersion Checking: Semver with Clear UX
+
+**Decision**: Use semver parsing, disable extension if version too old.
+
+```rust
+use semver::{Version, VersionReq};
+
+fn check_min_version(required: &str, current: &str) -> Result<(), String> {
+    let req = VersionReq::parse(&format!(">={}", required))
+        .map_err(|e| format!("Invalid minVersion: {}", e))?;
+    let current = Version::parse(current)
+        .map_err(|e| format!("Invalid current version: {}", e))?;
+    
+    if req.matches(&current) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Extension requires Script Kit {} or newer (current: {})",
+            required, current
+        ))
+    }
+}
+```
+
+**UX**: Show error message pointing to upgrade, mark commands as unavailable.
+
+### 4.4 Future: Folder Extension Bundles
+
+For now: single-file `.md` extensions only.
+
+Future (when we need assets/multi-file):
+```
+~/.sk/kit/extensions/
+├── cleanshot.md              # Single-file extension
+└── github/                   # Folder extension
+    ├── manifest.yaml
+    ├── commands/
+    │   ├── search-issues.ts
+    │   └── create-pr.ts
+    └── assets/
+        └── icon.png
+```
+
+---
+
+## Phase 5: Implementation Tasks
+
+### 5.1 Struct Updates (Priority: Critical)
+
+- [ ] Add `CommandMetadata` struct with all Raycast command fields
+- [ ] Update `ExtensionManifest` with missing extension-level fields  
+- [ ] Add `Argument` struct for typed command arguments
+- [ ] Add `Preference` struct matching Raycast schema
+- [ ] Add `CommandMode` enum
+- [ ] Update frontmatter parser
+- [ ] Update codefence metadata parser to populate `CommandMetadata`
+
+### 5.2 Terminology Refactor (Priority: High)
+
+- [ ] Rename `Scriptlet` → `Command`
+- [ ] Rename `ScriptletMetadata` → `CommandMetadata`
+- [ ] Rename `BundleFrontmatter` → `ExtensionManifest`
+- [ ] Rename files: `scriptlets.rs` → `extensions.rs`, etc.
+- [ ] Update all imports
+- [ ] Add deprecated type aliases
 - [ ] Update tests
 
-### 4.2 Terminology Refactor (Priority: High)
+### 5.3 Directory Migration (Priority: Medium)
 
-- [ ] Rename files (see File Renames table)
-- [ ] Update `lib.rs` module declarations
-- [ ] Rename structs and types
-- [ ] Rename functions
-- [ ] Update all imports across codebase
-- [ ] Add deprecated type aliases
-- [ ] Update documentation
-- [ ] Update test files
-- [ ] Run full test suite
-
-### 4.3 Directory Migration (Priority: Medium)
-
-- [ ] Add support for `~/.sk/kit/extensions/` path
-- [ ] Add migration logic for `snippets/` → `extensions/`
+- [ ] Add `~/.sk/kit/extensions/` path support
+- [ ] Keep `snippets/` working during transition
 - [ ] Update file watchers
-- [ ] Update cache paths
-- [ ] Update documentation
+- [ ] Update cache keys
 
-### 4.4 Example Extensions (Priority: Medium)
+### 5.4 Preference System (Priority: Medium)
 
-- [ ] Create `~/.sk/kit/examples/extensions/` directory
-- [ ] Implement `cleanshot.md`
-- [ ] Implement `chrome.md`
-- [ ] Add `README.md` with usage instructions
-- [ ] Test all commands
-
-### 4.5 Preference System (Priority: Low - Future)
-
-- [ ] Design preference storage (`~/.sk/kit/preferences/<extension-name>.json`)
+- [ ] Create `~/.sk/kit/preferences/` directory structure
 - [ ] Implement `getPreference(name)` SDK function
-- [ ] Add preferences UI in settings
-- [ ] Add preference validation
+- [ ] Add preference validation on extension load
+- [ ] Add "required preference" gating before command runs
+
+### 5.5 Example Extensions (Priority: Medium)
+
+- [ ] Create CleanShot extension with all commands
+- [ ] Create Chrome extension with profile preference
+- [ ] Test all commands work correctly
+- [ ] Add README with usage instructions
 
 ---
 
@@ -810,78 +952,26 @@ end tell
 
 ### Unit Tests
 
-- [ ] `ExtensionManifest` parsing with all fields
+- [ ] `ExtensionManifest` parsing with all Raycast fields
+- [ ] `CommandMetadata` parsing with mode, arguments, preferences
 - [ ] Category validation
-- [ ] Preference parsing
-- [ ] Backward compatibility with old frontmatter
+- [ ] Icon resolution (names vs paths)
+- [ ] minVersion checking
+- [ ] Preference parsing and validation
 
 ### Integration Tests
 
 - [ ] Load extensions from `~/.sk/kit/extensions/`
-- [ ] CleanShot commands execute correctly
-- [ ] Chrome commands work (bookmarks, history, tabs)
-- [ ] Migration from `snippets/` works
-
-### Smoke Tests
-
-- [ ] `test-extension-basic.ts`
-- [ ] `test-extension-typescript.ts`
-- [ ] `test-extension-bundles.ts`
-
----
-
-## Migration Guide
-
-### For Users
-
-```bash
-# Extensions will be auto-migrated from ~/.sk/kit/snippets/ to ~/.sk/kit/extensions/
-# No action required - both paths work during transition
-```
-
-### For Extension Authors
-
-1. **Rename frontmatter**: Add new required fields
-
-```yaml
-# Before
----
-name: My Bundle
-description: Some tools
----
-
-# After  
----
-name: my-bundle
-title: My Bundle
-description: Some tools
-icon: wrench
-author: yourname
-license: MIT
-categories:
-  - Productivity
----
-```
-
-2. **File location**: Move from `snippets/` to `extensions/`
-
-3. **No code changes required**: Extension code remains the same
-
----
-
-## Open Questions
-
-1. **Preference storage format**: JSON file per extension vs single SQLite DB?
-2. **Icon format**: Support both icon names and file paths?
-3. **Version checking**: How to handle `min_version` requirement?
-4. **Extension registry**: Future plans for community extensions?
+- [ ] CleanShot commands trigger URL schemes
+- [ ] Chrome commands read bookmarks/history
+- [ ] Preferences persist and load correctly
+- [ ] Required preference gating works
 
 ---
 
 ## References
 
 - [Raycast Manifest Documentation](https://developers.raycast.com/information/manifest)
-- [Raycast CleanShot Extension](https://www.raycast.com/Aayush9029/cleanshotx)
-- [Raycast Chrome Extension](https://www.raycast.com/nicholasess/google-chrome)
-- [CleanShot X URL Schemes](https://cleanshot.com/docs/api)
-- [Chrome User Data Directory](https://chromium.googlesource.com/chromium/src/+/master/docs/user_data_dir.md)
+- [Raycast File Structure](https://developers.raycast.com/information/file-structure)
+- [Raycast Preferences](https://developers.raycast.com/api-reference/preferences)
+- [Raycast Store Requirements](https://developers.raycast.com/basics/prepare-an-extension-for-store)

@@ -4,7 +4,7 @@
 //! frequency (how often) and recency (how recently) scripts are used.
 //! The scoring uses exponential decay with a configurable half-life.
 
-use crate::config::{FrecencyConfig, DEFAULT_FRECENCY_HALF_LIFE_DAYS};
+use crate::config::{SuggestedConfig, DEFAULT_SUGGESTED_HALF_LIFE_DAYS};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ use tracing::{debug, info, instrument, warn};
 
 /// Re-export for tests that need the half-life constant
 #[allow(dead_code)]
-pub const HALF_LIFE_DAYS: f64 = DEFAULT_FRECENCY_HALF_LIFE_DAYS;
+pub const HALF_LIFE_DAYS: f64 = DEFAULT_SUGGESTED_HALF_LIFE_DAYS;
 
 /// Seconds in a day for timestamp calculations
 const SECONDS_PER_DAY: f64 = 86400.0;
@@ -51,7 +51,7 @@ impl FrecencyEntry {
 
     /// Recalculate the frecency score based on current time
     pub fn recalculate_score(&mut self) {
-        self.score = calculate_score(self.count, self.last_used, DEFAULT_FRECENCY_HALF_LIFE_DAYS);
+        self.score = calculate_score(self.count, self.last_used, DEFAULT_SUGGESTED_HALF_LIFE_DAYS);
     }
 
     /// Recalculate the frecency score with a custom half-life
@@ -122,12 +122,12 @@ impl FrecencyStore {
             entries: HashMap::new(),
             file_path,
             dirty: false,
-            half_life_days: DEFAULT_FRECENCY_HALF_LIFE_DAYS,
+            half_life_days: DEFAULT_SUGGESTED_HALF_LIFE_DAYS,
         }
     }
 
     /// Create a FrecencyStore with config settings
-    pub fn with_config(config: &FrecencyConfig) -> Self {
+    pub fn with_config(config: &SuggestedConfig) -> Self {
         let file_path = Self::default_path();
         FrecencyStore {
             entries: HashMap::new(),
@@ -144,7 +144,7 @@ impl FrecencyStore {
             entries: HashMap::new(),
             file_path: path,
             dirty: false,
-            half_life_days: DEFAULT_FRECENCY_HALF_LIFE_DAYS,
+            half_life_days: DEFAULT_SUGGESTED_HALF_LIFE_DAYS,
         }
     }
 

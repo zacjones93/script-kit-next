@@ -570,6 +570,7 @@ impl ScriptListApp {
                                     scripts::SearchResult::BuiltIn(m) => m.entry.name.clone(),
                                     scripts::SearchResult::App(m) => m.app.name.clone(),
                                     scripts::SearchResult::Window(m) => m.window.title.clone(),
+                                    scripts::SearchResult::Agent(m) => m.agent.name.clone(),
                                 })
                         } else {
                             None

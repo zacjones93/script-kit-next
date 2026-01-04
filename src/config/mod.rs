@@ -16,10 +16,10 @@ mod loader;
 mod types;
 
 // Re-export defaults that are used externally
-pub use defaults::DEFAULT_FRECENCY_HALF_LIFE_DAYS;
+pub use defaults::DEFAULT_SUGGESTED_HALF_LIFE_DAYS;
 
 // Re-export types that are used externally
-pub use types::{BuiltInConfig, Config, FrecencyConfig};
+pub use types::{BuiltInConfig, Config, SuggestedConfig};
 
 // Re-export loader
 pub use loader::load_config;

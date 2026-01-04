@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::agents::Agent;
 use crate::metadata_parser::TypedMetadata;
 use crate::schema_parser::Schema;
 
@@ -103,7 +104,19 @@ pub struct WindowMatch {
     pub score: i32,
 }
 
-/// Unified search result that can be a Script, Scriptlet, BuiltIn, App, or Window
+/// Represents a scored match result for fuzzy search on agents
+/// Uses Arc<Agent> for cheap cloning during filter operations
+#[derive(Clone, Debug)]
+pub struct AgentMatch {
+    pub agent: Arc<Agent>,
+    pub score: i32,
+    /// The display name for matching
+    pub display_name: String,
+    /// Indices of matched characters for UI highlighting
+    pub match_indices: MatchIndices,
+}
+
+/// Unified search result that can be a Script, Scriptlet, BuiltIn, App, Window, or Agent
 #[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum SearchResult {
@@ -112,6 +125,7 @@ pub enum SearchResult {
     BuiltIn(BuiltInMatch),
     App(AppMatch),
     Window(WindowMatch),
+    Agent(AgentMatch),
 }
 
 impl SearchResult {
@@ -123,6 +137,7 @@ impl SearchResult {
             SearchResult::BuiltIn(bm) => &bm.entry.name,
             SearchResult::App(am) => &am.app.name,
             SearchResult::Window(wm) => &wm.window.title,
+            SearchResult::Agent(am) => &am.agent.name,
         }
     }
 
@@ -134,6 +149,7 @@ impl SearchResult {
             SearchResult::BuiltIn(bm) => Some(&bm.entry.description),
             SearchResult::App(am) => am.app.path.to_str(),
             SearchResult::Window(wm) => Some(&wm.window.app),
+            SearchResult::Agent(am) => am.agent.description.as_deref(),
         }
     }
 
@@ -145,6 +161,7 @@ impl SearchResult {
             SearchResult::BuiltIn(bm) => bm.score,
             SearchResult::App(am) => am.score,
             SearchResult::Window(wm) => wm.score,
+            SearchResult::Agent(am) => am.score,
         }
     }
 
@@ -156,6 +173,7 @@ impl SearchResult {
             SearchResult::BuiltIn(_) => "Built-in",
             SearchResult::App(_) => "App",
             SearchResult::Window(_) => "Window",
+            SearchResult::Agent(_) => "Agent",
         }
     }
 }

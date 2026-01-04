@@ -10,6 +10,7 @@ use tracing::{debug, instrument};
 
 use crate::app_launcher::AppInfo;
 use crate::builtins::{menu_bar_items_to_entries, BuiltInEntry, BuiltInGroup};
+use crate::config::SuggestedConfig;
 use crate::frecency::FrecencyStore;
 use crate::list_item::GroupedListItem;
 use crate::menu_bar::MenuBarItem;
@@ -20,13 +21,13 @@ use super::types::{Script, Scriptlet, SearchResult};
 /// Default maximum number of items to show in the RECENT section
 pub const DEFAULT_MAX_RECENT_ITEMS: usize = 10;
 
-/// Get grouped results with RECENT/MAIN sections based on frecency
+/// Get grouped results with SUGGESTED/MAIN sections based on frecency
 ///
 /// This function creates a grouped view of search results:
 ///
 /// **When filter_text is empty (grouped view):**
-/// 1. Returns `SectionHeader("RECENT")` if any items have frecency score > 0
-/// 2. Recent items sorted by frecency score (top 5-10 with score > 0)
+/// 1. Returns `SectionHeader("SUGGESTED")` if any items have frecency score > 0
+/// 2. Suggested items sorted by frecency score (top 5-10 with score > 0)
 /// 3. Returns `SectionHeader("MAIN")`
 /// 4. Remaining items sorted alphabetically by name
 ///
@@ -42,7 +43,7 @@ pub const DEFAULT_MAX_RECENT_ITEMS: usize = 10;
 /// * `apps` - Application entries to include in results
 /// * `frecency_store` - Store containing frecency data for ranking
 /// * `filter_text` - Search filter text (empty = grouped view, non-empty = search mode)
-/// * `max_recent_items` - Maximum items to show in RECENT section (from config)
+/// * `suggested_config` - Configuration for the SUGGESTED section
 /// * `menu_bar_items` - Optional menu bar items from the frontmost application
 /// * `menu_bar_bundle_id` - Optional bundle ID of the frontmost application
 ///
@@ -60,7 +61,7 @@ pub fn get_grouped_results(
     apps: &[AppInfo],
     frecency_store: &FrecencyStore,
     filter_text: &str,
-    max_recent_items: usize,
+    suggested_config: &SuggestedConfig,
     menu_bar_items: &[MenuBarItem],
     menu_bar_bundle_id: Option<&str>,
 ) -> (Vec<GroupedListItem>, Vec<SearchResult>) {
@@ -122,16 +123,21 @@ pub fn get_grouped_results(
         return (grouped, results);
     }
 
-    // Grouped view mode: create RECENT and type-based sections
+    // Grouped view mode: create SUGGESTED and type-based sections
     let mut grouped = Vec::new();
 
-    // Get recent items from frecency store
-    let recent_items = frecency_store.get_recent_items(max_recent_items);
+    // Get suggested items from frecency store (respecting config)
+    let suggested_items = if suggested_config.enabled {
+        frecency_store.get_recent_items(suggested_config.max_items)
+    } else {
+        Vec::new()
+    };
 
-    // Build a set of paths that are "recent" (have frecency score > 0)
-    let recent_paths: HashSet<String> = recent_items
+    // Build a set of paths that are "suggested" (have frecency score above min_score)
+    let min_score = suggested_config.min_score;
+    let suggested_paths: HashSet<String> = suggested_items
         .iter()
-        .filter(|(_, score): &&(String, f64)| *score > 0.0)
+        .filter(|(_, score): &&(String, f64)| *score >= min_score)
         .map(|(path, _): &(String, f64)| path.clone())
         .collect();
 
@@ -146,21 +152,23 @@ pub fn get_grouped_results(
             SearchResult::Window(wm) => {
                 Some(format!("window:{}:{}", wm.window.app, wm.window.title))
             }
+            SearchResult::Agent(am) => Some(format!("agent:{}", am.agent.path.to_string_lossy())),
         }
     };
 
-    // Find indices of results that are "recent" and categorize non-recent by type
-    let mut recent_indices: Vec<(usize, f64)> = Vec::new();
+    // Find indices of results that are "suggested" and categorize non-suggested by type
+    let mut suggested_indices: Vec<(usize, f64)> = Vec::new();
     let mut scripts_indices: Vec<usize> = Vec::new();
     let mut scriptlets_indices: Vec<usize> = Vec::new();
     let mut commands_indices: Vec<usize> = Vec::new();
     let mut apps_indices: Vec<usize> = Vec::new();
+    let mut agents_indices: Vec<usize> = Vec::new();
 
     for (idx, result) in results.iter().enumerate() {
         if let Some(path) = get_result_path(result) {
             let score = frecency_store.get_score(&path);
-            if score > 0.0 && recent_paths.contains(&path) {
-                recent_indices.push((idx, score));
+            if score >= min_score && suggested_paths.contains(&path) {
+                suggested_indices.push((idx, score));
             } else {
                 // Categorize by SearchResult variant
                 match result {
@@ -170,6 +178,7 @@ pub fn get_grouped_results(
                         commands_indices.push(idx)
                     }
                     SearchResult::App(_) => apps_indices.push(idx),
+                    SearchResult::Agent(_) => agents_indices.push(idx),
                 }
             }
         } else {
@@ -179,15 +188,16 @@ pub fn get_grouped_results(
                 SearchResult::Scriptlet(_) => scriptlets_indices.push(idx),
                 SearchResult::BuiltIn(_) | SearchResult::Window(_) => commands_indices.push(idx),
                 SearchResult::App(_) => apps_indices.push(idx),
+                SearchResult::Agent(_) => agents_indices.push(idx),
             }
         }
     }
 
-    // Sort recent items by frecency score (highest first)
-    recent_indices.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+    // Sort suggested items by frecency score (highest first)
+    suggested_indices.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
 
-    // Limit recent items to max_recent_items
-    recent_indices.truncate(max_recent_items);
+    // Limit suggested items to max_items from config
+    suggested_indices.truncate(suggested_config.max_items);
 
     // Sort each type section alphabetically by name (case-insensitive)
     let sort_alphabetically = |indices: &mut Vec<usize>| {
@@ -203,11 +213,12 @@ pub fn get_grouped_results(
     sort_alphabetically(&mut scriptlets_indices);
     sort_alphabetically(&mut commands_indices);
     sort_alphabetically(&mut apps_indices);
+    sort_alphabetically(&mut agents_indices);
 
-    // Build grouped list: RECENT first, then SCRIPTS, SCRIPTLETS, COMMANDS, APPS
-    if !recent_indices.is_empty() {
-        grouped.push(GroupedListItem::SectionHeader("RECENT".to_string()));
-        for (idx, _score) in &recent_indices {
+    // Build grouped list: SUGGESTED first (if enabled), then SCRIPTS, SCRIPTLETS, COMMANDS, APPS
+    if suggested_config.enabled && !suggested_indices.is_empty() {
+        grouped.push(GroupedListItem::SectionHeader("SUGGESTED".to_string()));
+        for (idx, _score) in &suggested_indices {
             grouped.push(GroupedListItem::Item(*idx));
         }
     }
@@ -240,12 +251,20 @@ pub fn get_grouped_results(
         }
     }
 
+    if !agents_indices.is_empty() {
+        grouped.push(GroupedListItem::SectionHeader("AGENTS".to_string()));
+        for idx in &agents_indices {
+            grouped.push(GroupedListItem::Item(*idx));
+        }
+    }
+
     debug!(
-        recent_count = recent_indices.len(),
+        suggested_count = suggested_indices.len(),
         scripts_count = scripts_indices.len(),
         scriptlets_count = scriptlets_indices.len(),
         commands_count = commands_indices.len(),
         apps_count = apps_indices.len(),
+        agents_count = agents_indices.len(),
         total_grouped = grouped.len(),
         "Grouped view: created type-based sections"
     );

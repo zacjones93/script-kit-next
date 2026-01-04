@@ -1,7 +1,7 @@
 //! Group Header Style Variations
 //!
 //! This module provides different visual styles for group headers/section labels
-//! like "MAIN", "RECENT", "SCRIPTS", etc.
+//! like "MAIN", "SUGGESTED", "SCRIPTS", etc.
 //!
 //! Group headers serve to visually separate different sections in a list.
 //! These variations explore different approaches to styling and positioning.

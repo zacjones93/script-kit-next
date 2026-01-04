@@ -123,6 +123,12 @@ pub enum PermissionCommandType {
     OpenAccessibilitySettings,
 }
 
+/// Frecency/suggested items command types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrecencyCommandType {
+    ClearSuggested,
+}
+
 /// Menu bar action details for executing menu commands
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuBarActionInfo {
@@ -181,6 +187,8 @@ pub enum BuiltInFeature {
     ScriptCommand(ScriptCommandType),
     /// Permission management commands
     PermissionCommand(PermissionCommandType),
+    /// Frecency/suggested items commands
+    FrecencyCommand(FrecencyCommandType),
 }
 
 /// A built-in feature entry that appears in the main search
@@ -893,6 +901,26 @@ pub fn get_builtin_entries(config: &BuiltInConfig) -> Vec<BuiltInEntry> {
         vec!["accessibility", "settings", "permission", "open"],
         BuiltInFeature::PermissionCommand(PermissionCommandType::OpenAccessibilitySettings),
         "♿",
+    ));
+
+    // =========================================================================
+    // Frecency/Suggested Commands
+    // =========================================================================
+
+    entries.push(BuiltInEntry::new_with_icon(
+        "builtin-clear-suggested",
+        "Clear Suggested",
+        "Clear all suggested/recently used items",
+        vec![
+            "clear",
+            "suggested",
+            "recent",
+            "frecency",
+            "reset",
+            "history",
+        ],
+        BuiltInFeature::FrecencyCommand(FrecencyCommandType::ClearSuggested),
+        "🧹",
     ));
 
     debug!(count = entries.len(), "Built-in entries loaded");

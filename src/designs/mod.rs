@@ -433,6 +433,26 @@ pub fn render_design_item(
                         Some(IconKind::Svg("File".to_string())),
                     )
                 }
+                SearchResult::Agent(am) => {
+                    // Agents use backend-specific icons, with backend label in description
+                    let icon_name = am
+                        .agent
+                        .icon
+                        .clone()
+                        .unwrap_or_else(|| am.agent.backend.icon().to_string());
+                    let backend_label = am.agent.backend.label();
+                    let description = am
+                        .agent
+                        .description
+                        .clone()
+                        .or_else(|| Some(format!("{} Agent", backend_label)));
+                    (
+                        am.agent.name.clone(),
+                        description,
+                        am.agent.shortcut.clone(),
+                        Some(IconKind::Svg(icon_name)),
+                    )
+                }
             };
 
             ListItem::new(name, list_colors)

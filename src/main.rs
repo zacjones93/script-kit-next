@@ -29,6 +29,7 @@ use platform::{
 extern crate objc;
 
 mod actions;
+mod agents;
 mod ai;
 mod components;
 mod config;

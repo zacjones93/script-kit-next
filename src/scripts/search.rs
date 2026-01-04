@@ -248,6 +248,28 @@ pub fn compute_match_indices_for_result(result: &SearchResult, query: &str) -> M
 
             indices
         }
+        SearchResult::Agent(am) => {
+            let mut indices = MatchIndices::default();
+
+            // Try name first
+            let (name_matched, name_indices) =
+                fuzzy_match_with_indices_ascii(&am.agent.name, &query_lower);
+            if name_matched {
+                indices.name_indices = name_indices;
+                return indices;
+            }
+
+            // Fall back to description
+            if let Some(ref desc) = am.agent.description {
+                let (desc_matched, desc_indices) =
+                    fuzzy_match_with_indices_ascii(desc, &query_lower);
+                if desc_matched {
+                    indices.filename_indices = desc_indices;
+                }
+            }
+
+            indices
+        }
     }
 }
 
@@ -793,11 +815,11 @@ pub fn fuzzy_search_unified_all(
         results.push(SearchResult::Scriptlet(sm));
     }
 
-    // Sort by score (highest first), then by type (builtins first, apps, windows, scripts, scriptlets), then by name
+    // Sort by score (highest first), then by type (builtins first, apps, windows, scripts, scriptlets, agents), then by name
     results.sort_by(|a, b| {
         match b.score().cmp(&a.score()) {
             Ordering::Equal => {
-                // Prefer builtins over apps over windows over scripts over scriptlets when scores are equal
+                // Prefer builtins over apps over windows over scripts over scriptlets over agents when scores are equal
                 let type_order = |r: &SearchResult| -> i32 {
                     match r {
                         SearchResult::BuiltIn(_) => 0, // Built-ins first
@@ -805,6 +827,7 @@ pub fn fuzzy_search_unified_all(
                         SearchResult::Window(_) => 2,  // Windows third
                         SearchResult::Script(_) => 3,
                         SearchResult::Scriptlet(_) => 4,
+                        SearchResult::Agent(_) => 5, // Agents last
                     }
                 };
                 let type_order_a = type_order(a);
@@ -866,11 +889,11 @@ pub fn fuzzy_search_unified_with_windows(
         results.push(SearchResult::Scriptlet(sm));
     }
 
-    // Sort by score (highest first), then by type (builtins first, apps, windows, scripts, scriptlets), then by name
+    // Sort by score (highest first), then by type (builtins first, apps, windows, scripts, scriptlets, agents), then by name
     results.sort_by(|a, b| {
         match b.score().cmp(&a.score()) {
             Ordering::Equal => {
-                // Prefer builtins over apps over windows over scripts over scriptlets when scores are equal
+                // Prefer builtins over apps over windows over scripts over scriptlets over agents when scores are equal
                 let type_order = |r: &SearchResult| -> i32 {
                     match r {
                         SearchResult::BuiltIn(_) => 0, // Built-ins first
@@ -878,6 +901,7 @@ pub fn fuzzy_search_unified_with_windows(
                         SearchResult::Window(_) => 2,  // Windows third
                         SearchResult::Script(_) => 3,
                         SearchResult::Scriptlet(_) => 4,
+                        SearchResult::Agent(_) => 5, // Agents last
                     }
                 };
                 let type_order_a = type_order(a);

@@ -177,6 +177,11 @@ pub mod notes;
 // BYOK (Bring Your Own Key) with SQLite storage at ~/.sk/kit/ai-chats.db
 pub mod ai;
 
+// Agents - mdflow agent integration
+// Executable markdown prompts that run against Claude, Gemini, Codex, or Copilot
+// Located in ~/.sk/kit/*/agents/*.md
+pub mod agents;
+
 // macOS launch-at-login via SMAppService
 // Uses SMAppService on macOS 13+ for modern login item management
 pub mod login_item;
