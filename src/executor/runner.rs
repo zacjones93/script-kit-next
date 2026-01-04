@@ -190,8 +190,20 @@ impl ProcessHandle {
         }
     }
 
-    /// Kill the process group (Unix) or just the process (other platforms)
+    /// Kill the process group with graceful escalation (Unix) or just the process (other platforms)
+    ///
+    /// ## Escalation Protocol
+    /// 1. Send SIGTERM to process group (graceful termination request)
+    /// 2. Wait up to TERM_GRACE_MS for process to exit
+    /// 3. If still alive, send SIGKILL (forceful termination)
+    ///
+    /// This gives scripts a chance to clean up before being forcefully killed.
     pub fn kill(&mut self) {
+        /// Grace period after SIGTERM before escalating to SIGKILL (milliseconds)
+        const TERM_GRACE_MS: u64 = 250;
+        /// How often to check if process has exited during grace period
+        const POLL_INTERVAL_MS: u64 = 50;
+
         if self.killed {
             logging::log(
                 "EXEC",
@@ -203,13 +215,78 @@ impl ProcessHandle {
 
         #[cfg(unix)]
         {
-            // Kill the entire process group using the kill command with negative PID
+            // Kill the entire process group using negative PID
             // Since we spawned with process_group(0), the PGID equals the PID
-            // Using negative PID tells kill to target the process group
             let negative_pgid = format!("-{}", self.pid);
+
+            // Step 1: Send SIGTERM for graceful shutdown
             logging::log(
                 "EXEC",
-                &format!("Killing process group PGID {} with SIGKILL", self.pid),
+                &format!(
+                    "Sending SIGTERM to process group PGID {} (graceful shutdown)",
+                    self.pid
+                ),
+            );
+
+            let term_result = Command::new("kill").args(["-15", &negative_pgid]).output();
+
+            match term_result {
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if stderr.contains("No such process") {
+                        logging::log(
+                            "EXEC",
+                            &format!("Process group {} already exited", self.pid),
+                        );
+                        return;
+                    }
+                }
+                Err(e) => {
+                    logging::log(
+                        "EXEC",
+                        &format!("Failed to send SIGTERM to PGID {}: {}", self.pid, e),
+                    );
+                    // Continue to try SIGKILL anyway
+                }
+            }
+
+            // Step 2: Wait for grace period, polling to see if process exits
+            let start = std::time::Instant::now();
+            let grace_duration = std::time::Duration::from_millis(TERM_GRACE_MS);
+            let poll_interval = std::time::Duration::from_millis(POLL_INTERVAL_MS);
+
+            while start.elapsed() < grace_duration {
+                // Check if process is still alive using kill -0
+                let alive_check = Command::new("kill")
+                    .args(["-0", &self.pid.to_string()])
+                    .output();
+
+                match alive_check {
+                    Ok(output) if !output.status.success() => {
+                        // Process no longer exists - terminated gracefully
+                        logging::log(
+                            "EXEC",
+                            &format!(
+                                "Process group {} terminated gracefully after SIGTERM",
+                                self.pid
+                            ),
+                        );
+                        return;
+                    }
+                    _ => {
+                        // Still alive, wait and try again
+                        std::thread::sleep(poll_interval);
+                    }
+                }
+            }
+
+            // Step 3: Process didn't exit in time, escalate to SIGKILL
+            logging::log(
+                "EXEC",
+                &format!(
+                    "Process group {} did not exit after {}ms, escalating to SIGKILL",
+                    self.pid, TERM_GRACE_MS
+                ),
             );
 
             match Command::new("kill").args(["-9", &negative_pgid]).output() {
@@ -217,26 +294,31 @@ impl ProcessHandle {
                     if output.status.success() {
                         logging::log(
                             "EXEC",
-                            &format!("Successfully killed process group {}", self.pid),
+                            &format!(
+                                "Successfully killed process group {} with SIGKILL",
+                                self.pid
+                            ),
                         );
                     } else {
-                        // Process might already be dead, which is fine
                         let stderr = String::from_utf8_lossy(&output.stderr);
                         if stderr.contains("No such process") {
                             logging::log(
                                 "EXEC",
-                                &format!("Process group {} already exited", self.pid),
+                                &format!("Process group {} exited just before SIGKILL", self.pid),
                             );
                         } else {
                             logging::log(
                                 "EXEC",
-                                &format!("kill command failed for PGID {}: {}", self.pid, stderr),
+                                &format!("SIGKILL failed for PGID {}: {}", self.pid, stderr),
                             );
                         }
                     }
                 }
                 Err(e) => {
-                    logging::log("EXEC", &format!("Failed to execute kill command: {}", e));
+                    logging::log(
+                        "EXEC",
+                        &format!("Failed to send SIGKILL to PGID {}: {}", self.pid, e),
+                    );
                 }
             }
         }

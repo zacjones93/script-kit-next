@@ -60,29 +60,22 @@ impl ScriptListApp {
                 let _process_handle = split.process_handle;
                 let mut _child = split.child;
 
-                // Stderr reader thread - forwards script stderr to logs in real-time
-                if let Some(stderr) = stderr_handle {
-                    std::thread::spawn(move || {
-                        use std::io::BufRead;
-                        let reader = std::io::BufReader::new(stderr);
-                        for line in reader.lines() {
-                            match line {
-                                Ok(l) => logging::log("SCRIPT", &l),
-                                Err(e) => {
-                                    logging::log("SCRIPT", &format!("stderr read error: {}", e));
-                                    break;
-                                }
-                            }
-                        }
-                        logging::log("SCRIPT", "stderr reader exiting");
-                    });
-                }
-
-                // Now stderr_handle is consumed, we pass None to reader thread
-                let stderr_handle: Option<std::process::ChildStderr> = None;
+                // Stderr reader thread - tees output to both logs AND a ring buffer
+                // The buffer is used for post-mortem error reporting when script exits non-zero
+                // FIX: Previously we consumed stderr in a thread but passed None to reader,
+                // which meant stderr was never available for error messages. Now we use
+                // spawn_stderr_reader which returns a buffer handle for later retrieval.
+                let stderr_buffer = stderr_handle
+                    .map(|stderr| executor::spawn_stderr_reader(stderr, script_path_for_errors.clone()));
+                
+                // Clone for reader thread access
+                let stderr_buffer_for_reader = stderr_buffer.clone();
 
                 // Channel for sending responses from UI to writer thread
-                let (response_tx, response_rx) = mpsc::channel::<Message>();
+                // FIX: Use bounded channel to prevent OOM from slow script/blocked stdin
+                // Capacity of 100 matches the prompt channel - generous for normal use
+                // If the script isn't reading stdin, backpressure will block senders
+                let (response_tx, response_rx) = mpsc::sync_channel::<Message>(100);
 
                 // Clone response_tx for the reader thread to handle direct responses
                 // (e.g., getSelectedText, setSelectedText, checkAccessibility)
@@ -197,7 +190,9 @@ impl ScriptListApp {
                     // These variables keep the process alive - they're dropped when the thread exits
                     let _keep_alive_handle = _process_handle;
                     let mut keep_alive_child = _child;
-                    let mut stderr_for_errors = stderr_handle;
+                    // FIX: Use the stderr buffer instead of raw stderr handle
+                    // The buffer is populated by the stderr reader thread
+                    let stderr_buffer = stderr_buffer_for_reader;
                     let script_path = script_path_clone;
 
                     loop {
@@ -1137,27 +1132,19 @@ impl ScriptListApp {
                                 // If non-zero exit code, capture stderr and send error
                                 if let Some(code) = exit_code {
                                     if code != 0 {
-                                        // Read stderr if available
-                                        let stderr_output =
-                                            if let Some(mut stderr) = stderr_for_errors.take() {
-                                                use std::io::Read;
-                                                let mut stderr_str = String::new();
-                                                if stderr.read_to_string(&mut stderr_str).is_ok()
-                                                    && !stderr_str.is_empty()
-                                                {
-                                                    Some(stderr_str)
-                                                } else {
-                                                    None
-                                                }
-                                            } else {
-                                                None
-                                            };
+                                        // FIX: Read from stderr buffer (tee'd from real-time reader)
+                                        // Previously we tried to read from stderr_handle here, but
+                                        // it was already consumed by the stderr reader thread.
+                                        let stderr_output = stderr_buffer
+                                            .as_ref()
+                                            .map(|buf| buf.get_contents())
+                                            .filter(|s| !s.is_empty());
 
                                         if let Some(ref stderr_text) = stderr_output {
                                             logging::log(
                                                 "EXEC",
                                                 &format!(
-                                                    "Captured stderr ({} bytes)",
+                                                    "Captured stderr from buffer ({} bytes)",
                                                     stderr_text.len()
                                                 ),
                                             );
@@ -1206,21 +1193,11 @@ impl ScriptListApp {
                             Err(e) => {
                                 logging::log("EXEC", &format!("Error reading from script: {}", e));
 
-                                // Try to read stderr for error details
-                                let stderr_output =
-                                    if let Some(mut stderr) = stderr_for_errors.take() {
-                                        use std::io::Read;
-                                        let mut stderr_str = String::new();
-                                        if stderr.read_to_string(&mut stderr_str).is_ok()
-                                            && !stderr_str.is_empty()
-                                        {
-                                            Some(stderr_str)
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    };
+                                // FIX: Read from stderr buffer instead of raw handle
+                                let stderr_output = stderr_buffer
+                                    .as_ref()
+                                    .map(|buf| buf.get_contents())
+                                    .filter(|s| !s.is_empty());
 
                                 if let Some(ref stderr_text) = stderr_output {
                                     let error_message =

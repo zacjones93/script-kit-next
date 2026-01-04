@@ -592,7 +592,8 @@ struct ScriptListApp {
     // Channel for receiving prompt messages from script thread (async_channel for event-driven)
     prompt_receiver: Option<async_channel::Receiver<PromptMessage>>,
     // Channel for sending responses back to script
-    response_sender: Option<mpsc::Sender<Message>>,
+    // FIX: Use SyncSender (bounded channel) to prevent OOM from slow scripts
+    response_sender: Option<mpsc::SyncSender<Message>>,
     // List state for variable-height list (supports section headers at 24px + items at 48px)
     main_list_state: ListState,
     // Scroll handle for uniform_list (still used for backward compat in some views)

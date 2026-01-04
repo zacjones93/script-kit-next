@@ -12,6 +12,7 @@ mod errors;
 mod runner;
 mod scriptlet;
 mod selected_text;
+mod stderr_buffer;
 
 // Re-export public items for external use and backwards compatibility
 // Allow unused imports - these are public API exports that may be used by external code
@@ -48,6 +49,10 @@ pub use scriptlet::{
 };
 
 pub use selected_text::{handle_selected_text_message, SelectedTextHandleResult};
+
+// Allow unused - these are public API exports for future use
+#[allow(unused_imports)]
+pub use stderr_buffer::{spawn_stderr_reader, StderrBuffer};
 
 // Re-export tool_extension only for tests
 #[cfg(test)]
