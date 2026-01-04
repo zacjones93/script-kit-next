@@ -117,10 +117,10 @@ impl HotkeyPoller {
                     });
                 } else {
                     logging::log("VISIBILITY", "Decision: SHOW (window is currently hidden)");
-                    
+
                     // Menu bar tracking is now handled by frontmost_app_tracker module
                     // which pre-fetches menu items in background when apps activate
-                    
+
                     // Update visibility state FIRST to prevent race conditions
                     script_kit_gpui::set_main_window_visible(true);
                     logging::log("VISIBILITY", "WINDOW_VISIBLE set to: true");

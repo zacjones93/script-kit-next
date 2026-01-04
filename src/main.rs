@@ -1301,7 +1301,7 @@ fn main() {
 
         // Capture bun_available for use in window creation
         let bun_available = setup_result.bun_available;
-        
+
         let window: WindowHandle<Root> = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -1407,7 +1407,7 @@ fn main() {
                     });
                 } else {
                     logging::log("VISIBILITY", "Decision: SHOW");
-                    
+
                     script_kit_gpui::set_main_window_visible(true);
 
                     let _ = cx.update(move |cx: &mut gpui::App| {
@@ -1536,7 +1536,7 @@ fn main() {
         let scheduler_for_scripts = scheduler.clone();
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {
             use watcher::ScriptReloadEvent;
-            
+
             loop {
                 Timer::after(std::time::Duration::from_millis(200)).await;
 
@@ -1546,7 +1546,7 @@ fn main() {
                         ScriptReloadEvent::FileChanged(path) | ScriptReloadEvent::FileCreated(path) => {
                             // Check if it's a scriptlet file (markdown in scriptlets directory)
                             let is_scriptlet = path.extension().map(|e| e == "md").unwrap_or(false);
-                            
+
                             if is_scriptlet {
                                 logging::log("APP", &format!("Scriptlet file changed: {}", path.display()));
                                 let path_clone = path.clone();
@@ -1573,7 +1573,7 @@ fn main() {
                         }
                         ScriptReloadEvent::FileDeleted(path) => {
                             let is_scriptlet = path.extension().map(|e| e == "md").unwrap_or(false);
-                            
+
                             if is_scriptlet {
                                 logging::log("APP", &format!("Scriptlet file deleted: {}", path.display()));
                                 let path_clone = path.clone();
@@ -1795,19 +1795,19 @@ fn main() {
                                 logging::log("STDIN", &format!("[{}] Executing script: {}", rid, path));
                                 // Show and focus window - match hotkey handler setup for consistency
                                 script_kit_gpui::set_main_window_visible(true);
-                                
+
                                 // Position window on mouse display at eye-line (same as hotkey handler)
                                 platform::ensure_move_to_active_space();
                                 let window_size = gpui::size(px(750.), initial_window_height());
                                 let bounds = platform::calculate_eye_line_bounds_on_mouse_display(window_size);
                                 platform::move_first_window_to_bounds(&bounds);
-                                
+
                                 // Configure as floating panel on first show (same as hotkey handler)
                                 if !PANEL_CONFIGURED.load(std::sync::atomic::Ordering::SeqCst) {
                                     platform::configure_as_floating_panel();
                                     PANEL_CONFIGURED.store(true, std::sync::atomic::Ordering::SeqCst);
                                 }
-                                
+
                                 ctx.activate(true);
                                 window.activate_window();
                                 let focus_handle = view.focus_handle(ctx);
@@ -1819,25 +1819,25 @@ fn main() {
                             ExternalCommand::Show { ref request_id } => {
                                 let rid = request_id.as_deref().unwrap_or("-");
                                 logging::log("STDIN", &format!("[{}] Showing window", rid));
-                                
+
                                 // Menu bar tracking is now handled by frontmost_app_tracker
                                 // which pre-fetches menu items in background when apps activate
-                                
+
                                 // Show and focus window - match hotkey handler setup for consistency
                                 script_kit_gpui::set_main_window_visible(true);
-                                
+
                                 // Position window on mouse display at eye-line (same as hotkey handler)
                                 platform::ensure_move_to_active_space();
                                 let window_size = gpui::size(px(750.), initial_window_height());
                                 let bounds = platform::calculate_eye_line_bounds_on_mouse_display(window_size);
                                 platform::move_first_window_to_bounds(&bounds);
-                                
+
                                 // Configure as floating panel on first show (same as hotkey handler)
                                 if !PANEL_CONFIGURED.load(std::sync::atomic::Ordering::SeqCst) {
                                     platform::configure_as_floating_panel();
                                     PANEL_CONFIGURED.store(true, std::sync::atomic::Ordering::SeqCst);
                                 }
-                                
+
                                 ctx.activate(true);
                                 window.activate_window();
                                 let focus_handle = view.focus_handle(ctx);
