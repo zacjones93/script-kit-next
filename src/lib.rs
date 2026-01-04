@@ -185,6 +185,11 @@ pub mod transitions;
 // File watchers for theme, config, scripts, and system appearance
 pub mod watcher;
 
+// Window state management tests - code audit to prevent regressions
+// Verifies that app_execute.rs uses close_and_reset_window() correctly
+#[cfg(test)]
+mod window_state_tests;
+
 // Shared window visibility state
 // Used to track main window visibility across the app
 // Notes/AI windows use this to decide whether to hide the app after closing

@@ -87,6 +87,7 @@ mod permissions_wizard;
 // Built-in features registry
 mod app_launcher;
 mod builtins;
+mod menu_bar;
 
 // Frecency tracking for script usage
 mod frecency;
@@ -686,6 +687,17 @@ struct ScriptListApp {
     last_scrolled_window: Option<usize>,
     #[allow(dead_code)]
     last_scrolled_design_gallery: Option<usize>,
+    // Menu bar integration: raw menu items from the frontmost app (not Script Kit)
+    // Populated lazily when filter becomes non-empty
+    #[cfg(target_os = "macos")]
+    menu_bar_items: Vec<menu_bar::MenuBarItem>,
+    // Bundle ID of the app that owns the menu bar (for cache validation)
+    #[cfg(target_os = "macos")]
+    menu_bar_bundle_id: Option<String>,
+    // Whether menu bar items have been loaded for the current window show
+    // Reset to false when window becomes visible, set to true after loading
+    #[cfg(target_os = "macos")]
+    menu_bar_loaded: bool,
 }
 
 /// Result of alias matching - either a Script or Scriptlet
@@ -1417,10 +1429,33 @@ fn main() {
                             PANEL_CONFIGURED.store(true, std::sync::atomic::Ordering::SeqCst);
                         }
 
-                        // Activate window
+                        // Activate window and focus input
                         cx.activate(true);
                         let _ = window_inner.update(cx, |_root, window, _cx| {
                             window.activate_window();
+                        });
+
+                        // Focus the input and check for any missed reset
+                        // (reset should happen on hide, but this is a safety net)
+                        app_entity_inner.update(cx, |view, ctx| {
+                            let focus_handle = view.focus_handle(ctx);
+                            window_inner.update(ctx, |_root, window, _cx| {
+                                window.focus(&focus_handle, _cx);
+                            }).ok();
+
+                            // Safety net: if NEEDS_RESET is still true, reset now
+                            if NEEDS_RESET.compare_exchange(
+                                true,
+                                false,
+                                Ordering::SeqCst,
+                                Ordering::SeqCst,
+                            ).is_ok() {
+                                logging::log(
+                                    "VISIBILITY",
+                                    "NEEDS_RESET was true (safety net) - resetting to script list",
+                                );
+                                view.reset_to_script_list(ctx);
+                            }
                         });
 
                         logging::log("HOTKEY", "Window shown and activated");

@@ -10,8 +10,10 @@ use tracing::{debug, instrument, warn};
 
 use crate::app_launcher::AppInfo;
 pub use crate::builtins::BuiltInEntry;
+use crate::builtins::{menu_bar_items_to_entries, BuiltInGroup};
 use crate::frecency::FrecencyStore;
 use crate::list_item::GroupedListItem;
+use crate::menu_bar::MenuBarItem;
 use crate::metadata_parser::{extract_typed_metadata, TypedMetadata};
 use crate::schema_parser::{extract_schema, Schema};
 use crate::scriptlets as scriptlet_parser;
@@ -1760,6 +1762,7 @@ pub const DEFAULT_MAX_RECENT_ITEMS: usize = 10;
 /// **When filter_text has content (search mode):**
 /// - Returns flat list of `Item(index)` - no headers
 /// - Uses existing fuzzy_search_unified logic for filtering
+/// - Also includes menu bar items from the frontmost application (if provided)
 ///
 /// # Arguments
 /// * `scripts` - Scripts to include in results
@@ -1769,12 +1772,15 @@ pub const DEFAULT_MAX_RECENT_ITEMS: usize = 10;
 /// * `frecency_store` - Store containing frecency data for ranking
 /// * `filter_text` - Search filter text (empty = grouped view, non-empty = search mode)
 /// * `max_recent_items` - Maximum items to show in RECENT section (from config)
+/// * `menu_bar_items` - Optional menu bar items from the frontmost application
+/// * `menu_bar_bundle_id` - Optional bundle ID of the frontmost application
 ///
 /// # Returns
 /// `(Vec<GroupedListItem>, Vec<SearchResult>)` - Grouped items and the flat results array.
 /// The `usize` in `Item(usize)` is the index into the flat results array.
 ///
 #[instrument(level = "debug", skip_all, fields(filter_len = filter_text.len()))]
+#[allow(clippy::too_many_arguments)]
 pub fn get_grouped_results(
     scripts: &[Script],
     scriptlets: &[Scriptlet],
@@ -1783,16 +1789,63 @@ pub fn get_grouped_results(
     frecency_store: &FrecencyStore,
     filter_text: &str,
     max_recent_items: usize,
+    menu_bar_items: &[MenuBarItem],
+    menu_bar_bundle_id: Option<&str>,
 ) -> (Vec<GroupedListItem>, Vec<SearchResult>) {
-    // Get all unified search results
-    let results = fuzzy_search_unified_all(scripts, scriptlets, builtins, apps, filter_text);
+    // When filter is non-empty and we have menu bar items, include them in search
+    let all_builtins: Vec<BuiltInEntry>;
+    let builtins_to_use: &[BuiltInEntry] = if let Some(bundle_id) =
+        menu_bar_bundle_id.filter(|_| !filter_text.is_empty() && !menu_bar_items.is_empty())
+    {
+        // Extract app name from bundle_id (e.g., "com.apple.Safari" -> "Safari")
+        let app_name = bundle_id.rsplit('.').next().unwrap_or(bundle_id);
+        let menu_entries = menu_bar_items_to_entries(menu_bar_items, bundle_id, app_name);
+        // Combine builtins with menu bar entries
+        all_builtins = builtins.iter().cloned().chain(menu_entries).collect();
+        &all_builtins
+    } else {
+        builtins
+    };
 
-    // Search mode: return flat list with no headers
+    // Get all unified search results
+    let results = fuzzy_search_unified_all(scripts, scriptlets, builtins_to_use, apps, filter_text);
+
+    // Search mode: return flat list with section header for menu bar items
     if !filter_text.is_empty() {
-        let grouped: Vec<GroupedListItem> = (0..results.len()).map(GroupedListItem::Item).collect();
+        // Partition results into non-menu-bar and menu-bar items
+        let mut non_menu_bar_indices: Vec<usize> = Vec::new();
+        let mut menu_bar_indices: Vec<usize> = Vec::new();
+
+        for (idx, result) in results.iter().enumerate() {
+            if matches!(result, SearchResult::BuiltIn(bm) if bm.entry.group == BuiltInGroup::MenuBar)
+            {
+                menu_bar_indices.push(idx);
+            } else {
+                non_menu_bar_indices.push(idx);
+            }
+        }
+
+        let mut grouped: Vec<GroupedListItem> = Vec::new();
+
+        // Add non-menu-bar items first
+        for idx in non_menu_bar_indices {
+            grouped.push(GroupedListItem::Item(idx));
+        }
+
+        // Add menu bar section with header if there are menu bar items
+        let menu_bar_count = menu_bar_indices.len();
+        if !menu_bar_indices.is_empty() {
+            grouped.push(GroupedListItem::SectionHeader(
+                "MENU BAR ACTIONS".to_string(),
+            ));
+            for idx in menu_bar_indices {
+                grouped.push(GroupedListItem::Item(idx));
+            }
+        }
+
         debug!(
             result_count = results.len(),
-            "Search mode: returning flat list"
+            menu_bar_count, "Search mode: returning list with menu bar section"
         );
         return (grouped, results);
     }

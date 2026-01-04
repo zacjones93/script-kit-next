@@ -268,6 +268,13 @@ impl ScriptListApp {
             show_bun_warning: !bun_available,
             // Pending confirmation for dangerous actions
             pending_confirmation: None,
+            // Menu bar integration: starts empty, loaded lazily on first filter keystroke
+            #[cfg(target_os = "macos")]
+            menu_bar_items: Vec::new(),
+            #[cfg(target_os = "macos")]
+            menu_bar_bundle_id: None,
+            #[cfg(target_os = "macos")]
+            menu_bar_loaded: false,
         };
 
         // Build initial alias/shortcut registries (conflicts logged, not shown via HUD on startup)
@@ -346,6 +353,114 @@ impl ScriptListApp {
             &format!("Config reloaded: padding={:?}", self.config.get_padding()),
         );
         cx.notify();
+    }
+
+    /// Load menu bar items from the frontmost application in a background thread.
+    /// Called lazily on first non-empty filter after window becomes visible.
+    #[cfg(target_os = "macos")]
+    fn load_menu_bar_items_async(&mut self, cx: &mut Context<Self>) {
+        use script_kit_gpui::menu_bar as lib_menu_bar;
+        
+        // Mark as loaded immediately to prevent multiple concurrent loads
+        self.menu_bar_loaded = true;
+
+        logging::log("APP", "Starting async menu bar load");
+
+        // Use a channel to send results back - using library types for thread safety
+        // We'll convert to binary crate types when receiving
+        let (tx, rx) = std::sync::mpsc::channel::<(Vec<lib_menu_bar::MenuBarItem>, Option<String>)>();
+
+        std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+
+            // Get bundle_id from menu bar owner
+            let bundle_id: Option<String> = unsafe {
+                use objc::runtime::{Class, Object};
+                use objc::{msg_send, sel, sel_impl};
+
+                Class::get("NSWorkspace").and_then(|workspace_class| {
+                    let workspace: *mut Object = msg_send![workspace_class, sharedWorkspace];
+                    let menu_owner: *mut Object = msg_send![workspace, menuBarOwningApplication];
+
+                    if menu_owner.is_null() {
+                        return None;
+                    }
+
+                    let bundle_id_obj: *mut Object = msg_send![menu_owner, bundleIdentifier];
+                    if bundle_id_obj.is_null() {
+                        return None;
+                    }
+
+                    let utf8: *const i8 = msg_send![bundle_id_obj, UTF8String];
+                    if utf8.is_null() {
+                        return None;
+                    }
+
+                    std::ffi::CStr::from_ptr(utf8)
+                        .to_str()
+                        .ok()
+                        .map(|s| s.to_string())
+                })
+            };
+
+            // Get menu bar items
+            match lib_menu_bar::get_frontmost_menu_bar() {
+                Ok(items) => {
+                    let elapsed = start.elapsed();
+                    let item_count = items.len();
+                    logging::log(
+                        "APP",
+                        &format!(
+                            "Menu bar scan complete: {} items in {:.2}ms (bundle_id: {:?})",
+                            item_count,
+                            elapsed.as_secs_f64() * 1000.0,
+                            bundle_id
+                        ),
+                    );
+                    let _ = tx.send((items, bundle_id));
+                }
+                Err(e) => {
+                    logging::log("APP", &format!("Menu bar scan failed: {}", e));
+                    let _ = tx.send((vec![], bundle_id));
+                }
+            }
+        });
+
+        // Poll for results using a spawned task
+        cx.spawn(async move |this, cx| {
+            loop {
+                Timer::after(std::time::Duration::from_millis(50)).await;
+                match rx.try_recv() {
+                    Ok((items, bundle_id)) => {
+                        let item_count = items.len();
+                        let _ = cx.update(|cx| {
+                            this.update(cx, |app, cx| {
+                                // Convert library crate types to binary crate types
+                                // Both are structurally identical, just from different crate namespaces
+                                app.menu_bar_items = convert_menu_bar_items(items);
+                                app.menu_bar_bundle_id = bundle_id;
+                                logging::log(
+                                    "APP",
+                                    &format!(
+                                        "Menu bar items loaded: {} items, bundle_id: {:?}",
+                                        item_count,
+                                        app.menu_bar_bundle_id
+                                    ),
+                                );
+                                // Invalidate caches so menu items can be included in search results
+                                app.invalidate_filter_cache();
+                                app.invalidate_grouped_cache();
+                                cx.notify();
+                            })
+                        });
+                        break;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => continue,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                }
+            }
+        })
+        .detach();
     }
 
     fn refresh_scripts(&mut self, cx: &mut Context<Self>) {
@@ -734,6 +849,8 @@ impl ScriptListApp {
             &self.frecency_store,
             &self.computed_filter_text,
             max_recent_items,
+            &self.menu_bar_items,
+            self.menu_bar_bundle_id.as_deref(),
         );
         let elapsed = start.elapsed();
 
@@ -1010,6 +1127,13 @@ impl ScriptListApp {
 
         // P3: Notify immediately so UI updates (responsive typing)
         cx.notify();
+
+        // Lazy load menu bar items on first non-empty filter (macOS only)
+        #[cfg(target_os = "macos")]
+        if !new_text.is_empty() && !self.menu_bar_loaded {
+            self.load_menu_bar_items_async(cx);
+        }
+
         self.queue_filter_compute(new_text, cx);
     }
 
@@ -3156,5 +3280,30 @@ impl ScriptListApp {
             blur_radius: px(shadow_config.blur_radius),
             spread_radius: px(shadow_config.spread_radius),
         }]
+    }
+}
+
+/// Convert library crate MenuBarItem types to binary crate types.
+/// Both are structurally identical, just in different crate namespaces.
+/// This is required because main.rs has `mod menu_bar;` (binary crate)
+/// and lib.rs has `pub mod menu_bar;` (library crate) - they're the same
+/// source file but Rust treats them as different types.
+#[cfg(target_os = "macos")]
+fn convert_menu_bar_items(items: Vec<script_kit_gpui::menu_bar::MenuBarItem>) -> Vec<menu_bar::MenuBarItem> {
+    items.into_iter().map(convert_menu_bar_item).collect()
+}
+
+#[cfg(target_os = "macos")]
+fn convert_menu_bar_item(item: script_kit_gpui::menu_bar::MenuBarItem) -> menu_bar::MenuBarItem {
+    menu_bar::MenuBarItem {
+        title: item.title,
+        enabled: item.enabled,
+        shortcut: item.shortcut.map(|s| menu_bar::KeyboardShortcut {
+            key: s.key,
+            // Convert bitflags by copying the raw bits
+            modifiers: menu_bar::ModifierFlags::from_bits_truncate(s.modifiers.bits()),
+        }),
+        children: item.children.into_iter().map(convert_menu_bar_item).collect(),
+        ax_element_path: item.ax_element_path,
     }
 }

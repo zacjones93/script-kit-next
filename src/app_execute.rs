@@ -72,11 +72,7 @@ impl ScriptListApp {
                         )));
                     } else {
                         logging::log("EXEC", &format!("Launched app: {}", app_name));
-                        // Hide window after launching app and set reset flag
-                        // so filter_text is cleared when window is shown again
-                        script_kit_gpui::set_main_window_visible(false);
-                        NEEDS_RESET.store(true, Ordering::SeqCst);
-                        cx.hide();
+                        self.close_and_reset_window(cx);
                     }
                 } else {
                     logging::log("ERROR", &format!("App not found: {}", app_name));
@@ -124,12 +120,10 @@ impl ScriptListApp {
             }
             builtins::BuiltInFeature::AiChat => {
                 logging::log("EXEC", "Opening AI Chat window");
-                // Hide the main window (NOT the entire app) and open AI window
+                // Reset state, hide main window, and open AI window
                 script_kit_gpui::set_main_window_visible(false);
-                NEEDS_RESET.store(true, Ordering::SeqCst);
-                // Use hide_main_window() to only hide main window, not the whole app
+                self.reset_to_script_list(cx);
                 platform::hide_main_window();
-                // Open AI window
                 if let Err(e) = ai::open_ai_window(cx) {
                     logging::log("ERROR", &format!("Failed to open AI window: {}", e));
                     self.toast_manager.push(
@@ -144,12 +138,10 @@ impl ScriptListApp {
             }
             builtins::BuiltInFeature::Notes => {
                 logging::log("EXEC", "Opening Notes window");
-                // Hide the main window (NOT the entire app) and open Notes window
+                // Reset state, hide main window, and open Notes window
                 script_kit_gpui::set_main_window_visible(false);
-                NEEDS_RESET.store(true, Ordering::SeqCst);
-                // Use hide_main_window() to only hide main window, not the whole app
+                self.reset_to_script_list(cx);
                 platform::hide_main_window();
-                // Open Notes window
                 if let Err(e) = notes::open_notes_window(cx) {
                     logging::log("ERROR", &format!("Failed to open Notes window: {}", e));
                     self.toast_manager.push(
@@ -180,10 +172,7 @@ impl ScriptListApp {
                     ) {
                         Ok(()) => {
                             logging::log("EXEC", "Menu action executed successfully");
-                            // Hide window and set reset flag
-                            script_kit_gpui::set_main_window_visible(false);
-                            NEEDS_RESET.store(true, Ordering::SeqCst);
-                            cx.hide();
+                            self.close_and_reset_window(cx);
                         }
                         Err(e) => {
                             logging::log("ERROR", &format!("Menu action failed: {}", e));
@@ -313,10 +302,7 @@ impl ScriptListApp {
                     match result {
                         Ok(()) => {
                             logging::log("EXEC", "System action executed successfully");
-                            // Hide window for most actions
-                            script_kit_gpui::set_main_window_visible(false);
-                            NEEDS_RESET.store(true, Ordering::SeqCst);
-                            cx.hide();
+                            self.close_and_reset_window(cx);
                         }
                         Err(e) => {
                             logging::log("ERROR", &format!("System action failed: {}", e));
@@ -398,10 +384,8 @@ impl ScriptListApp {
                         match result {
                             Ok(()) => {
                                 logging::log("EXEC", "Window action executed successfully");
-                                // Hide window after action
-                                script_kit_gpui::set_main_window_visible(false);
-                                NEEDS_RESET.store(true, Ordering::SeqCst);
-                                cx.hide();
+                                // Reset and hide - does the reset work immediately while hiding
+                                self.close_and_reset_window(cx);
                             }
                             Err(e) => {
                                 logging::log("ERROR", &format!("Window action failed: {}", e));
@@ -449,75 +433,28 @@ impl ScriptListApp {
 
                 use builtins::NotesCommandType;
 
-                match cmd_type {
-                    NotesCommandType::OpenNotes => {
-                        // Same as BuiltInFeature::Notes
-                        script_kit_gpui::set_main_window_visible(false);
-                        NEEDS_RESET.store(true, Ordering::SeqCst);
-                        platform::hide_main_window();
-                        if let Err(e) = notes::open_notes_window(cx) {
-                            logging::log("ERROR", &format!("Failed to open Notes window: {}", e));
-                            self.toast_manager.push(
-                                components::toast::Toast::error(
-                                    format!("Failed to open Notes: {}", e),
-                                    &self.theme,
-                                )
-                                .duration_ms(Some(5000)),
-                            );
-                            cx.notify();
-                        }
-                    }
-                    NotesCommandType::NewNote => {
-                        // Open notes and create a new note
-                        script_kit_gpui::set_main_window_visible(false);
-                        NEEDS_RESET.store(true, Ordering::SeqCst);
-                        platform::hide_main_window();
-                        if let Err(e) = notes::open_notes_window(cx) {
-                            logging::log("ERROR", &format!("Failed to open Notes window: {}", e));
-                            self.toast_manager.push(
-                                components::toast::Toast::error(
-                                    format!("Failed to open Notes: {}", e),
-                                    &self.theme,
-                                )
-                                .duration_ms(Some(5000)),
-                            );
-                            cx.notify();
-                        }
-                        // Note: The new note will be created by the Notes window upon opening
-                    }
-                    NotesCommandType::SearchNotes => {
-                        // Open notes (search is built into the notes window)
-                        script_kit_gpui::set_main_window_visible(false);
-                        NEEDS_RESET.store(true, Ordering::SeqCst);
-                        platform::hide_main_window();
-                        if let Err(e) = notes::open_notes_window(cx) {
-                            logging::log("ERROR", &format!("Failed to open Notes window: {}", e));
-                            self.toast_manager.push(
-                                components::toast::Toast::error(
-                                    format!("Failed to open Notes: {}", e),
-                                    &self.theme,
-                                )
-                                .duration_ms(Some(5000)),
-                            );
-                            cx.notify();
-                        }
-                    }
-                    NotesCommandType::QuickCapture => {
-                        script_kit_gpui::set_main_window_visible(false);
-                        NEEDS_RESET.store(true, Ordering::SeqCst);
-                        platform::hide_main_window();
-                        if let Err(e) = notes::quick_capture(cx) {
-                            logging::log("ERROR", &format!("Failed to quick capture: {}", e));
-                            self.toast_manager.push(
-                                components::toast::Toast::error(
-                                    format!("Failed to quick capture: {}", e),
-                                    &self.theme,
-                                )
-                                .duration_ms(Some(5000)),
-                            );
-                            cx.notify();
-                        }
-                    }
+                // All notes commands: reset state, hide main window, open notes
+                script_kit_gpui::set_main_window_visible(false);
+                self.reset_to_script_list(cx);
+                platform::hide_main_window();
+
+                let result = match cmd_type {
+                    NotesCommandType::OpenNotes
+                    | NotesCommandType::NewNote
+                    | NotesCommandType::SearchNotes => notes::open_notes_window(cx),
+                    NotesCommandType::QuickCapture => notes::quick_capture(cx),
+                };
+
+                if let Err(e) = result {
+                    logging::log("ERROR", &format!("Notes command failed: {}", e));
+                    self.toast_manager.push(
+                        components::toast::Toast::error(
+                            format!("Notes command failed: {}", e),
+                            &self.theme,
+                        )
+                        .duration_ms(Some(5000)),
+                    );
+                    cx.notify();
                 }
             }
 
@@ -527,61 +464,21 @@ impl ScriptListApp {
             builtins::BuiltInFeature::AiCommand(cmd_type) => {
                 logging::log("EXEC", &format!("Executing AI command: {:?}", cmd_type));
 
-                use builtins::AiCommandType;
+                // All AI commands: reset state, hide main window, open AI
+                script_kit_gpui::set_main_window_visible(false);
+                self.reset_to_script_list(cx);
+                platform::hide_main_window();
 
-                match cmd_type {
-                    AiCommandType::OpenAi => {
-                        // Same as BuiltInFeature::AiChat
-                        script_kit_gpui::set_main_window_visible(false);
-                        NEEDS_RESET.store(true, Ordering::SeqCst);
-                        platform::hide_main_window();
-                        if let Err(e) = ai::open_ai_window(cx) {
-                            logging::log("ERROR", &format!("Failed to open AI window: {}", e));
-                            self.toast_manager.push(
-                                components::toast::Toast::error(
-                                    format!("Failed to open AI: {}", e),
-                                    &self.theme,
-                                )
-                                .duration_ms(Some(5000)),
-                            );
-                            cx.notify();
-                        }
-                    }
-                    AiCommandType::NewConversation => {
-                        // Open AI window (new conversation is default behavior)
-                        script_kit_gpui::set_main_window_visible(false);
-                        NEEDS_RESET.store(true, Ordering::SeqCst);
-                        platform::hide_main_window();
-                        if let Err(e) = ai::open_ai_window(cx) {
-                            logging::log("ERROR", &format!("Failed to open AI window: {}", e));
-                            self.toast_manager.push(
-                                components::toast::Toast::error(
-                                    format!("Failed to open AI: {}", e),
-                                    &self.theme,
-                                )
-                                .duration_ms(Some(5000)),
-                            );
-                            cx.notify();
-                        }
-                    }
-                    AiCommandType::ClearConversation => {
-                        // For now, just open AI window
-                        // TODO: Add clear conversation functionality to AI window
-                        script_kit_gpui::set_main_window_visible(false);
-                        NEEDS_RESET.store(true, Ordering::SeqCst);
-                        platform::hide_main_window();
-                        if let Err(e) = ai::open_ai_window(cx) {
-                            logging::log("ERROR", &format!("Failed to open AI window: {}", e));
-                            self.toast_manager.push(
-                                components::toast::Toast::error(
-                                    format!("Failed to open AI: {}", e),
-                                    &self.theme,
-                                )
-                                .duration_ms(Some(5000)),
-                            );
-                            cx.notify();
-                        }
-                    }
+                if let Err(e) = ai::open_ai_window(cx) {
+                    logging::log("ERROR", &format!("AI command failed: {}", e));
+                    self.toast_manager.push(
+                        components::toast::Toast::error(
+                            format!("Failed to open AI: {}", e),
+                            &self.theme,
+                        )
+                        .duration_ms(Some(5000)),
+                    );
+                    cx.notify();
                 }
             }
 
@@ -593,108 +490,52 @@ impl ScriptListApp {
 
                 use builtins::ScriptCommandType;
 
-                match cmd_type {
+                let (create_result, item_type) = match cmd_type {
                     ScriptCommandType::NewScript => {
-                        // Create a new script and open it in the editor
-                        // For now, use a default name - in the future this could prompt
-                        match script_creation::create_new_script("untitled") {
-                            Ok(path) => {
-                                logging::log("EXEC", &format!("Created new script: {:?}", path));
-                                // Open in editor
-                                if let Err(e) = script_creation::open_in_editor(&path, &self.config)
-                                {
-                                    logging::log(
-                                        "ERROR",
-                                        &format!("Failed to open in editor: {}", e),
-                                    );
-                                    self.toast_manager.push(
-                                        components::toast::Toast::error(
-                                            format!(
-                                                "Created script but failed to open editor: {}",
-                                                e
-                                            ),
-                                            &self.theme,
-                                        )
-                                        .duration_ms(Some(5000)),
-                                    );
-                                } else {
-                                    self.toast_manager.push(
-                                        components::toast::Toast::success(
-                                            "New script created and opened in editor",
-                                            &self.theme,
-                                        )
-                                        .duration_ms(Some(3000)),
-                                    );
-                                }
-                                // Hide window
-                                script_kit_gpui::set_main_window_visible(false);
-                                NEEDS_RESET.store(true, Ordering::SeqCst);
-                                cx.hide();
-                            }
-                            Err(e) => {
-                                logging::log("ERROR", &format!("Failed to create script: {}", e));
-                                self.toast_manager.push(
-                                    components::toast::Toast::error(
-                                        format!("Failed to create script: {}", e),
-                                        &self.theme,
-                                    )
-                                    .duration_ms(Some(5000)),
-                                );
-                                cx.notify();
-                            }
-                        }
+                        (script_creation::create_new_script("untitled"), "script")
                     }
-                    ScriptCommandType::NewScriptlet => {
-                        // Create a new scriptlet and open it in the editor
-                        match script_creation::create_new_scriptlet("untitled") {
-                            Ok(path) => {
-                                logging::log("EXEC", &format!("Created new scriptlet: {:?}", path));
-                                // Open in editor
-                                if let Err(e) = script_creation::open_in_editor(&path, &self.config)
-                                {
-                                    logging::log(
-                                        "ERROR",
-                                        &format!("Failed to open in editor: {}", e),
-                                    );
-                                    self.toast_manager.push(
-                                        components::toast::Toast::error(
-                                            format!(
-                                                "Created scriptlet but failed to open editor: {}",
-                                                e
-                                            ),
-                                            &self.theme,
-                                        )
-                                        .duration_ms(Some(5000)),
-                                    );
-                                } else {
-                                    self.toast_manager.push(
-                                        components::toast::Toast::success(
-                                            "New scriptlet created and opened in editor",
-                                            &self.theme,
-                                        )
-                                        .duration_ms(Some(3000)),
-                                    );
-                                }
-                                // Hide window
-                                script_kit_gpui::set_main_window_visible(false);
-                                NEEDS_RESET.store(true, Ordering::SeqCst);
-                                cx.hide();
-                            }
-                            Err(e) => {
-                                logging::log(
-                                    "ERROR",
-                                    &format!("Failed to create scriptlet: {}", e),
-                                );
-                                self.toast_manager.push(
-                                    components::toast::Toast::error(
-                                        format!("Failed to create scriptlet: {}", e),
-                                        &self.theme,
-                                    )
-                                    .duration_ms(Some(5000)),
-                                );
-                                cx.notify();
-                            }
+                    ScriptCommandType::NewScriptlet => (
+                        script_creation::create_new_scriptlet("untitled"),
+                        "scriptlet",
+                    ),
+                };
+
+                match create_result {
+                    Ok(path) => {
+                        logging::log("EXEC", &format!("Created new {}: {:?}", item_type, path));
+                        if let Err(e) = script_creation::open_in_editor(&path, &self.config) {
+                            logging::log("ERROR", &format!("Failed to open in editor: {}", e));
+                            self.toast_manager.push(
+                                components::toast::Toast::error(
+                                    format!(
+                                        "Created {} but failed to open editor: {}",
+                                        item_type, e
+                                    ),
+                                    &self.theme,
+                                )
+                                .duration_ms(Some(5000)),
+                            );
+                        } else {
+                            self.toast_manager.push(
+                                components::toast::Toast::success(
+                                    format!("New {} created and opened in editor", item_type),
+                                    &self.theme,
+                                )
+                                .duration_ms(Some(3000)),
+                            );
                         }
+                        self.close_and_reset_window(cx);
+                    }
+                    Err(e) => {
+                        logging::log("ERROR", &format!("Failed to create {}: {}", item_type, e));
+                        self.toast_manager.push(
+                            components::toast::Toast::error(
+                                format!("Failed to create {}: {}", item_type, e),
+                                &self.theme,
+                            )
+                            .duration_ms(Some(5000)),
+                        );
+                        cx.notify();
                     }
                 }
             }
@@ -771,13 +612,10 @@ impl ScriptListApp {
                                 )
                                 .duration_ms(Some(5000)),
                             );
+                            cx.notify();
                         } else {
-                            // Hide window after opening settings
-                            script_kit_gpui::set_main_window_visible(false);
-                            NEEDS_RESET.store(true, Ordering::SeqCst);
-                            cx.hide();
+                            self.close_and_reset_window(cx);
                         }
-                        cx.notify();
                     }
                 }
             }
@@ -797,11 +635,7 @@ impl ScriptListApp {
             cx.notify();
         } else {
             logging::log("EXEC", &format!("Launched app: {}", app.name));
-            // Hide window after launching app and set reset flag
-            // so filter_text is cleared when window is shown again
-            script_kit_gpui::set_main_window_visible(false);
-            NEEDS_RESET.store(true, Ordering::SeqCst);
-            cx.hide();
+            self.close_and_reset_window(cx);
         }
     }
 
@@ -828,11 +662,7 @@ impl ScriptListApp {
             cx.notify();
         } else {
             logging::log("EXEC", &format!("Focused window: {}", window.title));
-            // Hide Script Kit after focusing window and set reset flag
-            // so filter_text is cleared when window is shown again
-            script_kit_gpui::set_main_window_visible(false);
-            NEEDS_RESET.store(true, Ordering::SeqCst);
-            cx.hide();
+            self.close_and_reset_window(cx);
         }
     }
 }
