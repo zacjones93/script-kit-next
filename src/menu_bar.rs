@@ -549,25 +549,47 @@ fn parse_submenu_children(
     children
 }
 
-/// Get the frontmost application's PID
-fn get_frontmost_app_pid() -> Result<i32> {
+/// Get the menu bar owning application's PID
+///
+/// Since Script Kit is an accessory app (LSUIElement), it doesn't take menu bar
+/// ownership when activated. This function returns the PID of the application
+/// that currently owns the system menu bar, which is typically the app that was
+/// active before Script Kit was shown.
+fn get_menu_bar_owner_pid() -> Result<i32> {
     unsafe {
         use objc::runtime::{Class, Object};
         use objc::{msg_send, sel, sel_impl};
 
         let workspace_class = Class::get("NSWorkspace").context("Failed to get NSWorkspace")?;
         let workspace: *mut Object = msg_send![workspace_class, sharedWorkspace];
-        let frontmost_app: *mut Object = msg_send![workspace, frontmostApplication];
+        let menu_owner: *mut Object = msg_send![workspace, menuBarOwningApplication];
 
-        if frontmost_app.is_null() {
-            bail!("No frontmost application found");
+        if menu_owner.is_null() {
+            bail!("No menu bar owning application found");
         }
 
-        let pid: i32 = msg_send![frontmost_app, processIdentifier];
+        let pid: i32 = msg_send![menu_owner, processIdentifier];
 
         if pid <= 0 {
-            bail!("Invalid process identifier for frontmost application");
+            bail!("Invalid process identifier for menu bar owner");
         }
+
+        // Log the menu bar owner for debugging
+        let bundle_id: *mut Object = msg_send![menu_owner, bundleIdentifier];
+        let bundle_str = if !bundle_id.is_null() {
+            let utf8: *const i8 = msg_send![bundle_id, UTF8String];
+            if !utf8.is_null() {
+                std::ffi::CStr::from_ptr(utf8).to_str().unwrap_or("unknown")
+            } else {
+                "unknown"
+            }
+        } else {
+            "unknown"
+        };
+        crate::logging::log(
+            "APP",
+            &format!("Menu bar owner PID {} = {}", pid, bundle_str),
+        );
 
         Ok(pid)
     }
@@ -601,14 +623,31 @@ fn get_frontmost_app_pid() -> Result<i32> {
 ///     }
 /// }
 /// ```
+/// Get the menu bar of the current menu bar owning application.
+///
+/// This queries `menuBarOwningApplication` at call time. For better control,
+/// use `get_menu_bar_for_pid()` with a pre-captured PID.
 #[instrument]
 pub fn get_frontmost_menu_bar() -> Result<Vec<MenuBarItem>> {
     if !has_accessibility_permission() {
         bail!("Accessibility permission required for menu bar access");
     }
 
-    let pid = get_frontmost_app_pid()?;
-    debug!(pid, "Getting menu bar for frontmost app");
+    let pid = get_menu_bar_owner_pid()?;
+    get_menu_bar_for_pid(pid)
+}
+
+/// Get the menu bar for a specific application by PID.
+///
+/// Use this when you've pre-captured the target PID before any window activation
+/// that might change which app owns the menu bar.
+#[instrument]
+pub fn get_menu_bar_for_pid(pid: i32) -> Result<Vec<MenuBarItem>> {
+    if !has_accessibility_permission() {
+        bail!("Accessibility permission required for menu bar access");
+    }
+
+    debug!(pid, "Getting menu bar for app");
 
     let ax_app = unsafe { AXUIElementCreateApplication(pid) };
     if ax_app.is_null() {

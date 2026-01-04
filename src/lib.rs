@@ -67,6 +67,11 @@ pub mod menu_executor;
 #[cfg(target_os = "macos")]
 pub mod menu_cache;
 
+// Frontmost app tracker - Background observer for tracking active application
+// Pre-fetches menu bar items when apps activate (before Script Kit opens)
+#[cfg(target_os = "macos")]
+pub mod frontmost_app_tracker;
+
 // Built-in features registry
 pub mod app_launcher;
 pub mod builtins;

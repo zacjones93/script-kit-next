@@ -89,6 +89,10 @@ mod app_launcher;
 mod builtins;
 mod menu_bar;
 
+// Frontmost app tracker - Background observer for tracking active application
+#[cfg(target_os = "macos")]
+mod frontmost_app_tracker;
+
 // Frecency tracking for script usage
 mod frecency;
 
@@ -687,17 +691,8 @@ struct ScriptListApp {
     last_scrolled_window: Option<usize>,
     #[allow(dead_code)]
     last_scrolled_design_gallery: Option<usize>,
-    // Menu bar integration: raw menu items from the frontmost app (not Script Kit)
-    // Populated lazily when filter becomes non-empty
-    #[cfg(target_os = "macos")]
-    menu_bar_items: Vec<menu_bar::MenuBarItem>,
-    // Bundle ID of the app that owns the menu bar (for cache validation)
-    #[cfg(target_os = "macos")]
-    menu_bar_bundle_id: Option<String>,
-    // Whether menu bar items have been loaded for the current window show
-    // Reset to false when window becomes visible, set to true after loading
-    #[cfg(target_os = "macos")]
-    menu_bar_loaded: bool,
+    // Menu bar integration: Now handled by frontmost_app_tracker module
+    // which pre-fetches menu items in background when apps activate
 }
 
 /// Result of alias matching - either a Script or Scriptlet
@@ -1254,6 +1249,11 @@ fn main() {
         // - No Dock icon
         // - No menu bar ownership (critical for window actions to work)
         platform::configure_as_accessory_app();
+
+        // Start frontmost app tracker - watches for app activations and pre-fetches menu bar items
+        // Must be started after configure_as_accessory_app() so we're correctly classified
+        #[cfg(target_os = "macos")]
+        frontmost_app_tracker::start_tracking();
 
         // Register bundled JetBrains Mono font
         // This makes "JetBrains Mono" available as a font family for the editor
@@ -1824,6 +1824,10 @@ fn main() {
                             ExternalCommand::Show { ref request_id } => {
                                 let rid = request_id.as_deref().unwrap_or("-");
                                 logging::log("STDIN", &format!("[{}] Showing window", rid));
+                                
+                                // Menu bar tracking is now handled by frontmost_app_tracker
+                                // which pre-fetches menu items in background when apps activate
+                                
                                 // Show and focus window - match hotkey handler setup for consistency
                                 script_kit_gpui::set_main_window_visible(true);
                                 

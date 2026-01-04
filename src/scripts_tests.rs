@@ -2734,6 +2734,8 @@ fn test_get_grouped_results_search_mode_flat_list() {
         &frecency_store,
         "open",
         10,
+        &[],
+        None,
     );
 
     // Should be a flat list with no headers
@@ -2782,6 +2784,8 @@ fn test_get_grouped_results_empty_filter_grouped_view() {
         &frecency_store,
         "",
         10,
+        &[],
+        None,
     );
 
     // Results should contain all items
@@ -2845,6 +2849,8 @@ fn test_get_grouped_results_with_frecency() {
         &frecency_store,
         "",
         10,
+        &[],
+        None,
     );
 
     // Results should contain all items
@@ -2913,6 +2919,8 @@ fn test_get_grouped_results_frecency_script_appears_before_builtins() {
         &frecency_store,
         "",
         10,
+        &[],
+        None,
     );
 
     // Verify structure:
@@ -3035,6 +3043,8 @@ fn test_get_grouped_results_builtin_with_frecency_vs_script_frecency() {
         &frecency_store,
         "",
         10,
+        &[],
+        None,
     );
 
     // Both should be in RECENT, but script should come FIRST (higher frecency)
@@ -3120,6 +3130,8 @@ fn test_get_grouped_results_selection_priority_with_frecency() {
         &frecency_store,
         "",
         10,
+        &[],
+        None,
     );
 
     // Find the first Item (not SectionHeader) - this is what gets selected
@@ -3217,6 +3229,8 @@ fn test_get_grouped_results_no_frecency_items_in_type_sections() {
         &frecency_store,
         "",
         10,
+        &[],
+        None,
     );
 
     // With no frecency, should have SCRIPTS and COMMANDS sections
@@ -3267,6 +3281,8 @@ fn test_get_grouped_results_empty_inputs() {
         &frecency_store,
         "",
         10,
+        &[],
+        None,
     );
 
     // Both should be empty when no inputs
@@ -3311,6 +3327,8 @@ fn test_get_grouped_results_items_reference_correct_indices() {
         &frecency_store,
         "",
         10,
+        &[],
+        None,
     );
 
     // All Item indices should be valid indices into results
@@ -4036,6 +4054,8 @@ fn bench_get_grouped_results_repeated_calls() {
         &frecency_store,
         "",
         10,
+        &[],
+        None,
     );
 
     // Benchmark: 100 calls with empty filter (grouped mode)
@@ -4049,6 +4069,8 @@ fn bench_get_grouped_results_repeated_calls() {
             &frecency_store,
             "",
             10,
+            &[],
+            None,
         );
     }
     let empty_filter_duration = start.elapsed();
@@ -4064,6 +4086,8 @@ fn bench_get_grouped_results_repeated_calls() {
             &frecency_store,
             "scr",
             10,
+            &[],
+            None,
         );
     }
     let search_filter_duration = start.elapsed();
@@ -4332,6 +4356,8 @@ fn test_get_grouped_results_respects_frecency_ordering() {
         &frecency_store,
         "",
         10,
+        &[],
+        None,
     );
 
     // Should have MAIN section header + 3 items
@@ -4349,6 +4375,8 @@ fn test_get_grouped_results_respects_frecency_ordering() {
         &frecency_store,
         "",
         10,
+        &[],
+        None,
     );
 
     // Should now have RECENT header, at least one recent item, MAIN header, remaining items
@@ -4420,6 +4448,8 @@ fn test_get_grouped_results_updates_after_frecency_change() {
         &frecency_store,
         "",
         10,
+        &[],
+        None,
     );
 
     // Find the first recent item - should be "First Script"
@@ -4449,6 +4479,8 @@ fn test_get_grouped_results_updates_after_frecency_change() {
         &frecency_store,
         "",
         10,
+        &[],
+        None,
     );
 
     // Find items in RECENT section
@@ -4521,6 +4553,8 @@ fn test_frecency_cache_invalidation_required() {
         &frecency_store,
         filter_text,
         10,
+        &[],
+        None,
     );
 
     // Record frecency use (this happens in main.rs:1904 after script execution)
@@ -4546,6 +4580,8 @@ fn test_frecency_cache_invalidation_required() {
             &frecency_store,
             filter_text,
             10,
+            &[],
+            None,
         )
         .0
     };
@@ -4560,6 +4596,8 @@ fn test_frecency_cache_invalidation_required() {
             &frecency_store,
             filter_text,
             10,
+            &[],
+            None,
         )
         .1
     };
@@ -4576,6 +4614,8 @@ fn test_frecency_cache_invalidation_required() {
         &frecency_store,
         filter_text,
         10,
+        &[],
+        None,
     );
 
     // Extract recent items from correct results
@@ -4716,6 +4756,8 @@ fn test_frecency_change_invalidates_cache() {
                 frecency_store,
                 filter_text,
                 10,
+                &[],
+                None,
             );
 
             self.cached_grouped = grouped.clone();

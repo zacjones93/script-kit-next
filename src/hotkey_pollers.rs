@@ -117,6 +117,10 @@ impl HotkeyPoller {
                     });
                 } else {
                     logging::log("VISIBILITY", "Decision: SHOW (window is currently hidden)");
+                    
+                    // Menu bar tracking is now handled by frontmost_app_tracker module
+                    // which pre-fetches menu items in background when apps activate
+                    
                     // Update visibility state FIRST to prevent race conditions
                     script_kit_gpui::set_main_window_visible(true);
                     logging::log("VISIBILITY", "WINDOW_VISIBLE set to: true");
@@ -166,6 +170,9 @@ impl HotkeyPoller {
                                 let focus_handle = view.focus_handle(cx);
                                 win.focus(&focus_handle, cx);
                                 logging::log("HOTKEY", "Window activated and focused");
+
+                                // Menu bar items are now tracked by frontmost_app_tracker
+                                // No state reset needed here
 
                                 // Step 5: Check if we need to reset to script list (after script completion)
                                 // Reset debounce timer to allow immediate resize after window move
