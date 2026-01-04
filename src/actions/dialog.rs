@@ -17,7 +17,9 @@ use gpui::{
 use std::sync::Arc;
 
 use super::builders::{get_global_actions, get_path_context_actions, get_script_context_actions};
-use super::constants::{ACCENT_BAR_WIDTH, ACTION_ITEM_HEIGHT, POPUP_MAX_HEIGHT, POPUP_WIDTH};
+use super::constants::{
+    ACCENT_BAR_WIDTH, ACTION_ITEM_HEIGHT, POPUP_MAX_HEIGHT, POPUP_WIDTH, SEARCH_INPUT_HEIGHT,
+};
 use super::types::{Action, ActionCallback, ActionCategory, ScriptInfo};
 use crate::prompts::PathInfo;
 
@@ -669,9 +671,9 @@ impl Render for ActionsDialog {
             .w(px(POPUP_WIDTH)) // Match parent width exactly
             .min_w(px(POPUP_WIDTH))
             .max_w(px(POPUP_WIDTH))
-            .h(px(44.0)) // Fixed height for the input row
-            .min_h(px(44.0))
-            .max_h(px(44.0))
+            .h(px(SEARCH_INPUT_HEIGHT)) // Fixed height for the input row
+            .min_h(px(SEARCH_INPUT_HEIGHT))
+            .max_h(px(SEARCH_INPUT_HEIGHT))
             .overflow_hidden() // Prevent any content from causing shifts
             .px(px(spacing.item_padding_x))
             .py(px(spacing.item_padding_y + 2.0)) // Slightly more vertical padding
@@ -802,7 +804,11 @@ impl Render for ActionsDialog {
 
             // Calculate scrollbar parameters
             // Container height for actions (excluding search box)
-            let search_box_height = if self.hide_search { 0.0 } else { 60.0 };
+            let search_box_height = if self.hide_search {
+                0.0
+            } else {
+                SEARCH_INPUT_HEIGHT
+            };
             let container_height = (filtered_len as f32 * ACTION_ITEM_HEIGHT)
                 .min(POPUP_MAX_HEIGHT - search_box_height);
             let visible_items = (container_height / ACTION_ITEM_HEIGHT) as usize;
@@ -1061,12 +1067,16 @@ impl Render for ActionsDialog {
         let (main_bg, container_border, container_text) = self.get_container_colors(&colors);
 
         // Calculate dynamic height based on number of items
-        // Each item is ACTION_ITEM_HEIGHT, plus search box height (~44px), plus padding
+        // Each item is ACTION_ITEM_HEIGHT, plus search box height (SEARCH_INPUT_HEIGHT), plus padding
         // When hide_search is true, we don't include the search box height
         // NOTE: Add border_thin * 2 for border (top + bottom from .border_1()) to prevent
         // content from being clipped and causing unnecessary scrolling
         let num_items = self.filtered_actions.len();
-        let search_box_height = if self.hide_search { 0.0 } else { 60.0 };
+        let search_box_height = if self.hide_search {
+            0.0
+        } else {
+            SEARCH_INPUT_HEIGHT
+        };
         let border_height = visual.border_thin * 2.0; // top + bottom border
         let items_height =
             (num_items as f32 * ACTION_ITEM_HEIGHT).min(POPUP_MAX_HEIGHT - search_box_height);

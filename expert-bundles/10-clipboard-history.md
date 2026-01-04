@@ -2027,3 +2027,150 @@ pub fn clear_all_caches() {
        507 - src/clipboard_history/clipboard.rs
        504 - src/clipboard_history/config.rs
        493 - src/clipboard_history/mod.rs
+
+---
+
+# Expert Review Request
+
+## Context
+
+This is the **clipboard history** system for Script Kit GPUI. It monitors the system clipboard, stores history in SQLite, handles images, and provides search/filtering - similar to Raycast's clipboard history.
+
+## Files Included
+
+- `clipboard.rs` - Copy operations (restore entry to clipboard)
+- `monitor.rs` - Background polling for clipboard changes
+- `database.rs` - SQLite storage for history
+- `image.rs` - Image encoding/decoding (PNG, JPEG, base64)
+- `cache.rs` - In-memory caching for quick access
+- `types.rs` - ClipboardEntry, ContentType enums
+- `config.rs` - Configuration (retention, polling interval)
+- `mod.rs` - Module exports
+
+## What We Need Reviewed
+
+### 1. Clipboard Monitoring
+We poll the clipboard every 500ms:
+```rust
+fn poll_clipboard(&mut self) -> Result<Option<ClipboardEntry>> {
+    let current = self.clipboard.get_text()?;
+    if current != self.last_content {
+        self.last_content = current.clone();
+        return Ok(Some(ClipboardEntry::new(current)));
+    }
+    Ok(None)
+}
+```
+
+**Questions:**
+- Is 500ms the right polling interval?
+- Should we use a native clipboard observer instead?
+- How do we handle rapid clipboard changes?
+- What about transient clipboard content?
+
+### 2. Image Handling
+We store images as base64 in SQLite:
+```rust
+pub fn decode_base64_image(data: &str) -> Option<ImageData> {
+    let bytes = base64::decode(data).ok()?;
+    // Decode PNG or JPEG
+}
+```
+
+**Questions:**
+- Is base64 in SQLite efficient for images?
+- Should we store images as files instead?
+- How do we handle very large images?
+- What about image format conversion?
+
+### 3. SQLite Storage
+Schema:
+```sql
+CREATE TABLE history (
+    id TEXT PRIMARY KEY,
+    content TEXT,
+    content_type TEXT,
+    app_name TEXT,
+    created_at TEXT,
+    ocr_text TEXT
+);
+```
+
+**Questions:**
+- Is our schema optimized for common queries?
+- Should we add indexes for search?
+- How do we handle database growth?
+- What about vacuuming/compaction?
+
+### 4. Caching
+We cache recent entries in memory:
+```rust
+static ENTRY_CACHE: Lazy<Mutex<Vec<ClipboardEntry>>> = Lazy::new(|| {
+    Mutex::new(Vec::with_capacity(100))
+});
+```
+
+**Questions:**
+- Is 100 entries the right cache size?
+- Should we use LRU eviction?
+- How do we keep cache in sync with database?
+- What about image caching separately?
+
+### 5. OCR Integration
+We store OCR text for image entries:
+
+**Questions:**
+- When should OCR be performed (sync vs. async)?
+- Should we use on-device ML (Apple's Vision)?
+- How do we handle OCR failures?
+- What about multi-language support?
+
+## Specific Code Areas of Concern
+
+1. **Clipboard access timing** - Race conditions with other apps
+2. **Image memory usage** - Decoding many images
+3. **Background thread** - Monitor polling loop
+4. **Entry deduplication** - Handling repeated copies
+
+## Privacy & Security
+
+Clipboard may contain sensitive data:
+- Passwords
+- API keys
+- Personal information
+
+**Questions:**
+- Should we exclude password manager entries?
+- How do we handle secure (concealed) clipboard?
+- Should entries auto-expire?
+- What about encryption at rest?
+
+## Comparison
+
+We'd like feedback on how this compares to:
+- Raycast clipboard history
+- Paste (macOS app)
+- 1Password clipboard handling
+
+## Performance
+
+With many entries:
+- Startup load time
+- Search performance
+- Memory for image thumbnails
+- Sync latency
+
+**Questions:**
+- How do we scale to 10,000+ entries?
+- Should we implement virtual scrolling in UI?
+- What's the right retention period?
+
+## Deliverables Requested
+
+1. **Polling vs. Observer** - Should we use native clipboard notifications?
+2. **Image storage strategy** - File vs. database tradeoffs
+3. **Privacy audit** - Handling sensitive clipboard data
+4. **Performance analysis** - Scaling with many entries
+5. **Feature parity** - What's missing vs. Raycast?
+
+Thank you for your expertise!

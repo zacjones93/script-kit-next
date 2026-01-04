@@ -4073,3 +4073,108 @@ mod tests {
       2.8K - src/notes/storage.rs
       1.6K - src/notes/model.rs
        377 - src/notes/mod.rs
+
+---
+
+# Expert Review Request
+
+## Context
+
+This is the **Notes window** - a separate floating window for quick note-taking, similar to Raycast's notes feature. It demonstrates our pattern for secondary windows in the GPUI application.
+
+## Files Included
+
+- `window.rs` (2,073 lines) - Main NotesApp view with editing, sidebar, panels
+- `storage.rs` - SQLite persistence layer
+- `model.rs` - Note data model (NoteId, Note struct, ExportFormat)
+- `actions_panel.rs` - Cmd+K action palette
+- `browse_panel.rs` - Cmd+P note browser
+- `mod.rs` - Module exports and documentation
+
+## What We Need Reviewed
+
+### 1. Secondary Window Pattern
+The Notes window is a separate GPUI window that:
+- Uses global `OnceLock<Mutex<Option<WindowHandle>>>` for single-instance
+- Wraps content in gpui-component's `Root` component
+- Syncs theme with main Script Kit theme
+- Has its own hotkey (Cmd+Shift+N)
+
+**Questions:**
+- Is `OnceLock<Mutex<Option<WindowHandle>>>` the right pattern?
+- How should we handle window state persistence?
+- Should secondary windows share state with main app?
+- What about focus management between windows?
+
+### 2. SQLite Integration
+Storage uses rusqlite with:
+- FTS5 for full-text search
+- Soft delete with `deleted_at` column
+- UUID-based note IDs
+- Connection pooling via lazy_static
+
+**Questions:**
+- Is our connection handling thread-safe?
+- Should we use an async SQLite library?
+- How should we handle database migrations?
+- Is FTS5 the right choice for search?
+
+### 3. Markdown Editing
+Features:
+- Formatting toolbar (bold, italic, headings, code, links)
+- Character count in footer
+- Auto-save on blur
+- Export to text/markdown/HTML
+
+**Questions:**
+- Should we use a proper markdown AST?
+- How can we add syntax highlighting?
+- What about markdown preview mode?
+- Should we support custom templates?
+
+### 4. Actions Panel (Cmd+K)
+A popup palette for actions:
+- New note, Delete, Duplicate
+- Export options
+- Search and filter
+
+**Questions:**
+- Is this the right UX pattern?
+- Should actions be extensible?
+- How do we handle keyboard navigation?
+
+### 5. Theme Synchronization
+The Notes window maps Script Kit theme to gpui-component's `ThemeColor`:
+```rust
+theme_color.background = hex_to_hsla(colors.background.main);
+theme_color.accent = hex_to_hsla(colors.accent.selected);
+```
+
+**Questions:**
+- Is manual color mapping the right approach?
+- How do we handle theme changes while window is open?
+- Should we support Notes-specific theme overrides?
+
+## Specific Code Areas of Concern
+
+1. **`update_resize()`** - Auto-sizing window based on content
+2. **Sidebar toggle logic** - Collapsible sidebar state
+3. **Note list rendering** - Virtual scrolling for many notes
+4. **Trash/restore flow** - Soft delete UX
+
+## UX Comparison
+
+We'd like feedback on how this compares to:
+- Raycast Notes
+- Apple Notes
+- Obsidian quick capture
+
+## Deliverables Requested
+
+1. **Window management audit** - Is our secondary window pattern sound?
+2. **SQLite review** - Connection handling and query efficiency
+3. **UX assessment** - Does the feature feel native?
+4. **State management** - How should Notes share state with main app?
+5. **Performance** - Startup time, memory usage for many notes
+
+Thank you for your expertise!

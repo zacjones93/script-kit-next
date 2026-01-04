@@ -2441,3 +2441,114 @@ fn test_shift_tab_always_outdents_without_snippet() {
      10.4K - src/editor.rs
       4.7K - src/editor_tests.rs
       2.9K - src/prompts/template.rs
+
+---
+
+# Expert Review Request
+
+## Context
+
+This is the **code editor and template system** for Script Kit GPUI. It provides a high-performance text editor using gpui-component's editor, with VSCode-style snippet tabstops and template placeholder support.
+
+## Files Included
+
+- `editor.rs` (1,385 lines) - Full-featured code editor with syntax highlighting
+- `editor_tests.rs` - Unit tests for editor behavior
+- `prompts/template.rs` (444 lines) - String template editor with `{{placeholder}}` syntax
+
+## What We Need Reviewed
+
+### 1. Snippet/Tabstop System
+We support VSCode-style snippets:
+```
+Hello, ${1:name}! Your email is ${2:email@example.com}.
+Choose: ${3|option1,option2,option3|}
+```
+
+Features:
+- Tab/Shift+Tab navigation between tabstops
+- Default values with `${1:default}`
+- Choice popups with `${1|a,b,c|}`
+- Linked tabstops (same index = same value)
+
+**Questions:**
+- Is our tabstop parsing complete vs. VSCode spec?
+- How should we handle nested tabstops?
+- Are we correctly handling escape sequences (`\$`, `\\`)?
+- What about variable interpolation (`$TM_FILENAME`)?
+
+### 2. Editor Performance
+The editor handles:
+- 200K+ lines (tested)
+- Syntax highlighting via syntect/Tree-sitter
+- Undo/redo with full history
+- Find/Replace (Cmd+F)
+
+**Questions:**
+- Is our virtual viewport implementation correct?
+- Are we using syntect/Tree-sitter efficiently?
+- Should we implement incremental parsing?
+- How can we optimize for very long lines?
+
+### 3. Template Prompt
+Separate from the editor, `TemplatePrompt` handles:
+```
+Hello, {{name}}! Welcome to {{city}}.
+```
+
+- Tab through placeholders
+- Live preview of filled template
+- Submit returns interpolated string
+
+**Questions:**
+- Should template and snippet syntax be unified?
+- Is regex-based parsing robust enough?
+- How do we handle malformed templates?
+
+### 4. Selection & Cursor
+Editor cursor handling:
+- Single cursor (no multi-cursor yet)
+- Word/line selection
+- Rectangular selection (planned)
+- Cursor movement with Ctrl/Alt modifiers
+
+**Questions:**
+- Should we support multiple cursors?
+- Is our selection model correct for RTL text?
+- How do we handle selection across folded regions?
+
+### 5. Integration Points
+The editor integrates with:
+- Theme system (syntax colors)
+- Font configuration
+- Submit callback (Enter or Cmd+Enter)
+- Language detection for highlighting
+
+**Questions:**
+- How should we expose editor API to scripts?
+- Should scripts be able to provide custom highlighting?
+- What about LSP integration for autocomplete?
+
+## Specific Code Areas of Concern
+
+1. **`navigate_to_tabstop()`** - Tabstop selection and popup display
+2. **`parse_snippet_tabstops()`** - Regex parsing of VSCode syntax
+3. **`apply_transforms()`** - Linked tabstop synchronization
+4. **Find/Replace** - Regex mode and replacement patterns
+
+## Comparison Points
+
+We'd like feedback on how this compares to:
+- Monaco Editor (VS Code)
+- CodeMirror 6
+- Zed's editor implementation
+
+## Deliverables Requested
+
+1. **Snippet parser audit** - VSCode compatibility assessment
+2. **Performance profiling** - Large file handling
+3. **API design review** - How scripts should interact with editor
+4. **Feature gap analysis** - What's missing for power users
+5. **Test coverage recommendations** - Edge cases to add
+
+Thank you for your expertise!

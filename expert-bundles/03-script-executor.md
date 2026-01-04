@@ -2743,3 +2743,120 @@ mod tests {
 ──────────────────────────
      10.4K - src/builtins.rs
       7.9K - src/execute_script.rs
+
+---
+
+# Expert Review Request
+
+## Context
+
+This is the **script execution engine** for Script Kit GPUI. It spawns bun processes to run TypeScript/JavaScript scripts, manages bidirectional IPC via stdin/stdout, and handles process lifecycle including cleanup of orphaned processes.
+
+## Files Included
+
+- `execute_script.rs` - Main execution integration with ScriptListApp
+- `builtins.rs` - Built-in commands (clipboard history, app launcher, window switcher)
+- `src/executor/runner.rs` - Core process spawning and SDK preload
+- `src/executor/scriptlet.rs` - Embedded script execution (markdown-based tools)
+- `src/executor/errors.rs` - Error parsing with AI-powered suggestions
+- `src/executor/selected_text.rs` - System clipboard/accessibility for text expansion
+- `src/executor/auto_submit.rs` - Autonomous testing support
+
+## What We Need Reviewed
+
+### 1. Process Lifecycle Management
+We manage child processes with:
+- Process groups (`setsid` on Unix) for clean termination
+- PID tracking for explicit cleanup
+- Orphan process detection and termination on app exit
+- Split stdin/stdout for bidirectional communication
+
+**Questions:**
+- Is our process group handling correct for all edge cases?
+- Are there zombie process scenarios we're missing?
+- Should we use a process supervisor pattern?
+- How do we handle scripts that ignore SIGTERM?
+
+### 2. SDK Preload Architecture
+Scripts are run with:
+```bash
+bun run --preload ~/.sk/kit/sdk/kit-sdk.ts <script>
+```
+
+The SDK is:
+- Embedded in the binary via `include_str!`
+- Extracted to `~/.sk/kit/sdk/` on startup
+- Provides globals like `arg()`, `div()`, `editor()`
+
+**Questions:**
+- Is embedding the SDK the right approach vs. npm package?
+- How should we handle SDK version mismatches?
+- Should we support multiple SDK versions simultaneously?
+
+### 3. Bidirectional IPC
+Communication uses:
+- stdin: App sends responses to scripts
+- stdout: Scripts send prompts to app
+- stderr: Captured for error reporting and real-time debugging
+
+**Questions:**
+- Is JSONL the right format or should we use length-prefixed framing?
+- How do we handle scripts that buffer stdout?
+- Should we add a heartbeat/keepalive mechanism?
+- What's the right backpressure strategy?
+
+### 4. Error Handling & Recovery
+Current approach:
+- Parse stderr for error messages
+- Provide AI-powered suggestions for common errors
+- Show stack traces with file:line links
+- Timeout handling for hung scripts
+
+**Questions:**
+- Is 2-minute default timeout appropriate?
+- How should we handle infinite loops in scripts?
+- Should we implement script sandboxing?
+- What about memory limits?
+
+### 5. Scriptlet Execution
+Scriptlets are markdown files with embedded code:
+```markdown
+## Tool Name
+```tool:my-tool```
+const result = await arg("Choose");
+```
+
+**Questions:**
+- Is extracting and temp-file execution safe?
+- Should we cache extracted scriptlets?
+- How do we handle scriptlet updates?
+
+## Specific Code Areas of Concern
+
+1. **Thread spawning in `execute_interactive()`** - Multiple threads for stdin/stdout/stderr
+2. **Process cleanup on app exit** - Walking `/proc` on Linux, using `pgrep` on macOS
+3. **SDK extraction race conditions** - Multiple instances writing same file
+4. **Channel capacity** - Using bounded channel with 100-message capacity
+
+## Security Considerations
+
+Scripts run with full user permissions:
+- File system access
+- Network access
+- Process spawning
+- Environment variables
+
+**Questions:**
+- Should we implement capability-based permissions?
+- How do we handle scripts from untrusted sources?
+- Should we audit script actions?
+
+## Deliverables Requested
+
+1. **Process management audit** - Correctness of lifecycle handling
+2. **IPC reliability review** - Edge cases in communication
+3. **Security assessment** - Risks of current execution model
+4. **Performance analysis** - Startup time, memory overhead
+5. **Resilience improvements** - Handling of misbehaving scripts
+
+Thank you for your expertise!

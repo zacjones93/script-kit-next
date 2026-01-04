@@ -9,8 +9,11 @@ pub const POPUP_WIDTH: f32 = 320.0;
 pub const POPUP_MAX_HEIGHT: f32 = 400.0;
 
 /// Fixed height for action items (required for uniform_list virtualization)
-/// Increased from 36px to 42px for better touch targets and visual breathing room
-pub const ACTION_ITEM_HEIGHT: f32 = 42.0;
+/// Standardized to 44px for consistent touch targets (matches iOS guidelines, Notes panel)
+pub const ACTION_ITEM_HEIGHT: f32 = 44.0;
+
+/// Fixed height for the search input row (matches Notes panel PANEL_SEARCH_HEIGHT)
+pub const SEARCH_INPUT_HEIGHT: f32 = 44.0;
 
 /// Width of the left accent bar for selected items
 pub const ACCENT_BAR_WIDTH: f32 = 3.0;
@@ -28,8 +31,8 @@ mod tests {
     #[test]
     fn test_action_item_height_constant() {
         // Fixed height is required for uniform_list virtualization
-        // Increased to 42px for better touch targets and visual breathing room
-        assert_eq!(ACTION_ITEM_HEIGHT, 42.0);
+        // Standardized to 44px for consistent touch targets (matches iOS guidelines)
+        assert_eq!(ACTION_ITEM_HEIGHT, 44.0);
         // Ensure item height is positive and reasonable
         const _: () = assert!(ACTION_ITEM_HEIGHT > 0.0);
         const _: () = assert!(ACTION_ITEM_HEIGHT < POPUP_MAX_HEIGHT);
@@ -40,7 +43,7 @@ mod tests {
         // Calculate max visible items that can fit in the popup
         // This helps verify scroll virtualization is worthwhile
         let max_visible = (POPUP_MAX_HEIGHT / ACTION_ITEM_HEIGHT) as usize;
-        // With 400px max height and 42px items, ~9 items fit
+        // With 400px max height and 44px items, ~9 items fit
         assert!(max_visible >= 8, "Should fit at least 8 items");
         assert!(max_visible <= 15, "Sanity check on max visible");
     }

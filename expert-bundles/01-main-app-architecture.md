@@ -8845,3 +8845,100 @@ impl ScriptListApp {
       3.1K - src/app_actions.rs
       2.7K - src/app_navigation.rs
       1.5K - src/lib.rs
+
+---
+
+# Expert Review Request
+
+## Context
+
+This is the core application architecture for **Script Kit GPUI** - a launcher/automation tool (similar to Raycast/Alfred) built with Zed's GPUI framework. The app runs TypeScript/JavaScript scripts via bun and provides a rich native UI.
+
+## Files Included
+
+- `main.rs` - Application entry point, window creation, global hotkeys, file watchers
+- `app_impl.rs` - Core ScriptListApp implementation with ~200 fields of state
+- `app_actions.rs` - Action handlers (script execution, navigation, filtering)
+- `app_execute.rs` - Script execution integration
+- `app_render.rs` - Main render logic and view routing
+- `app_navigation.rs` - Keyboard navigation and focus management
+- `app_layout.rs` - Layout calculation for debug overlays
+- `lib.rs` - Module exports (60+ modules)
+
+## What We Need Reviewed
+
+### 1. State Machine Complexity
+The `ScriptListApp` struct has grown to ~200 fields managing:
+- 16 different view types (`AppView` enum)
+- Script execution state (PIDs, sessions, channels)
+- UI state (selection, filtering, scroll positions)
+- File watchers, hotkeys, theme, config
+
+**Questions:**
+- Is this level of coupling sustainable?
+- Should we split into smaller, focused components?
+- What patterns would help manage this complexity?
+
+### 2. GPUI Patterns
+We're using GPUI (Zed's framework) which has specific patterns:
+- `cx.notify()` for triggering re-renders
+- `cx.spawn()` for async operations
+- `cx.listener()` for event handling
+- `Entity<T>` for component references
+
+**Questions:**
+- Are we using GPUI idiomatically?
+- Are there anti-patterns we've fallen into?
+- How can we better leverage GPUI's entity system?
+
+### 3. Concurrency & Thread Safety
+The app uses:
+- `Arc<Mutex<T>>` for shared state
+- `async_channel` for script-to-UI communication
+- Multiple file watcher threads
+- Process spawning with PID tracking
+
+**Questions:**
+- Are there potential deadlocks or race conditions?
+- Is our Mutex usage appropriate or should we use RwLock?
+- How can we better handle thread cleanup on shutdown?
+
+### 4. Memory & Resource Management
+Concerns:
+- Long-running script sessions
+- File watchers accumulating
+- Theme/config reloading
+- Image caching for clipboard history
+
+**Questions:**
+- Are there memory leaks we should address?
+- Is our cleanup on view transitions complete?
+- Should we implement resource pooling?
+
+### 5. Error Handling Strategy
+Current approach:
+- `anyhow::Result` for most operations
+- `logging::log()` for structured JSONL output
+- Toast notifications for user-facing errors
+
+**Questions:**
+- Is our error propagation consistent?
+- Should we use more `thiserror` for typed errors?
+- How should we handle partial failures?
+
+## Specific Code Areas of Concern
+
+1. **`execute_interactive()` in app_execute.rs** - Complex thread spawning with multiple channels
+2. **`handle_prompt_message()` in app_impl.rs** - Large match statement handling 20+ message types
+3. **View transition logic** - Cleanup when switching between views
+4. **File watcher setup** - Multiple watchers with debouncing
+
+## Deliverables Requested
+
+1. **Architecture assessment** - Is the current structure sound for a 50K+ LOC codebase?
+2. **Refactoring recommendations** - Prioritized list of improvements
+3. **Pattern suggestions** - Better ways to structure GPUI applications
+4. **Risk identification** - Potential bugs or stability issues
+5. **Performance concerns** - Any obvious bottlenecks
+
+Thank you for your expertise!

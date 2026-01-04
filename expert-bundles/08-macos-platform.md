@@ -3153,3 +3153,128 @@ mod tests {
       8.6K - src/platform.rs
       3.0K - src/frontmost_app_tracker.rs
       2.4K - src/panel.rs
+
+---
+
+# Expert Review Request
+
+## Context
+
+This is the **macOS platform integration** for Script Kit GPUI. It handles floating panels, window positioning, multi-monitor support, and macOS-specific APIs using Cocoa/AppKit via objc bindings.
+
+## Files Included
+
+- `platform.rs` (1,109 lines) - Core macOS integration (floating panels, activation policy)
+- `panel.rs` - Panel configuration helpers
+- `window_control.rs` - Window actions (tile left/right, maximize, fullscreen)
+- `frontmost_app_tracker.rs` - Tracking previously active application
+
+## What We Need Reviewed
+
+### 1. Floating Panel Configuration
+We configure windows as floating panels:
+```rust
+unsafe {
+    let window: id = msg_send![app, keyWindow];
+    let _: () = msg_send![window, setLevel: 3i64]; // NSFloatingWindowLevel
+    let _: () = msg_send![window, setCollectionBehavior: 2u64]; // MoveToActiveSpace
+}
+```
+
+**Questions:**
+- Is `NSFloatingWindowLevel = 3` correct for our use case?
+- Should we use a different collection behavior?
+- Are there edge cases with fullscreen apps?
+- How do we handle Spaces correctly?
+
+### 2. Activation Policy
+We set the app as "accessory" (no Dock icon):
+```rust
+let _: () = msg_send![app, setActivationPolicy: 1i64]; // NSApplicationActivationPolicyAccessory
+```
+
+**Questions:**
+- Is accessory the right policy for a launcher app?
+- How does this interact with menu bar?
+- What about Focus/Do Not Disturb modes?
+- Should we support switching policies at runtime?
+
+### 3. Multi-Monitor Window Positioning
+We position windows at "eye-line" (upper 1/3):
+```rust
+let eye_line = bounds.origin.y + bounds.size.height / 3.0;
+let positioned = Bounds::centered_at(
+    Point { x: bounds.center().x, y: eye_line },
+    window_size,
+);
+```
+
+**Questions:**
+- Is our display enumeration correct?
+- How do we handle display arrangement changes?
+- What about different scale factors (Retina)?
+- Should we remember per-display positions?
+
+### 4. Window Actions (Tile, Maximize)
+We implement window management:
+- Tile left/right (like Split View)
+- Maximize (fill screen minus Dock/menu bar)
+- Center on screen
+
+**Questions:**
+- Are we using the correct APIs for window manipulation?
+- How do we handle Stage Manager?
+- Should we integrate with native Split View?
+- What about window snapping?
+
+### 5. Frontmost App Tracking
+We track the previously active app:
+```rust
+// Query menuBarOwningApplication
+let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+let frontmost: id = msg_send![workspace, menuBarOwningApplication];
+```
+
+**Questions:**
+- Is `menuBarOwningApplication` the right source?
+- How do we handle multiple windows from same app?
+- What about sandboxed apps?
+- Should we track more than one previous app?
+
+## Specific Code Areas of Concern
+
+1. **`configure_as_floating_panel()`** - Raw objc calls
+2. **`get_selected_text()`** in accessibility - Permission requirements
+3. **Screenshot capture** via xcap - Compatibility and permissions
+4. **Window state restoration** - Disabling macOS persistence
+
+## Platform Safety
+
+We use `unsafe` blocks extensively for objc:
+
+**Questions:**
+- Are all our objc message sends correct?
+- Should we use a higher-level Cocoa wrapper?
+- How do we validate nil checks?
+- What about exception handling?
+
+## Compatibility
+
+Target macOS versions:
+- Primary: macOS 13+ (Ventura)
+- Desired: macOS 12+ (Monterey)
+
+**Questions:**
+- Are we using any APIs not available on older macOS?
+- How do we handle API deprecations?
+- What about Apple Silicon vs. Intel differences?
+
+## Deliverables Requested
+
+1. **objc safety audit** - Are our unsafe blocks correct?
+2. **API compatibility review** - macOS version requirements
+3. **Window management assessment** - Correctness of positioning/tiling
+4. **Permission handling** - Accessibility, screen capture
+5. **Best practices** - Should we use a Cocoa wrapper crate?
+
+Thank you for your expertise!

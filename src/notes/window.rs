@@ -1122,7 +1122,7 @@ impl NotesApp {
             .flex()
             .items_center()
             .justify_center() // Center the title
-            .h(px(32.))
+            .h(px(36.)) // Standardized titlebar height (matches AI window)
             .px_3()
             .relative() // For absolute positioning of icons
             // No background - blends with window

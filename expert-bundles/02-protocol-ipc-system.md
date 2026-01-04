@@ -4017,3 +4017,102 @@ impl Message {
       5.0K - src/protocol/io.rs
       1.1K - src/protocol/semantic_id.rs
        530 - src/protocol/mod.rs
+
+---
+
+# Expert Review Request
+
+## Context
+
+This is the **bidirectional JSONL protocol** that enables communication between the Rust GPUI app and TypeScript scripts running in bun. Scripts send prompts (like `arg()`, `div()`, `editor()`) and receive user responses.
+
+## Files Included
+
+- `message.rs` (1,966 lines) - Main `Message` enum with 59+ message types
+- `types.rs` - Helper types (Choice, Field, ClipboardAction, ActionDefinition, etc.)
+- `io.rs` - JSONL parsing with `ParseResult` for graceful error handling
+- `semantic_id.rs` - AI-driven UX targeting (semantic IDs for UI elements)
+- `mod.rs` - Module exports
+
+## What We Need Reviewed
+
+### 1. Protocol Design & Extensibility
+The `Message` enum has grown to 59+ variants including:
+- Prompts: `Arg`, `Div`, `Editor`, `Term`, `Fields`, `Select`, `Path`, `Drop`, `Template`
+- State: `SetChoices`, `SetInput`, `SetHint`, `SetPlaceholder`, `SetPanel`
+- Actions: `Run`, `Submit`, `Blur`, `Focus`, `Exit`, `Abort`
+- System: `Clipboard`, `Notify`, `Log`, `Open`, `Screenshot`
+
+**Questions:**
+- Is a flat enum the right choice, or should we use nested enums/traits?
+- How can we version this protocol for backwards compatibility?
+- Should we generate TypeScript types from Rust (or vice versa)?
+
+### 2. Serialization Performance
+We're using serde_json with:
+- `#[serde(tag = "type", rename_all = "camelCase")]` for message type discrimination
+- `#[serde(default)]` for optional fields
+- Custom deserializers for some complex types
+
+**Questions:**
+- Are there performance wins with `simd_json` or other crates?
+- Should we use `serde_json::RawValue` for large payloads?
+- Is there unnecessary allocation we can eliminate?
+
+### 3. Error Handling & Recovery
+The `ParseResult` type in `io.rs` allows graceful degradation:
+```rust
+pub enum ParseResult {
+    Ok(Message),
+    UnknownType { type_name: String, raw: String },
+    InvalidJson { error: String, raw: String },
+}
+```
+
+**Questions:**
+- Is this the right abstraction for protocol errors?
+- How should we handle version mismatches?
+- Should unknown fields be preserved for forward compatibility?
+
+### 4. Type Safety vs Flexibility
+Trade-offs we've made:
+- `serde_json::Value` used in some places for flexibility
+- `Option<String>` vs dedicated wrapper types
+- String-based enums vs Rust enums
+
+**Questions:**
+- Where should we add more type safety?
+- Should `Choice` be a trait instead of a struct?
+- How can we make invalid states unrepresentable?
+
+### 5. Semantic ID System
+For AI agent integration, we generate semantic IDs like `choice:0:file-open`:
+
+**Questions:**
+- Is this format suitable for AI targeting?
+- Should semantic IDs be required or optional?
+- How can we ensure ID stability across UI changes?
+
+## Specific Code Areas of Concern
+
+1. **Message enum size** - 59+ variants may cause code bloat
+2. **Choice flexibility** - Can be string, object with name/value, or complex object
+3. **Field validation** - Currently minimal, should we add more?
+4. **Action definitions** - Complex nested structure for keyboard shortcuts
+
+## Protocol Comparison
+
+We'd like feedback on how this compares to:
+- Language Server Protocol (LSP)
+- VS Code Extension Host protocol
+- Raycast's extension API
+
+## Deliverables Requested
+
+1. **Protocol audit** - Completeness and consistency review
+2. **Performance analysis** - Serialization/deserialization overhead
+3. **Type safety improvements** - Where to add stricter types
+4. **Versioning strategy** - How to evolve the protocol
+5. **Documentation needs** - What should be formally specified
+
+Thank you for your expertise!

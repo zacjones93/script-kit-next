@@ -246,7 +246,8 @@ impl NotesActionItem {
 
 /// Panel dimensions and styling constants (matches main ActionsDialog)
 pub const PANEL_WIDTH: f32 = 320.0;
-pub const PANEL_MAX_HEIGHT: f32 = 580.0;
+/// Standardized to match main ActionsDialog POPUP_MAX_HEIGHT (was 580.0)
+pub const PANEL_MAX_HEIGHT: f32 = 400.0;
 pub const PANEL_CORNER_RADIUS: f32 = 12.0;
 pub const ACTION_ITEM_HEIGHT: f32 = 44.0;
 pub const PANEL_SEARCH_HEIGHT: f32 = 44.0;
@@ -838,9 +839,9 @@ mod tests {
 
     #[test]
     fn test_panel_constants() {
-        // Verify panel matches Raycast-style dimensions
+        // Verify panel matches main ActionsDialog dimensions
         assert_eq!(PANEL_WIDTH, 320.0);
-        assert_eq!(PANEL_MAX_HEIGHT, 580.0);
+        assert_eq!(PANEL_MAX_HEIGHT, 400.0); // Standardized to match main dialog
         assert_eq!(PANEL_CORNER_RADIUS, 12.0);
         assert_eq!(ACTION_ITEM_HEIGHT, 44.0);
         assert_eq!(ACTION_ROW_INSET, 6.0);

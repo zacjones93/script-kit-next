@@ -1889,3 +1889,135 @@ mod tests {
       7.8K - src/hotkeys.rs
       3.4K - src/keyboard_monitor.rs
       3.1K - src/hotkey_pollers.rs
+
+---
+
+# Expert Review Request
+
+## Context
+
+This is the **global hotkey and keyboard monitoring** system for Script Kit GPUI. It handles system-wide keyboard shortcuts and text expansion triggers using macOS CGEventTap API.
+
+## Files Included
+
+- `hotkeys.rs` (990 lines) - Global hotkey registration and management
+- `hotkey_pollers.rs` - Polling-based hotkey detection (fallback)
+- `keyboard_monitor.rs` - CGEventTap for system-wide key capture
+
+## What We Need Reviewed
+
+### 1. Global Hotkey Management
+We use the `global-hotkey` crate with:
+- Dynamic registration/unregistration
+- Script-specific shortcuts
+- Main window, Notes, AI hotkeys
+
+```rust
+pub fn register_script_hotkeys(&mut self, scripts: &[Script]) {
+    for script in scripts {
+        if let Some(shortcut) = &script.shortcut {
+            self.register(shortcut, ScriptId(script.id));
+        }
+    }
+}
+```
+
+**Questions:**
+- Is `global-hotkey` the best crate for this?
+- How do we handle hotkey conflicts with other apps?
+- Should we provide conflict detection UI?
+- What about internationalized keyboard layouts?
+
+### 2. Keyboard Monitor (CGEventTap)
+For text expansion, we capture all keystrokes:
+```rust
+let tap = CGEventTap::new(
+    CGEventTapLocation::HID,
+    CGEventTapPlacement::HeadInsertEventTap,
+    CGEventTapOptions::ListenOnly,
+    CGEventType::KeyDown | CGEventType::KeyUp | CGEventType::FlagsChanged,
+    callback,
+)?;
+```
+
+**Questions:**
+- Is `ListenOnly` sufficient or do we need to modify events?
+- How do we handle CGEventTap being disabled by macOS?
+- What about performance impact of system-wide monitoring?
+- Should we throttle event processing?
+
+### 3. Accessibility Permissions
+CGEventTap requires accessibility permissions:
+```rust
+pub fn check_accessibility_permission() -> bool {
+    accessibility::application_is_trusted()
+}
+```
+
+**Questions:**
+- How do we gracefully handle permission denied?
+- Should we prompt users to enable accessibility?
+- What's the UX for permission changes at runtime?
+- How do we detect when permissions are revoked?
+
+### 4. Text Expansion Triggers
+We detect expansion triggers like:
+- `:date` → current date
+- `:sig` → email signature
+- Custom snippets
+
+**Questions:**
+- What's the right trigger detection algorithm?
+- How do we handle false positives?
+- Should we support regex triggers?
+- What about trigger in password fields?
+
+### 5. Hotkey Modifiers
+We handle modifiers:
+- Cmd (Meta), Ctrl, Alt, Shift
+- Combinations like Cmd+Shift+K
+
+**Questions:**
+- Is our modifier mapping correct for all keyboards?
+- How do we handle fn key?
+- What about Caps Lock as a modifier?
+- How do we support Hyper/Meh keys?
+
+## Specific Code Areas of Concern
+
+1. **Thread safety** in `GlobalHotKeyManager` - Channel dispatching
+2. **Event loop integration** - CFRunLoop for CGEventTap
+3. **Debouncing** - Preventing duplicate triggers
+4. **Memory** - Event callback lifetime management
+
+## macOS-Specific Concerns
+
+- CGEventTap reliability on macOS Sonoma
+- Secure Input mode (password fields)
+- Karabiner-Elements compatibility
+- BetterTouchTool conflicts
+
+**Questions:**
+- Are we handling Secure Input properly?
+- How do we detect when CGEventTap is disabled?
+- Should we support fallback detection methods?
+
+## Performance
+
+Text expansion monitors every keystroke:
+
+**Questions:**
+- What's the CPU overhead?
+- Should we limit to specific apps?
+- How do we optimize pattern matching?
+- What about memory for trigger patterns?
+
+## Deliverables Requested
+
+1. **CGEventTap audit** - Correctness and reliability
+2. **Permission handling review** - UX for accessibility permissions
+3. **Hotkey conflict detection** - How to handle collisions
+4. **Performance analysis** - Impact of system-wide monitoring
+5. **Cross-app compatibility** - Karabiner, BetterTouchTool, etc.
+
+Thank you for your expertise!

@@ -4888,3 +4888,125 @@ mod tests {
       2.6K - src/ai/config.rs
       2.3K - src/ai/model.rs
        462 - src/ai/mod.rs
+
+---
+
+# Expert Review Request
+
+## Context
+
+This is the **AI chat window** - a BYOK (Bring Your Own Key) chat interface supporting multiple AI providers. It follows the same secondary window pattern as Notes but adds streaming responses and provider abstraction.
+
+## Files Included
+
+- `window.rs` (1,968 lines) - Main AiApp view with chat interface
+- `storage.rs` - SQLite persistence for chat history
+- `model.rs` - Chat, Message, ChatId, MessageRole structs
+- `providers.rs` - Provider trait with Anthropic/OpenAI implementations
+- `config.rs` - Environment detection for API keys
+- `mod.rs` - Module exports
+
+## What We Need Reviewed
+
+### 1. Provider Abstraction
+We support multiple AI providers via a trait:
+```rust
+pub trait AiProvider: Send + Sync {
+    fn name(&self) -> &str;
+    fn models(&self) -> &[&str];
+    fn send_message(&self, messages: &[Message], model: &str) -> Result<String>;
+    fn stream_message(&self, messages: &[Message], model: &str) 
+        -> Result<Box<dyn Iterator<Item = Result<String>>>>;
+}
+```
+
+**Questions:**
+- Is this the right abstraction level?
+- Should we use async streams instead of iterators?
+- How do we handle provider-specific features (tools, vision)?
+- What about rate limiting and error handling?
+
+### 2. Streaming Responses
+Streaming implementation:
+- SSE parsing for event streams
+- Token-by-token UI updates
+- Cancellation support
+
+**Questions:**
+- Is our SSE parsing robust?
+- How do we handle partial JSON in chunks?
+- Should we buffer tokens for smoother rendering?
+- What about handling stream interruptions?
+
+### 3. BYOK (Bring Your Own Key)
+API keys are sourced from:
+- `SCRIPT_KIT_ANTHROPIC_API_KEY`
+- `SCRIPT_KIT_OPENAI_API_KEY`
+- `~/.sk/kit/.env` file
+
+**Questions:**
+- Is environment variable storage secure enough?
+- Should we support keychain/credential manager?
+- How do we handle key rotation?
+- What about key validation on startup?
+
+### 4. Chat Persistence
+SQLite storage for:
+- Chat conversations with metadata
+- Messages with roles (user/assistant/system)
+- Date-based grouping in sidebar
+
+**Questions:**
+- Is our schema efficient for large histories?
+- Should we support chat export/import?
+- How do we handle context length limits?
+- What about message search?
+
+### 5. UI/UX
+Features:
+- Model picker dropdown
+- Sidebar with chat history (grouped by date)
+- Markdown rendering for responses
+- Demo mode with mock responses
+
+**Questions:**
+- Is the UX comparable to ChatGPT/Claude web?
+- Should we support conversation branching?
+- How do we handle system prompts?
+- What about multi-modal (images)?
+
+## Specific Code Areas of Concern
+
+1. **`stream_chat_completion()`** - HTTP streaming with ureq
+2. **Token counting** - Estimating context usage
+3. **Error recovery** - Handling API failures gracefully
+4. **Mock mode** - Demonstration without real API
+
+## Provider Comparison
+
+We'd like feedback on how our implementation compares to:
+- Vercel AI SDK
+- LangChain
+- ChatGPT API best practices
+
+## Security Considerations
+
+- API keys in environment/files
+- Request/response logging
+- Token usage tracking
+- Rate limit handling
+
+**Questions:**
+- Are we handling sensitive data appropriately?
+- Should we encrypt stored chats?
+- What about PII in chat history?
+
+## Deliverables Requested
+
+1. **Provider abstraction review** - Is the trait design sound?
+2. **Streaming implementation audit** - Correctness and performance
+3. **Security assessment** - API key handling, data storage
+4. **UX recommendations** - Feature parity with modern chat UIs
+5. **Architecture suggestions** - Scaling to more providers
+
+Thank you for your expertise!

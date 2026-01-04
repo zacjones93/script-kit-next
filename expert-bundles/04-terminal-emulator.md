@@ -1506,3 +1506,117 @@ mod tests {
 📂 Top 10 Files (by tokens):
 ──────────────────────────
      12.3K - src/term_prompt.rs
+
+---
+
+# Expert Review Request
+
+## Context
+
+This is the **terminal emulator integration** for Script Kit GPUI. It provides a full terminal experience using the Alacritty terminal backend, rendered via GPUI. Scripts can spawn interactive terminal sessions (shells, SSH, etc.).
+
+## Files Included
+
+- `term_prompt.rs` (1,456 lines) - GPUI rendering layer for terminal content
+- `src/terminal/` - Terminal abstraction layer:
+  - `mod.rs` - Module exports and TerminalHandle
+  - `content.rs` - TerminalContent, cell attributes, colors
+  - `pty.rs` - PTY spawning and management
+  - `events.rs` - TerminalEvent enum
+
+## What We Need Reviewed
+
+### 1. Terminal Rendering Performance
+We render terminal content by:
+- Reading the Alacritty terminal state (cells, cursor, colors)
+- Converting to GPUI elements (divs with text spans)
+- Re-rendering at 30fps (33ms interval)
+
+**Questions:**
+- Is 30fps appropriate or should we use event-driven rendering?
+- Are we allocating too much per frame?
+- Should we use a canvas/GPU-accelerated approach?
+- How can we optimize for large scrollback buffers?
+
+### 2. PTY Management
+We use `portable-pty` for cross-platform PTY:
+- Spawning shells with proper environment
+- Resize handling (SIGWINCH equivalent)
+- Reading/writing with proper flow control
+
+**Questions:**
+- Is our PTY setup correct for all shells (bash, zsh, fish)?
+- How should we handle PTY resize during rapid window resizing?
+- Are we properly handling terminal encoding (UTF-8)?
+- What about alternate screen buffer support?
+
+### 3. Cell-Level Rendering
+Each terminal cell has:
+```rust
+pub struct CellAttributes {
+    pub fg: AnsiColor,
+    pub bg: AnsiColor,
+    pub flags: CellFlags, // bold, italic, underline, etc.
+}
+```
+
+**Questions:**
+- Is per-cell rendering efficient enough?
+- Should we batch adjacent cells with same attributes?
+- How do we handle wide characters (CJK)?
+- Are we supporting all common ANSI attributes?
+
+### 4. Input Handling
+Keyboard input is translated to terminal escape sequences:
+- Arrow keys → `\x1b[A`, `\x1b[B`, etc.
+- Ctrl+C → `\x03`
+- Alt+key combinations
+- Function keys
+
+**Questions:**
+- Is our key translation complete and correct?
+- How do we handle terminal modes (raw, cooked)?
+- Are we respecting TERM environment properly?
+- What about bracketed paste mode?
+
+### 5. Scroll & Selection
+Features:
+- Mouse wheel scrolling through scrollback
+- Text selection (planned)
+- Copy/paste integration
+
+**Questions:**
+- Is our scroll handling smooth?
+- How should selection interact with scrollback?
+- Should we support URL detection and clicking?
+
+## Specific Code Areas of Concern
+
+1. **`refresh_timer_active` logic** - Timer management for re-renders
+2. **Bell handling** - Visual flash for terminal bell
+3. **Exit detection** - Knowing when the shell has exited
+4. **Font measurement** - `BASE_CELL_WIDTH` = 8.5px for Menlo 14pt
+
+## Terminal Compatibility
+
+We want to support:
+- Interactive shells (bash, zsh, fish)
+- TUI applications (vim, htop, less)
+- SSH sessions
+- Docker/container shells
+
+**Questions:**
+- Are we handling alternate screen buffer correctly?
+- Do we support mouse reporting?
+- What about 256-color and true-color support?
+- Are we handling window title changes?
+
+## Deliverables Requested
+
+1. **Rendering performance audit** - Frame time analysis
+2. **VT100/xterm compliance review** - Missing escape sequences
+3. **PTY correctness** - Edge cases in terminal spawning
+4. **Input handling completeness** - Keyboard mapping gaps
+5. **Architecture recommendations** - Better patterns for terminal integration
+
+Thank you for your expertise!
