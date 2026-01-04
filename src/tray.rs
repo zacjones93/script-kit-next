@@ -15,8 +15,8 @@ use tray_icon::{
 
 use crate::login_item;
 
-/// Menu icon size (16x16 for standard menu items)
-const MENU_ICON_SIZE: u32 = 16;
+/// Menu icon size (32x32 for Retina display quality)
+const MENU_ICON_SIZE: u32 = 32;
 
 /// SVG logo for Script Kit (32x32, monochrome)
 /// This will be rendered as a template image on macOS for light/dark mode adaptation
