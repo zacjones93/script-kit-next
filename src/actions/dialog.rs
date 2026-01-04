@@ -1,13 +1,7 @@
-//! Actions Dialog Module
+//! Actions Dialog
 //!
-//! Provides a searchable action menu as a compact overlay popup for quick access
-//! to script management and global actions (edit, create, settings, quit, etc.)
-//!
-//! The dialog renders as a floating overlay popup with:
-//! - Fixed dimensions (320x400px max)
-//! - Rounded corners and box shadow
-//! - Semi-transparent background
-//! - Context-aware actions based on focused script
+//! The main ActionsDialog struct and its implementation, providing a searchable
+//! action menu as a compact overlay popup.
 
 #![allow(dead_code)]
 
@@ -22,254 +16,17 @@ use gpui::{
 };
 use std::sync::Arc;
 
-/// Callback for action selection
-/// Signature: (action_id: String)
-pub type ActionCallback = Arc<dyn Fn(String) + Send + Sync>;
+use super::builders::{get_global_actions, get_path_context_actions, get_script_context_actions};
+use super::constants::{ACCENT_BAR_WIDTH, ACTION_ITEM_HEIGHT, POPUP_MAX_HEIGHT, POPUP_WIDTH};
+use super::types::{Action, ActionCallback, ActionCategory, ScriptInfo};
+use crate::prompts::PathInfo;
 
-/// Information about the currently focused/selected script
-/// Used for context-aware actions in the actions dialog
-#[derive(Debug, Clone)]
-pub struct ScriptInfo {
-    /// Display name of the script
-    pub name: String,
-    /// Full path to the script file
-    pub path: String,
+/// Helper function to combine a hex color with an alpha value
+/// Delegates to DesignColors::hex_with_alpha for DRY
+#[inline]
+fn hex_with_alpha(hex: u32, alpha: u8) -> u32 {
+    DesignColors::hex_with_alpha(hex, alpha)
 }
-
-impl ScriptInfo {
-    pub fn new(name: impl Into<String>, path: impl Into<String>) -> Self {
-        ScriptInfo {
-            name: name.into(),
-            path: path.into(),
-        }
-    }
-}
-
-// Import PathInfo from prompts module (use crate:: for local import)
-pub use crate::prompts::PathInfo;
-
-/// Available actions in the actions menu
-#[derive(Debug, Clone)]
-pub struct Action {
-    pub id: String,
-    pub title: String,
-    pub description: Option<String>,
-    pub category: ActionCategory,
-    /// Optional keyboard shortcut hint (e.g., "⌘E")
-    pub shortcut: Option<String>,
-    /// If true, send ActionTriggered to SDK; if false, submit value directly
-    /// Built-in actions default to false; SDK actions may set this to true
-    pub has_action: bool,
-    /// Optional value to submit when action is triggered
-    pub value: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ActionCategory {
-    ScriptContext, // Actions specific to the focused script
-    ScriptOps,     // Edit, Create, Delete script operations
-    GlobalOps,     // Settings, Quit, etc.
-}
-
-impl Action {
-    pub fn new(
-        id: impl Into<String>,
-        title: impl Into<String>,
-        description: Option<String>,
-        category: ActionCategory,
-    ) -> Self {
-        Action {
-            id: id.into(),
-            title: title.into(),
-            description,
-            category,
-            shortcut: None,
-            has_action: false,
-            value: None,
-        }
-    }
-
-    pub fn with_shortcut(mut self, shortcut: impl Into<String>) -> Self {
-        self.shortcut = Some(shortcut.into());
-        self
-    }
-
-    pub fn with_value(mut self, value: impl Into<String>) -> Self {
-        self.value = Some(value.into());
-        self
-    }
-
-    pub fn with_has_action(mut self, has_action: bool) -> Self {
-        self.has_action = has_action;
-        self
-    }
-}
-
-/// Get actions specific to a file/folder path
-pub fn get_path_context_actions(path_info: &PathInfo) -> Vec<Action> {
-    let mut actions = vec![
-        Action::new(
-            "copy_path",
-            "Copy Path",
-            Some("Copy the full path to clipboard".to_string()),
-            ActionCategory::ScriptContext,
-        )
-        .with_shortcut("⌘⇧C"),
-        Action::new(
-            "open_in_finder",
-            "Open in Finder",
-            Some("Reveal in Finder".to_string()),
-            ActionCategory::ScriptContext,
-        )
-        .with_shortcut("⌘⇧F"),
-        Action::new(
-            "open_in_editor",
-            "Open in Editor",
-            Some("Open in $EDITOR".to_string()),
-            ActionCategory::ScriptContext,
-        )
-        .with_shortcut("⌘E"),
-        Action::new(
-            "open_in_terminal",
-            "Open in Terminal",
-            Some("Open terminal at this location".to_string()),
-            ActionCategory::ScriptContext,
-        )
-        .with_shortcut("⌘T"),
-        Action::new(
-            "copy_filename",
-            "Copy Filename",
-            Some("Copy just the filename".to_string()),
-            ActionCategory::ScriptContext,
-        ),
-        Action::new(
-            "move_to_trash",
-            "Move to Trash",
-            Some(format!(
-                "Delete {}",
-                if path_info.is_dir { "folder" } else { "file" }
-            )),
-            ActionCategory::ScriptContext,
-        )
-        .with_shortcut("⌘⌫"),
-    ];
-
-    // Add directory-specific action for navigating into
-    if path_info.is_dir {
-        actions.insert(
-            0,
-            Action::new(
-                "open_directory",
-                format!("Open \"{}\"", path_info.name),
-                Some("Navigate into this directory".to_string()),
-                ActionCategory::ScriptContext,
-            )
-            .with_shortcut("↵"),
-        );
-    } else {
-        actions.insert(
-            0,
-            Action::new(
-                "select_file",
-                format!("Select \"{}\"", path_info.name),
-                Some("Submit this file".to_string()),
-                ActionCategory::ScriptContext,
-            )
-            .with_shortcut("↵"),
-        );
-    }
-
-    actions
-}
-
-/// Get actions specific to the focused script
-pub fn get_script_context_actions(script: &ScriptInfo) -> Vec<Action> {
-    vec![
-        Action::new(
-            "run_script",
-            format!("Run \"{}\"", script.name),
-            Some("Execute this script".to_string()),
-            ActionCategory::ScriptContext,
-        )
-        .with_shortcut("↵"),
-        Action::new(
-            "edit_script",
-            "Edit Script",
-            Some("Open in $EDITOR".to_string()),
-            ActionCategory::ScriptContext,
-        )
-        .with_shortcut("⌘E"),
-        Action::new(
-            "view_logs",
-            "View Logs",
-            Some("Show script execution logs".to_string()),
-            ActionCategory::ScriptContext,
-        )
-        .with_shortcut("⌘L"),
-        Action::new(
-            "reveal_in_finder",
-            "Reveal in Finder",
-            Some("Show script file in Finder".to_string()),
-            ActionCategory::ScriptContext,
-        )
-        .with_shortcut("⌘⇧F"),
-        Action::new(
-            "copy_path",
-            "Copy Path",
-            Some("Copy script path to clipboard".to_string()),
-            ActionCategory::ScriptContext,
-        )
-        .with_shortcut("⌘⇧C"),
-    ]
-}
-
-/// Predefined global actions
-pub fn get_global_actions() -> Vec<Action> {
-    vec![
-        Action::new(
-            "create_script",
-            "Create New Script",
-            Some("Create a new TypeScript script".to_string()),
-            ActionCategory::ScriptOps,
-        )
-        .with_shortcut("⌘N"),
-        Action::new(
-            "reload_scripts",
-            "Reload Scripts",
-            Some("Refresh the scripts list".to_string()),
-            ActionCategory::GlobalOps,
-        )
-        .with_shortcut("⌘R"),
-        Action::new(
-            "settings",
-            "Settings",
-            Some("Configure preferences".to_string()),
-            ActionCategory::GlobalOps,
-        )
-        .with_shortcut("⌘,"),
-        Action::new(
-            "quit",
-            "Quit Script Kit",
-            Some("Exit the application".to_string()),
-            ActionCategory::GlobalOps,
-        )
-        .with_shortcut("⌘Q"),
-    ]
-}
-
-/// Overlay popup dimensions and styling constants
-pub const POPUP_WIDTH: f32 = 320.0;
-pub const POPUP_MAX_HEIGHT: f32 = 400.0;
-pub const POPUP_CORNER_RADIUS: f32 = 12.0;
-pub const POPUP_PADDING: f32 = 8.0;
-pub const ITEM_PADDING_X: f32 = 12.0;
-pub const ITEM_PADDING_Y: f32 = 8.0;
-/// Fixed height for action items (required for uniform_list virtualization)
-/// Increased from 36px to 42px for better touch targets and visual breathing room
-pub const ACTION_ITEM_HEIGHT: f32 = 42.0;
-
-/// Width of the left accent bar for selected items
-pub const ACCENT_BAR_WIDTH: f32 = 3.0;
 
 /// ActionsDialog - Compact overlay popup for quick actions
 pub struct ActionsDialog {
@@ -293,13 +50,6 @@ pub struct ActionsDialog {
     pub hide_search: bool,
     /// SDK-provided actions (when present, replaces built-in actions)
     pub sdk_actions: Option<Vec<ProtocolAction>>,
-}
-
-/// Helper function to combine a hex color with an alpha value
-/// Delegates to DesignColors::hex_with_alpha for DRY
-#[inline]
-fn hex_with_alpha(hex: u32, alpha: u8) -> u32 {
-    DesignColors::hex_with_alpha(hex, alpha)
 }
 
 impl ActionsDialog {
@@ -761,7 +511,7 @@ impl ActionsDialog {
     }
 
     /// Submit the selected action
-    fn submit_selected(&mut self) {
+    pub fn submit_selected(&mut self) {
         if let Some(&action_idx) = self.filtered_actions.get(self.selected_index) {
             if let Some(action) = self.actions.get(action_idx) {
                 logging::log("ACTIONS", &format!("Action selected: {}", action.id));
@@ -771,7 +521,7 @@ impl ActionsDialog {
     }
 
     /// Cancel - close the dialog
-    fn submit_cancel(&mut self) {
+    pub fn submit_cancel(&mut self) {
         logging::log("ACTIONS", "Actions dialog cancelled");
         (self.on_select)("__cancel__".to_string());
     }
@@ -789,7 +539,7 @@ impl ActionsDialog {
     }
 
     /// Create box shadow for the overlay popup
-    fn create_popup_shadow() -> Vec<BoxShadow> {
+    pub(super) fn create_popup_shadow() -> Vec<BoxShadow> {
         vec![
             BoxShadow {
                 color: Hsla {
@@ -818,11 +568,10 @@ impl ActionsDialog {
 
     /// Get colors for the search box based on design variant
     /// Returns: (search_box_bg, border_color, muted_text, dimmed_text, secondary_text)
-    fn get_search_colors(
+    pub(super) fn get_search_colors(
         &self,
         colors: &crate::designs::DesignColors,
     ) -> (gpui::Rgba, gpui::Rgba, gpui::Rgba, gpui::Rgba, gpui::Rgba) {
-        use gpui::{rgb, rgba};
         if self.design_variant == DesignVariant::Default {
             (
                 rgba(hex_with_alpha(
@@ -847,11 +596,10 @@ impl ActionsDialog {
 
     /// Get colors for the main container based on design variant
     /// Returns: (main_bg, container_border, container_text)
-    fn get_container_colors(
+    pub(super) fn get_container_colors(
         &self,
         colors: &crate::designs::DesignColors,
     ) -> (gpui::Rgba, gpui::Rgba, gpui::Rgba) {
-        use gpui::{rgb, rgba};
         if self.design_variant == DesignVariant::Default {
             (
                 rgba(hex_with_alpha(self.theme.colors.background.main, 0xe6)),
@@ -1344,472 +1092,5 @@ impl Render for ActionsDialog {
             // NOTE: No on_key_down here - parent handles all keyboard input
             .child(actions_container)
             .when(!self.hide_search, |d| d.child(input_container))
-    }
-}
-
-// ============================================================================
-// Script Creation Utilities
-// ============================================================================
-
-/// Validates a script name - only alphanumeric and hyphens allowed
-///
-/// # Rules
-/// - Cannot be empty
-/// - Only letters, numbers, and hyphens allowed
-/// - Cannot start or end with a hyphen
-///
-/// # Examples
-/// ```
-/// assert!(validate_script_name("hello-world").is_ok());
-/// assert!(validate_script_name("myScript").is_ok());
-/// assert!(validate_script_name("").is_err());
-/// assert!(validate_script_name("-hello").is_err());
-/// ```
-pub fn validate_script_name(name: &str) -> Result<(), String> {
-    if name.is_empty() {
-        return Err("Script name cannot be empty".to_string());
-    }
-    if !name.chars().all(|c| c.is_alphanumeric() || c == '-') {
-        return Err("Script name can only contain letters, numbers, and hyphens".to_string());
-    }
-    if name.starts_with('-') || name.ends_with('-') {
-        return Err("Script name cannot start or end with a hyphen".to_string());
-    }
-    Ok(())
-}
-
-/// Generates a script template with the given name
-///
-/// Converts kebab-case names to Title Case for the display name.
-/// Creates a basic TypeScript script with Name and Description metadata.
-///
-/// # Example
-/// ```
-/// let template = generate_script_template("hello-world");
-/// // Returns:
-/// // // Name: Hello World
-/// // // Description:
-/// //
-/// // console.log("Hello from hello-world!")
-/// ```
-pub fn generate_script_template(name: &str) -> String {
-    // Convert kebab-case to Title Case for display
-    let display_name = name
-        .split('-')
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => first.to_uppercase().chain(chars).collect(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    format!(
-        r#"// Name: {}
-// Description: 
-
-console.log("Hello from {}!")
-"#,
-        display_name, name
-    )
-}
-
-/// Creates a new script file at ~/.sk/kit/scripts/{name}.ts
-///
-/// # Arguments
-/// * `name` - The script name (will be validated)
-///
-/// # Returns
-/// * `Ok(PathBuf)` - Path to the created script file
-/// * `Err(String)` - Error message if creation failed
-///
-/// # Errors
-/// - Invalid script name (see `validate_script_name`)
-/// - Script already exists
-/// - Failed to create directory or write file
-pub fn create_script_file(name: &str) -> Result<std::path::PathBuf, String> {
-    use std::fs;
-    use std::path::PathBuf;
-
-    validate_script_name(name)?;
-
-    let scripts_dir = PathBuf::from(shellexpand::tilde("~/.sk/kit/scripts").as_ref());
-
-    // Ensure directory exists
-    if !scripts_dir.exists() {
-        fs::create_dir_all(&scripts_dir)
-            .map_err(|e| format!("Failed to create scripts directory: {}", e))?;
-    }
-
-    let file_path = scripts_dir.join(format!("{}.ts", name));
-
-    // Check if file already exists
-    if file_path.exists() {
-        return Err(format!("Script '{}' already exists", name));
-    }
-
-    // Write template
-    let template = generate_script_template(name);
-    fs::write(&file_path, template).map_err(|e| format!("Failed to write script file: {}", e))?;
-
-    logging::log(
-        "SCRIPT_CREATE",
-        &format!("Created new script: {}", file_path.display()),
-    );
-
-    Ok(file_path)
-}
-
-/// Returns the path where a script would be created (without creating it)
-/// Useful for checking if a script already exists or for UI display
-pub fn get_script_path(name: &str) -> std::path::PathBuf {
-    use std::path::PathBuf;
-    let scripts_dir = PathBuf::from(shellexpand::tilde("~/.sk/kit/scripts").as_ref());
-    scripts_dir.join(format!("{}.ts", name))
-}
-
-/// Checks if a script with the given name already exists
-pub fn script_exists(name: &str) -> bool {
-    get_script_path(name).exists()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_script_info_creation() {
-        let script = ScriptInfo::new("test-script", "/path/to/test-script.ts");
-        assert_eq!(script.name, "test-script");
-        assert_eq!(script.path, "/path/to/test-script.ts");
-    }
-
-    #[test]
-    fn test_action_with_shortcut() {
-        let action =
-            Action::new("test", "Test Action", None, ActionCategory::GlobalOps).with_shortcut("⌘T");
-        assert_eq!(action.shortcut, Some("⌘T".to_string()));
-    }
-
-    #[test]
-    fn test_get_script_context_actions() {
-        let script = ScriptInfo::new("my-script", "/path/to/my-script.ts");
-        let actions = get_script_context_actions(&script);
-
-        assert!(!actions.is_empty());
-        assert!(actions.iter().any(|a| a.id == "edit_script"));
-        assert!(actions.iter().any(|a| a.id == "view_logs"));
-        assert!(actions.iter().any(|a| a.id == "reveal_in_finder"));
-        assert!(actions.iter().any(|a| a.id == "copy_path"));
-        assert!(actions.iter().any(|a| a.id == "run_script"));
-    }
-
-    #[test]
-    fn test_get_global_actions() {
-        let actions = get_global_actions();
-
-        assert!(!actions.is_empty());
-        assert!(actions.iter().any(|a| a.id == "create_script"));
-        assert!(actions.iter().any(|a| a.id == "reload_scripts"));
-        assert!(actions.iter().any(|a| a.id == "settings"));
-        assert!(actions.iter().any(|a| a.id == "quit"));
-    }
-
-    #[test]
-    fn test_popup_constants() {
-        assert_eq!(POPUP_WIDTH, 320.0);
-        assert_eq!(POPUP_MAX_HEIGHT, 400.0);
-        // POPUP_CORNER_RADIUS should match the default design token radius_lg
-        assert_eq!(POPUP_CORNER_RADIUS, 12.0);
-        // Verify design token default matches our constant (for consistency)
-        let default_visual = crate::designs::DesignVisual::default();
-        assert_eq!(
-            POPUP_CORNER_RADIUS, default_visual.radius_lg,
-            "POPUP_CORNER_RADIUS should match design token radius_lg"
-        );
-    }
-
-    #[test]
-    fn test_action_item_height_constant() {
-        // Fixed height is required for uniform_list virtualization
-        // Increased to 42px for better touch targets and visual breathing room
-        assert_eq!(ACTION_ITEM_HEIGHT, 42.0);
-        // Ensure item height is positive and reasonable
-        const _: () = assert!(ACTION_ITEM_HEIGHT > 0.0);
-        const _: () = assert!(ACTION_ITEM_HEIGHT < POPUP_MAX_HEIGHT);
-    }
-
-    #[test]
-    fn test_max_visible_items() {
-        // Calculate max visible items that can fit in the popup
-        // This helps verify scroll virtualization is worthwhile
-        let max_visible = (POPUP_MAX_HEIGHT / ACTION_ITEM_HEIGHT) as usize;
-        // With 400px max height and 42px items, ~9 items fit
-        assert!(max_visible >= 8, "Should fit at least 8 items");
-        assert!(max_visible <= 15, "Sanity check on max visible");
-    }
-
-    #[test]
-    fn test_actions_exceed_visible_space() {
-        // Verify that with script context + global actions, we exceed visible space
-        // This confirms scrolling/virtualization is needed
-        let script = ScriptInfo::new("test-script", "/path/to/test.ts");
-        let script_actions = get_script_context_actions(&script);
-        let global_actions = get_global_actions();
-        let total_actions = script_actions.len() + global_actions.len();
-
-        let max_visible = (POPUP_MAX_HEIGHT / ACTION_ITEM_HEIGHT) as usize;
-
-        // With 5 script context actions + 4 global = 9 actions
-        // At 42px height in 400px container, we can fit ~9 items
-        // So we might not always overflow, but we're close
-        assert!(total_actions >= 8, "Should have at least 8 total actions");
-
-        // Log for visibility
-        println!(
-            "Total actions: {}, Max visible: {}",
-            total_actions, max_visible
-        );
-    }
-
-    // ========================================================================
-    // Script Creation Utility Tests
-    // ========================================================================
-
-    #[test]
-    fn test_validate_script_name_valid() {
-        assert!(validate_script_name("hello-world").is_ok());
-        assert!(validate_script_name("myScript").is_ok());
-        assert!(validate_script_name("test123").is_ok());
-        assert!(validate_script_name("a").is_ok());
-        assert!(validate_script_name("ABC").is_ok());
-        assert!(validate_script_name("my-cool-script").is_ok());
-    }
-
-    #[test]
-    fn test_validate_script_name_empty() {
-        let result = validate_script_name("");
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Script name cannot be empty");
-    }
-
-    #[test]
-    fn test_validate_script_name_invalid_chars() {
-        // Spaces not allowed
-        let result = validate_script_name("hello world");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("only contain letters"));
-
-        // Underscores not allowed
-        let result = validate_script_name("hello_world");
-        assert!(result.is_err());
-
-        // Special characters not allowed
-        assert!(validate_script_name("hello!").is_err());
-        assert!(validate_script_name("hello@script").is_err());
-        assert!(validate_script_name("hello.ts").is_err());
-        assert!(validate_script_name("path/to/script").is_err());
-    }
-
-    #[test]
-    fn test_validate_script_name_hyphen_position() {
-        // Leading hyphen not allowed
-        let result = validate_script_name("-hello");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("cannot start or end"));
-
-        // Trailing hyphen not allowed
-        let result = validate_script_name("hello-");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("cannot start or end"));
-
-        // Just a hyphen not allowed
-        assert!(validate_script_name("-").is_err());
-    }
-
-    #[test]
-    fn test_generate_script_template_simple() {
-        let template = generate_script_template("hello");
-        assert!(template.contains("// Name: Hello"));
-        assert!(template.contains("// Description:"));
-        assert!(template.contains("Hello from hello!"));
-    }
-
-    #[test]
-    fn test_generate_script_template_kebab_case() {
-        let template = generate_script_template("hello-world");
-        assert!(template.contains("// Name: Hello World"));
-        assert!(template.contains("Hello from hello-world!"));
-    }
-
-    #[test]
-    fn test_generate_script_template_multi_word() {
-        let template = generate_script_template("my-cool-script");
-        assert!(template.contains("// Name: My Cool Script"));
-        assert!(template.contains("Hello from my-cool-script!"));
-    }
-
-    #[test]
-    fn test_generate_script_template_structure() {
-        let template = generate_script_template("test");
-
-        // Should have proper structure
-        assert!(template.starts_with("// Name:"));
-        assert!(template.contains("// Description:"));
-        assert!(template.contains("console.log"));
-
-        // Template should be valid TypeScript (basic check)
-        assert!(template.contains("\"Hello from test!\""));
-    }
-
-    #[test]
-    fn test_get_script_path() {
-        let path = get_script_path("hello-world");
-
-        // Should end with the correct filename
-        assert!(path.to_string_lossy().ends_with("hello-world.ts"));
-
-        // Should be in ~/.sk/kit/scripts/
-        assert!(path.to_string_lossy().contains(".sk/kit/scripts"));
-    }
-
-    #[test]
-    fn test_get_script_path_various_names() {
-        assert!(get_script_path("a").to_string_lossy().ends_with("a.ts"));
-        assert!(get_script_path("my-script")
-            .to_string_lossy()
-            .ends_with("my-script.ts"));
-        assert!(get_script_path("Test123")
-            .to_string_lossy()
-            .ends_with("Test123.ts"));
-    }
-
-    // ========================================================================
-    // SDK Actions Tests
-    // ========================================================================
-
-    #[test]
-    fn test_action_with_has_action() {
-        let action = Action::new("test", "Test Action", None, ActionCategory::GlobalOps)
-            .with_has_action(true);
-        assert!(action.has_action);
-
-        let action2 = Action::new("test2", "Test Action 2", None, ActionCategory::GlobalOps);
-        assert!(!action2.has_action); // default is false
-    }
-
-    #[test]
-    fn test_action_with_value() {
-        let action = Action::new("test", "Test Action", None, ActionCategory::GlobalOps)
-            .with_value("my-value");
-        assert_eq!(action.value, Some("my-value".to_string()));
-
-        let action2 = Action::new("test2", "Test Action 2", None, ActionCategory::GlobalOps);
-        assert!(action2.value.is_none()); // default is None
-    }
-
-    #[test]
-    fn test_action_new_defaults() {
-        let action = Action::new(
-            "id",
-            "title",
-            Some("desc".to_string()),
-            ActionCategory::ScriptContext,
-        );
-        assert_eq!(action.id, "id");
-        assert_eq!(action.title, "title");
-        assert_eq!(action.description, Some("desc".to_string()));
-        assert_eq!(action.category, ActionCategory::ScriptContext);
-        assert!(action.shortcut.is_none());
-        assert!(!action.has_action);
-        assert!(action.value.is_none());
-    }
-
-    #[test]
-    fn test_protocol_action_to_action_conversion() {
-        use crate::protocol::ProtocolAction;
-
-        let protocol_action = ProtocolAction {
-            name: "Copy".to_string(),
-            description: Some("Copy to clipboard".to_string()),
-            shortcut: Some("cmd+c".to_string()),
-            value: Some("copy-value".to_string()),
-            has_action: true,
-            visible: None,
-            close: None,
-        };
-
-        // Simulate conversion logic from set_sdk_actions
-        let action = Action {
-            id: protocol_action.name.clone(),
-            title: protocol_action.name.clone(),
-            description: protocol_action.description.clone(),
-            category: ActionCategory::ScriptContext,
-            shortcut: protocol_action.shortcut.clone(),
-            has_action: protocol_action.has_action,
-            value: protocol_action.value.clone(),
-        };
-
-        assert_eq!(action.id, "Copy");
-        assert_eq!(action.title, "Copy");
-        assert_eq!(action.description, Some("Copy to clipboard".to_string()));
-        assert_eq!(action.shortcut, Some("cmd+c".to_string()));
-        assert_eq!(action.value, Some("copy-value".to_string()));
-        assert!(action.has_action);
-    }
-
-    #[test]
-    fn test_protocol_action_has_action_routing() {
-        use crate::protocol::ProtocolAction;
-
-        // Action with has_action=true should trigger ActionTriggered to SDK
-        let action_with_handler = ProtocolAction {
-            name: "Custom Action".to_string(),
-            description: None,
-            shortcut: None,
-            value: Some("custom-value".to_string()),
-            has_action: true,
-            visible: None,
-            close: None,
-        };
-        assert!(action_with_handler.has_action);
-
-        // Action with has_action=false should submit value directly
-        let action_without_handler = ProtocolAction {
-            name: "Simple Action".to_string(),
-            description: None,
-            shortcut: None,
-            value: Some("simple-value".to_string()),
-            has_action: false,
-            visible: None,
-            close: None,
-        };
-        assert!(!action_without_handler.has_action);
-    }
-
-    #[test]
-    fn test_built_in_actions_have_no_has_action() {
-        // All built-in actions should have has_action=false
-        let script = ScriptInfo::new("test-script", "/path/to/test.ts");
-        let script_actions = get_script_context_actions(&script);
-        let global_actions = get_global_actions();
-
-        for action in script_actions.iter() {
-            assert!(
-                !action.has_action,
-                "Built-in action '{}' should have has_action=false",
-                action.id
-            );
-        }
-
-        for action in global_actions.iter() {
-            assert!(
-                !action.has_action,
-                "Built-in action '{}' should have has_action=false",
-                action.id
-            );
-        }
     }
 }
