@@ -2535,6 +2535,70 @@ Before every commit, verify:
 
 ---
 
+## 18. Lessons Learned (Hard-Won Wisdom)
+
+### Don't Panic When Tests Fail
+
+When facing 100+ test failures after a refactor:
+
+1. **STOP** - Don't start editing files randomly
+2. **ANALYZE** - Count errors by type and file: `cargo test 2>&1 | grep "error\[E" | sort | uniq -c`
+3. **FIND THE PATTERN** - Most mass failures have a single root cause
+4. **CREATE HELPERS** - Write utility functions to handle the transformation
+5. **USE AUTOMATION** - sed/awk/python for systematic changes, not manual edits
+6. **VERIFY INCREMENTALLY** - Run `cargo check` after each batch of changes
+
+**Example**: The Arc<Script> migration had 103 errors. Solution:
+```rust
+// Added helper functions to test modules
+fn wrap_scripts(scripts: Vec<Script>) -> Vec<Arc<Script>> {
+    scripts.into_iter().map(Arc::new).collect()
+}
+
+// Then used sed to transform all test code
+sed -i '' 's/let scripts = vec!\[/let scripts = wrap_scripts(vec![/g' src/scripts_tests.rs
+```
+
+### Type Migration Checklist
+
+When changing a type (e.g., `T` to `Arc<T>`):
+
+| Step | Action |
+|------|--------|
+| 1 | Change struct definitions |
+| 2 | Update function signatures |
+| 3 | Update return types |
+| 4 | Add helper functions for tests |
+| 5 | Transform test data creation |
+| 6 | Fix struct field assignments (may need `Arc::new()`) |
+| 7 | Run `cargo check` (not `cargo test` - faster feedback) |
+| 8 | Fix any stragglers manually |
+| 9 | Run full `cargo test` |
+
+### Swarm Worker Failure Patterns
+
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| Worker loops fixing same error | Incomplete migration | Stop, analyze full scope, fix systematically |
+| Tests fail after "fix" | Only fixed symptoms, not root cause | Step back, understand the actual type mismatch |
+| 100+ errors appear | API signature changed but callers weren't updated | Use grep/sed for bulk updates |
+| Worker edits same file repeatedly | Fighting with other workers | Coordinator must serialize file access |
+
+### The Calm Approach
+
+```
+1. Breathe - There's always a better solution than panicking
+2. Measure - How many errors? What types? Which files?
+3. Pattern - What's the common thread?
+4. Plan - Write down the systematic fix before touching code
+5. Execute - Apply the fix methodically
+6. Verify - cargo check → cargo clippy → cargo test
+```
+
+**Key insight**: 100 errors with the same root cause is easier to fix than 5 unrelated errors. Find the pattern.
+
+---
+
 ## References
 
 - **GPUI Docs**: https://docs.rs/gpui/latest/gpui/
