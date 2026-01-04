@@ -987,8 +987,15 @@ include!("app_render.rs");
 // Builtin view render methods (clipboard, app launcher, window switcher)
 include!("render_builtins.rs");
 
-// Prompt render methods (arg, div, form, term, editor, etc.)
-include!("render_prompts.rs");
+// Prompt render methods - split into separate files for maintainability
+// Each file adds render_*_prompt methods to ScriptListApp via impl blocks
+include!("render_prompts/arg.rs");
+include!("render_prompts/div.rs");
+include!("render_prompts/form.rs");
+include!("render_prompts/term.rs");
+include!("render_prompts/editor.rs");
+include!("render_prompts/path.rs");
+include!("render_prompts/other.rs");
 
 // Script list render method
 include!("render_script_list.rs");
