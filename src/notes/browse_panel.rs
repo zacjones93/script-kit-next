@@ -193,7 +193,7 @@ impl BrowsePanel {
     }
 
     /// Move selection up
-    fn move_up(&mut self, cx: &mut Context<Self>) {
+    pub fn move_up(&mut self, cx: &mut Context<Self>) {
         if !self.notes.is_empty() {
             self.selected_index = self.selected_index.saturating_sub(1);
             cx.notify();
@@ -201,7 +201,7 @@ impl BrowsePanel {
     }
 
     /// Move selection down
-    fn move_down(&mut self, cx: &mut Context<Self>) {
+    pub fn move_down(&mut self, cx: &mut Context<Self>) {
         if !self.notes.is_empty() {
             self.selected_index = (self.selected_index + 1).min(self.notes.len() - 1);
             cx.notify();
@@ -215,6 +215,11 @@ impl BrowsePanel {
                 on_select(note.id);
             }
         }
+    }
+
+    /// Get the currently selected note ID (for parent window keyboard handling)
+    pub fn get_selected_note_id(&self) -> Option<NoteId> {
+        self.notes.get(self.selected_index).map(|n| n.id)
     }
 
     /// Close the panel

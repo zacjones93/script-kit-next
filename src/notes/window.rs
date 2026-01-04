@@ -129,6 +129,15 @@ pub struct NotesApp {
 
     /// Cached box shadows from theme (avoid reloading theme on every render)
     cached_box_shadows: Vec<BoxShadow>,
+
+    /// Pending note selection from browse panel
+    pending_browse_select: Arc<Mutex<Option<NoteId>>>,
+
+    /// Pending close request from browse panel
+    pending_browse_close: Arc<Mutex<bool>>,
+
+    /// Pending action from browse panel (note id + action)
+    pending_browse_action: Arc<Mutex<Option<(NoteId, NoteAction)>>>,
 }
 
 impl NotesApp {
@@ -222,6 +231,9 @@ impl NotesApp {
             pending_action: Arc::new(Mutex::new(None)),
             actions_panel_prev_height: None,
             cached_box_shadows,
+            pending_browse_select: Arc::new(Mutex::new(None)),
+            pending_browse_close: Arc::new(Mutex::new(false)),
+            pending_browse_action: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -233,7 +245,15 @@ impl NotesApp {
 
             // Update the note in our cache
             if let Some(note) = self.notes.iter_mut().find(|n| n.id == id) {
+                let old_title = note.title.clone();
                 note.set_content(content_string.clone());
+                debug!(
+                    note_id = %id,
+                    old_title = %old_title,
+                    new_title = %note.title,
+                    content_preview = %content_string.chars().take(50).collect::<String>(),
+                    "Title updated from content"
+                );
 
                 // Save to storage (debounced in a real implementation)
                 if let Err(e) = storage::save_note(note) {
@@ -753,6 +773,49 @@ impl NotesApp {
         }
     }
 
+    /// Drain pending browse panel actions (select, close, note actions)
+    fn drain_pending_browse_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Check for pending note selection
+        let pending_select = self
+            .pending_browse_select
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take());
+
+        if let Some(id) = pending_select {
+            self.handle_browse_select(id, window, cx);
+            return; // Selection closes the panel, so we're done
+        }
+
+        // Check for pending close request
+        let pending_close = self
+            .pending_browse_close
+            .lock()
+            .ok()
+            .map(|mut guard| {
+                let val = *guard;
+                *guard = false;
+                val
+            })
+            .unwrap_or(false);
+
+        if pending_close {
+            self.close_browse_panel(window, cx);
+            return;
+        }
+
+        // Check for pending note action (pin/delete)
+        let pending_action = self
+            .pending_browse_action
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take());
+
+        if let Some((id, action)) = pending_action {
+            self.handle_browse_action(id, action, cx);
+        }
+    }
+
     /// Handle action from the actions panel (Cmd+K)
     fn handle_action(&mut self, action: NotesAction, window: &mut Window, cx: &mut Context<Self>) {
         debug!(?action, "Handling notes action");
@@ -808,8 +871,33 @@ impl NotesApp {
             .map(|note| NoteListItem::from_note(note, Some(note.id) == self.selected_note_id))
             .collect();
 
-        let browse_panel = cx.new(|cx| BrowsePanel::new(note_items, window, cx));
-        
+        // Clone Arcs for the callbacks
+        let pending_select = self.pending_browse_select.clone();
+        let pending_close = self.pending_browse_close.clone();
+        let pending_action = self.pending_browse_action.clone();
+
+        let browse_panel = cx.new(|cx| {
+            BrowsePanel::new(note_items, window, cx)
+                .on_select(move |id| {
+                    if let Ok(mut guard) = pending_select.lock() {
+                        *guard = Some(id);
+                    }
+                })
+                .on_close({
+                    let pending_close = pending_close.clone();
+                    move || {
+                        if let Ok(mut guard) = pending_close.lock() {
+                            *guard = true;
+                        }
+                    }
+                })
+                .on_action(move |id, action| {
+                    if let Ok(mut guard) = pending_action.lock() {
+                        *guard = Some((id, action));
+                    }
+                })
+        });
+
         // Focus the browse panel
         let panel_focus_handle = browse_panel.read(cx).focus_handle(cx);
         window.focus(&panel_focus_handle, cx);
@@ -1000,7 +1088,8 @@ impl NotesApp {
         let show_toolbar = self.show_format_toolbar;
         let char_count = self.get_character_count(cx);
 
-        // Get note title
+        // Get note title - This reads from self.notes which is updated by on_editor_change
+        // The title is extracted from the first line of content via Note::set_content()
         let title = self
             .selected_note_id
             .and_then(|id| self.get_visible_notes().iter().find(|n| n.id == id))
@@ -1057,9 +1146,11 @@ impl NotesApp {
                     .child(title),
             )
             // Conditionally show icons based on state - only when window is hovered
-            // Raycast-style: 3 icons on the right - settings (actions), panel (browse), + (new)
+            // Raycast-style: icons on the right - settings (actions), panel (browse), + (new)
             // Use absolute positioning to keep title centered
-            .when(window_hovered && has_selection && !is_trash, |d| {
+            // Note: "+" and "≡" icons should show even with no notes (so users can create their first note)
+            // The "⌘" (actions) icon only shows when a note is selected (needs a note to act on)
+            .when(window_hovered && !is_trash, |d| {
                 d.child(
                     div()
                         .absolute()
@@ -1068,23 +1159,26 @@ impl NotesApp {
                         .items_center()
                         .gap_2() // Even spacing between icons
                         // Icon 1: Command key icon - opens actions panel (⌘K)
-                        .child(
-                            div()
-                                .id("titlebar-cmd-icon")
-                                .text_sm()
-                                .text_color(muted_color.opacity(0.7)) // Muted, subtle icon
-                                .cursor_pointer()
-                                .hover(|s| s.text_color(muted_color)) // Slightly brighter on hover
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    if this.show_actions_panel {
-                                        this.close_actions_panel(window, cx);
-                                    } else {
-                                        this.open_actions_panel(window, cx);
-                                    }
-                                }))
-                                .child("⌘"),
-                        )
-                        // Icon 2: List icon - for browsing notes
+                        // Only show when a note is selected (actions require a note)
+                        .when(has_selection, |d| {
+                            d.child(
+                                div()
+                                    .id("titlebar-cmd-icon")
+                                    .text_sm()
+                                    .text_color(muted_color.opacity(0.7)) // Muted, subtle icon
+                                    .cursor_pointer()
+                                    .hover(|s| s.text_color(muted_color)) // Slightly brighter on hover
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        if this.show_actions_panel {
+                                            this.close_actions_panel(window, cx);
+                                        } else {
+                                            this.open_actions_panel(window, cx);
+                                        }
+                                    }))
+                                    .child("⌘"),
+                            )
+                        })
+                        // Icon 2: List icon - for browsing notes (always visible when hovered)
                         .child(
                             div()
                                 .id("titlebar-browse-icon")
@@ -1103,7 +1197,7 @@ impl NotesApp {
                                 }))
                                 .child("≡"),
                         )
-                        // Icon 3: Plus icon - for new note
+                        // Icon 3: Plus icon - for new note (always visible when hovered)
                         .child(
                             div()
                                 .id("titlebar-new-icon")
@@ -1372,6 +1466,7 @@ impl Render for NotesApp {
         // Detect if user manually resized the window (disables auto-sizing)
         self.detect_manual_resize(window);
         self.drain_pending_action(window, cx);
+        self.drain_pending_browse_actions(window, cx);
 
         let show_actions = self.show_actions_panel;
         let show_browse = self.show_browse_panel;
@@ -1443,6 +1538,35 @@ impl Render for NotesApp {
                     return;
                 }
 
+                // Handle browse panel keyboard events
+                if this.show_browse_panel {
+                    if key == "escape" || (modifiers.platform && key == "p") || key == "esc" {
+                        this.close_browse_panel(window, cx);
+                        return;
+                    }
+
+                    if let Some(ref panel) = this.browse_panel {
+                        match key.as_str() {
+                            "up" | "arrowup" => {
+                                panel.update(cx, |panel, cx| panel.move_up(cx));
+                            }
+                            "down" | "arrowdown" => {
+                                panel.update(cx, |panel, cx| panel.move_down(cx));
+                            }
+                            "enter" => {
+                                if let Some(id) = panel.read(cx).get_selected_note_id() {
+                                    this.handle_browse_select(id, window, cx);
+                                }
+                            }
+                            _ => {
+                                // Let BrowsePanel handle other keys (like search input)
+                            }
+                        }
+                    }
+
+                    return;
+                }
+
                 // Handle Escape to close panels
                 if key == "escape" {
                     if this.show_actions_panel {
@@ -1478,6 +1602,10 @@ impl Render for NotesApp {
                             cx.notify();
                         }
                         "n" => this.create_note(window, cx),
+                        "w" => {
+                            // Close the notes window (standard macOS pattern)
+                            window.remove_window();
+                        }
                         "d" => this.duplicate_selected_note(window, cx),
                         "b" => this.insert_formatting("**", "**", cx),
                         "i" => this.insert_formatting("_", "_", cx),
