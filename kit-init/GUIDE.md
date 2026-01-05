@@ -10,7 +10,7 @@ Welcome to Script Kit! This guide will help you get started and master the power
 2. [Directory Structure](#directory-structure)
 3. [Writing Scripts](#writing-scripts)
 4. [SDK Functions (Core)](#sdk-functions-core)
-5. [Scriptlets](#scriptlets)
+5. [Extensions](#extensions)
 6. [Configuration](#configuration-configts)
 7. [Themes](#themes-themejson)
 8. [Built-in Features](#built-in-features)
@@ -38,10 +38,10 @@ Script Kit is a powerful automation tool that lets you create scripts to automat
 
 1. **Create the scripts directory** (if it doesn't exist):
    ```bash
-   mkdir -p ~/.scriptkit/main/scripts
+   mkdir -p ~/.scriptkit/kit/main/scripts
    ```
 
-2. **Create your first script** at `~/.scriptkit/main/scripts/hello.ts`:
+2. **Create your first script** at `~/.scriptkit/kit/main/scripts/hello.ts`:
    ```typescript
    export const metadata = {
      name: "Hello World",
@@ -78,9 +78,13 @@ Script Kit stores all its data in `~/.scriptkit/`. Here's the layout:
 
 ```
 ~/.scriptkit/
-├── main/                    # Default kit (your scripts)
-│   ├── scripts/             # Your script files (.ts, .js)
-│   └── scriptlets/          # Markdown-based mini-scripts
+├── kit/                     # All kits (version control friendly)
+│   ├── main/                # Default kit (your scripts)
+│   │   ├── scripts/         # Your script files (.ts, .js)
+│   │   ├── extensions/      # Markdown extension files (.md)
+│   │   └── agents/          # AI agent definitions (.md)
+│   ├── package.json         # Node.js module config (enables top-level await)
+│   └── tsconfig.json        # TypeScript path mappings
 ├── sdk/                     # SDK runtime (auto-managed)
 │   └── kit-sdk.ts           # The Script Kit SDK
 ├── db/                      # Databases
@@ -97,8 +101,9 @@ Script Kit stores all its data in `~/.scriptkit/`. Here's the layout:
 
 | Directory | Purpose |
 |-----------|---------|
-| `main/scripts/` | Your primary scripts - create `.ts` files here |
-| `main/scriptlets/` | Markdown shell command templates |
+| `kit/main/scripts/` | Your primary scripts - create `.ts` files here |
+| `kit/main/extensions/` | Markdown extension files with shell commands |
+| `kit/main/agents/` | AI agent definitions |
 | `sdk/` | Runtime SDK (auto-extracted, don't edit) |
 | `db/` | SQLite databases for Notes and AI |
 | `logs/` | Debug logs in JSONL format |
@@ -109,10 +114,10 @@ Script Kit stores all its data in `~/.scriptkit/`. Here's the layout:
 
 ### Creating a Script File
 
-Create a `.ts` file in `~/.scriptkit/main/scripts/`:
+Create a `.ts` file in `~/.scriptkit/kit/main/scripts/`:
 
 ```typescript
-// ~/.scriptkit/main/scripts/my-script.ts
+// ~/.scriptkit/kit/main/scripts/my-script.ts
 
 export const metadata = {
   name: "My Script",
@@ -452,13 +457,13 @@ Best regards,
 
 ---
 
-## Scriptlets
+## Extensions
 
-Scriptlets are markdown-based mini-scripts that execute shell commands. They're perfect for quick automations that don't need a full TypeScript file.
+Extensions are markdown-based mini-scripts that execute shell commands. They're perfect for quick automations that don't need a full TypeScript file.
 
-### Creating a Scriptlet
+### Creating an Extension
 
-Create a `.md` file in `~/.scriptkit/main/scriptlets/`:
+Create a `.md` file in `~/.scriptkit/kit/main/extensions/`:
 
 ```markdown
 <!-- 
@@ -493,7 +498,7 @@ code .
 ```
 ```
 
-When this scriptlet runs, Script Kit will prompt for `url` before executing.
+When this extension runs, Script Kit will prompt for `url` before executing.
 
 ### Multiple Variables
 
@@ -512,13 +517,13 @@ code ~/Notes/{{filename}}.md
 ```
 ```
 
-### Scriptlet Metadata
+### Extension Metadata
 
 Use HTML comments for metadata:
 
 ```markdown
 <!--
-name: My Scriptlet
+name: My Extension
 description: What it does
 author: Your Name
 shortcut: cmd+shift+s
@@ -898,9 +903,9 @@ Script Kit automatically watches for changes and reloads:
 
 | Path | What Happens |
 |------|--------------|
-| `main/scripts/*.ts` | Scripts reload in launcher |
-| `main/scripts/*.js` | Scripts reload in launcher |
-| `main/scriptlets/*.md` | Scriptlets reload in launcher |
+| `kit/main/scripts/*.ts` | Scripts reload in launcher |
+| `kit/main/scripts/*.js` | Scripts reload in launcher |
+| `kit/main/extensions/*.md` | Extensions reload in launcher |
 | `config.ts` | Configuration reloads (requires restart) |
 | `theme.json` | Theme reloads live (no restart) |
 
@@ -931,16 +936,20 @@ await notify(`New download: ${changedFile}`);
 
 ### Adding Additional Kits
 
-Beyond the default `main/` kit, you can add additional kits:
+Beyond the default `main/` kit, you can add additional kits under `~/.scriptkit/kit/`:
 
 ```
-~/.scriptkit/
+~/.scriptkit/kit/
 ├── main/              # Default kit
-│   └── scripts/
+│   ├── scripts/
+│   ├── extensions/
+│   └── agents/
 ├── work/              # Work scripts
-│   └── scripts/
+│   ├── scripts/
+│   └── extensions/
 ├── personal/          # Personal scripts
-│   └── scripts/
+│   ├── scripts/
+│   └── extensions/
 └── experiments/       # Experimental scripts
     └── scripts/
 ```
