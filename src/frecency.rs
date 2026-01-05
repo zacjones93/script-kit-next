@@ -288,24 +288,25 @@ impl FrecencyStore {
         }
 
         // Serialize directly from reference to avoid cloning the entire map
-        let json =
-            serde_json::to_string(&FrecencyDataRef { entries: &self.entries })
-                .context("Failed to serialize frecency data")?;
+        let json = serde_json::to_string(&FrecencyDataRef {
+            entries: &self.entries,
+        })
+        .context("Failed to serialize frecency data")?;
 
         // Atomic write: write to temp file, then rename
         let temp_path = self.file_path.with_extension("json.tmp");
 
         // Write to temp file
         std::fs::write(&temp_path, &json).with_context(|| {
-            format!("Failed to write temp frecency file: {}", temp_path.display())
+            format!(
+                "Failed to write temp frecency file: {}",
+                temp_path.display()
+            )
         })?;
 
         // Atomic rename (on Unix, this is atomic; on Windows, it's best-effort)
         std::fs::rename(&temp_path, &self.file_path).with_context(|| {
-            format!(
-                "Failed to rename temp file to {}",
-                self.file_path.display()
-            )
+            format!("Failed to rename temp file to {}", self.file_path.display())
         })?;
 
         info!(
@@ -346,7 +347,11 @@ impl FrecencyStore {
                 last_used: now,
                 score: 1.0,
             };
-            debug!(path = path, half_life_days = half_life, "Created new frecency entry");
+            debug!(
+                path = path,
+                half_life_days = half_life,
+                "Created new frecency entry"
+            );
             self.entries.insert(path.to_string(), entry);
         }
         self.dirty = true;
@@ -535,7 +540,9 @@ mod tests {
         assert!(
             (score - expected).abs() < 0.1,
             "Expected ~{} (25% of {}), got {} - two half-lives should give 25% remaining",
-            expected, count, score
+            expected,
+            count,
+            score
         );
     }
 
@@ -896,7 +903,7 @@ mod tests {
         let entry = FrecencyEntry {
             count: 5,
             last_used: now - (7 * SECONDS_PER_DAY as u64), // 7 days ago
-            score: 10.0, // stored score (as of last_used)
+            score: 10.0,                                   // stored score (as of last_used)
         };
 
         // score_at(now) should decay the stored score by elapsed time
@@ -937,7 +944,7 @@ mod tests {
         let mut entry = FrecencyEntry {
             count: 10,
             last_used: now - (7 * SECONDS_PER_DAY as u64), // 7 days ago
-            score: 4.0, // accumulated score as of 7 days ago
+            score: 4.0,                                    // accumulated score as of 7 days ago
         };
 
         // record_use should:

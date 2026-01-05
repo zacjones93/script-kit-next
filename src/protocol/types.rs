@@ -428,7 +428,11 @@ pub struct ExecOptions {
     /// Forward-compatibility: captures unknown fields from newer SDK versions.
     /// This allows older app versions to preserve and pass through new options
     /// without losing them.
-    #[serde(flatten, default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
     pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
@@ -1338,7 +1342,11 @@ mod tests {
 
     #[test]
     fn test_mouse_data_with_coordinates() {
-        let data = MouseData { x: 100.5, y: 200.5, button: None };
+        let data = MouseData {
+            x: 100.5,
+            y: 200.5,
+            button: None,
+        };
         assert_eq!(data.x, 100.5);
         assert_eq!(data.y, 200.5);
         assert!(data.button.is_none());
@@ -1346,13 +1354,21 @@ mod tests {
 
     #[test]
     fn test_mouse_data_with_button() {
-        let data = MouseData { x: 50.0, y: 75.0, button: Some("left".to_string()) };
+        let data = MouseData {
+            x: 50.0,
+            y: 75.0,
+            button: Some("left".to_string()),
+        };
         assert_eq!(data.button, Some("left".to_string()));
     }
 
     #[test]
     fn test_mouse_data_serialization() {
-        let data = MouseData { x: 10.0, y: 20.0, button: None };
+        let data = MouseData {
+            x: 10.0,
+            y: 20.0,
+            button: None,
+        };
         let json = serde_json::to_string(&data).unwrap();
         // Without button, should not include button field due to skip_serializing_if
         assert!(json.contains("\"x\":10"));
@@ -1362,7 +1378,11 @@ mod tests {
 
     #[test]
     fn test_mouse_data_with_button_serialization() {
-        let data = MouseData { x: 10.0, y: 20.0, button: Some("right".to_string()) };
+        let data = MouseData {
+            x: 10.0,
+            y: 20.0,
+            button: Some("right".to_string()),
+        };
         let json = serde_json::to_string(&data).unwrap();
         assert!(json.contains("\"button\":\"right\""));
     }
@@ -1388,7 +1408,11 @@ mod tests {
 
     #[test]
     fn test_mouse_data_roundtrip() {
-        let original = MouseData { x: 123.456, y: 789.012, button: Some("middle".to_string()) };
+        let original = MouseData {
+            x: 123.456,
+            y: 789.012,
+            button: Some("middle".to_string()),
+        };
         let json = serde_json::to_string(&original).unwrap();
         let restored: MouseData = serde_json::from_str(&json).unwrap();
         assert_eq!(original, restored);
@@ -1417,8 +1441,7 @@ mod tests {
 
     #[test]
     fn test_choice_semantic_id_falls_back_to_index() {
-        let choice = Choice::new("Banana".to_string(), "banana".to_string())
-            .with_semantic_id(3);
+        let choice = Choice::new("Banana".to_string(), "banana".to_string()).with_semantic_id(3);
 
         // Without key, semantic_id should use index
         assert!(choice.semantic_id.as_ref().unwrap().contains("3"));
@@ -1427,8 +1450,8 @@ mod tests {
 
     #[test]
     fn test_choice_key_serialization() {
-        let choice = Choice::new("Test".to_string(), "test".to_string())
-            .with_key("my-key".to_string());
+        let choice =
+            Choice::new("Test".to_string(), "test".to_string()).with_key("my-key".to_string());
         let json = serde_json::to_string(&choice).unwrap();
         assert!(json.contains("\"key\":\"my-key\""));
     }
@@ -1592,7 +1615,10 @@ mod tests {
     #[test]
     fn test_submit_value_to_json_value() {
         let text_val = SubmitValue::text("hello");
-        assert_eq!(text_val.to_json_value(), serde_json::Value::String("hello".to_string()));
+        assert_eq!(
+            text_val.to_json_value(),
+            serde_json::Value::String("hello".to_string())
+        );
 
         let json_val = SubmitValue::json(serde_json::json!({"key": "val"}));
         assert_eq!(json_val.to_json_value(), serde_json::json!({"key": "val"}));

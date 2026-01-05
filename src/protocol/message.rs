@@ -18,7 +18,6 @@ pub enum Message {
     // ============================================================
     // PROTOCOL HANDSHAKE
     // ============================================================
-
     /// Protocol version negotiation request (SDK → App)
     ///
     /// Optional handshake message sent at session start.
@@ -1425,11 +1424,7 @@ impl Message {
     pub fn mouse_click(x: f64, y: f64, button: Option<String>) -> Self {
         Message::Mouse {
             action: MouseAction::Click,
-            data: Some(MouseData {
-                x,
-                y,
-                button,
-            }),
+            data: Some(MouseData { x, y, button }),
         }
     }
 

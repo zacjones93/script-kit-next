@@ -67,19 +67,38 @@ pub enum DbRequest {
     /// Get total entry count
     GetCount { reply: SyncSender<usize> },
     /// Pin an entry
-    Pin { id: String, reply: SyncSender<Result<()>> },
+    Pin {
+        id: String,
+        reply: SyncSender<Result<()>>,
+    },
     /// Unpin an entry
-    Unpin { id: String, reply: SyncSender<Result<()>> },
+    Unpin {
+        id: String,
+        reply: SyncSender<Result<()>>,
+    },
     /// Remove an entry
-    Remove { id: String, reply: SyncSender<Result<()>> },
+    Remove {
+        id: String,
+        reply: SyncSender<Result<()>>,
+    },
     /// Clear all history
     Clear { reply: SyncSender<Result<()>> },
     /// Prune old entries (returns count deleted)
-    Prune { cutoff_timestamp_ms: i64, reply: SyncSender<Result<usize>> },
+    Prune {
+        cutoff_timestamp_ms: i64,
+        reply: SyncSender<Result<usize>>,
+    },
     /// Trim oversized text entries (returns count deleted)
-    TrimOversized { max_len: usize, reply: SyncSender<Result<usize>> },
+    TrimOversized {
+        max_len: usize,
+        reply: SyncSender<Result<usize>>,
+    },
     /// Update OCR text for an entry
-    UpdateOcr { id: String, text: String, reply: SyncSender<Result<()>> },
+    UpdateOcr {
+        id: String,
+        text: String,
+        reply: SyncSender<Result<()>>,
+    },
     /// Run incremental vacuum
     IncrementalVacuum { reply: SyncSender<Result<()>> },
     /// Run WAL checkpoint
@@ -134,7 +153,8 @@ fn init_connection() -> Result<Connection> {
     conn.execute_batch(
         "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; \
          PRAGMA busy_timeout = 5000; PRAGMA auto_vacuum = INCREMENTAL;",
-    ).context("Failed to set database pragmas")?;
+    )
+    .context("Failed to set database pragmas")?;
 
     create_schema(&conn)?;
     run_migrations(&conn)?;
@@ -150,8 +170,10 @@ fn create_schema(conn: &Connection) -> Result<()> {
             id TEXT PRIMARY KEY, content TEXT NOT NULL, content_hash TEXT,
             content_type TEXT NOT NULL DEFAULT 'text', timestamp INTEGER NOT NULL,
             pinned INTEGER DEFAULT 0, ocr_text TEXT
-        )", [],
-    ).context("Failed to create history table")?;
+        )",
+        [],
+    )
+    .context("Failed to create history table")?;
     Ok(())
 }
 
@@ -163,10 +185,13 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "image_height", "INTEGER")?;
     add_column_if_missing(conn, "byte_size", "INTEGER DEFAULT 0")?;
 
-    let needs_ts: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM history WHERE timestamp < 100000000000 AND timestamp > 0",
-        [], |row| row.get(0),
-    ).unwrap_or(0);
+    let needs_ts: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM history WHERE timestamp < 100000000000 AND timestamp > 0",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
 
     if needs_ts > 0 {
         conn.execute(
@@ -179,53 +204,134 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 }
 
 fn add_column_if_missing(conn: &Connection, name: &str, col_type: &str) -> Result<()> {
-    let has: bool = conn.query_row(
-        &format!("SELECT COUNT(*) FROM pragma_table_info('history') WHERE name='{}'", name),
-        [], |row| row.get::<_, i32>(0),
-    ).map(|c| c > 0).unwrap_or(false);
+    let has: bool = conn
+        .query_row(
+            &format!(
+                "SELECT COUNT(*) FROM pragma_table_info('history') WHERE name='{}'",
+                name
+            ),
+            [],
+            |row| row.get::<_, i32>(0),
+        )
+        .map(|c| c > 0)
+        .unwrap_or(false);
 
     if !has {
-        conn.execute(&format!("ALTER TABLE history ADD COLUMN {} {}", name, col_type), [])?;
+        conn.execute(
+            &format!("ALTER TABLE history ADD COLUMN {} {}", name, col_type),
+            [],
+        )?;
         info!(column = name, "Added column to history table");
     }
     Ok(())
 }
 
 fn create_indexes(conn: &Connection) -> Result<()> {
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON history(timestamp DESC)", [])?;
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_pinned_timestamp ON history(pinned DESC, timestamp DESC)", [])?;
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_dedup ON history(content_type, content_hash)", [])?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_timestamp ON history(timestamp DESC)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pinned_timestamp ON history(pinned DESC, timestamp DESC)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dedup ON history(content_type, content_hash)",
+        [],
+    )?;
     Ok(())
 }
 
 fn db_worker_loop(conn: Connection, rx: Receiver<DbRequest>) {
     info!("DB worker loop started");
     for request in rx {
-        if !handle_request(&conn, request) { break; }
+        if !handle_request(&conn, request) {
+            break;
+        }
     }
     info!("DB worker loop ended");
 }
 
 fn handle_request(conn: &Connection, req: DbRequest) -> bool {
     match req {
-        DbRequest::AddOrTouch { content, content_type, content_hash, text_preview, image_width, image_height, byte_size, reply } => {
-            let _ = reply.send(add_or_touch_impl(conn, &content, content_type, &content_hash, text_preview, image_width, image_height, byte_size));
+        DbRequest::AddOrTouch {
+            content,
+            content_type,
+            content_hash,
+            text_preview,
+            image_width,
+            image_height,
+            byte_size,
+            reply,
+        } => {
+            let _ = reply.send(add_or_touch_impl(
+                conn,
+                &content,
+                content_type,
+                &content_hash,
+                text_preview,
+                image_width,
+                image_height,
+                byte_size,
+            ));
         }
-        DbRequest::GetContent { id, reply } => { let _ = reply.send(get_content_impl(conn, &id)); }
-        DbRequest::GetEntry { id, reply } => { let _ = reply.send(get_entry_impl(conn, &id)); }
-        DbRequest::GetMeta { limit, offset, reply } => { let _ = reply.send(get_meta_impl(conn, limit, offset)); }
-        DbRequest::GetPage { limit, offset, reply } => { let _ = reply.send(get_page_impl(conn, limit, offset)); }
-        DbRequest::GetCount { reply } => { let _ = reply.send(get_count_impl(conn)); }
-        DbRequest::Pin { id, reply } => { let _ = reply.send(pin_impl(conn, &id)); }
-        DbRequest::Unpin { id, reply } => { let _ = reply.send(unpin_impl(conn, &id)); }
-        DbRequest::Remove { id, reply } => { let _ = reply.send(remove_impl(conn, &id)); }
-        DbRequest::Clear { reply } => { let _ = reply.send(clear_impl(conn)); }
-        DbRequest::Prune { cutoff_timestamp_ms, reply } => { let _ = reply.send(prune_impl(conn, cutoff_timestamp_ms)); }
-        DbRequest::TrimOversized { max_len, reply } => { let _ = reply.send(trim_oversized_impl(conn, max_len)); }
-        DbRequest::UpdateOcr { id, text, reply } => { let _ = reply.send(update_ocr_impl(conn, &id, &text)); }
-        DbRequest::IncrementalVacuum { reply } => { let _ = reply.send(vacuum_impl(conn)); }
-        DbRequest::WalCheckpoint { reply } => { let _ = reply.send(checkpoint_impl(conn)); }
-        DbRequest::Shutdown => { info!("DB worker shutdown"); return false; }
+        DbRequest::GetContent { id, reply } => {
+            let _ = reply.send(get_content_impl(conn, &id));
+        }
+        DbRequest::GetEntry { id, reply } => {
+            let _ = reply.send(get_entry_impl(conn, &id));
+        }
+        DbRequest::GetMeta {
+            limit,
+            offset,
+            reply,
+        } => {
+            let _ = reply.send(get_meta_impl(conn, limit, offset));
+        }
+        DbRequest::GetPage {
+            limit,
+            offset,
+            reply,
+        } => {
+            let _ = reply.send(get_page_impl(conn, limit, offset));
+        }
+        DbRequest::GetCount { reply } => {
+            let _ = reply.send(get_count_impl(conn));
+        }
+        DbRequest::Pin { id, reply } => {
+            let _ = reply.send(pin_impl(conn, &id));
+        }
+        DbRequest::Unpin { id, reply } => {
+            let _ = reply.send(unpin_impl(conn, &id));
+        }
+        DbRequest::Remove { id, reply } => {
+            let _ = reply.send(remove_impl(conn, &id));
+        }
+        DbRequest::Clear { reply } => {
+            let _ = reply.send(clear_impl(conn));
+        }
+        DbRequest::Prune {
+            cutoff_timestamp_ms,
+            reply,
+        } => {
+            let _ = reply.send(prune_impl(conn, cutoff_timestamp_ms));
+        }
+        DbRequest::TrimOversized { max_len, reply } => {
+            let _ = reply.send(trim_oversized_impl(conn, max_len));
+        }
+        DbRequest::UpdateOcr { id, text, reply } => {
+            let _ = reply.send(update_ocr_impl(conn, &id, &text));
+        }
+        DbRequest::IncrementalVacuum { reply } => {
+            let _ = reply.send(vacuum_impl(conn));
+        }
+        DbRequest::WalCheckpoint { reply } => {
+            let _ = reply.send(checkpoint_impl(conn));
+        }
+        DbRequest::Shutdown => {
+            info!("DB worker shutdown");
+            return false;
+        }
     }
     true
 }

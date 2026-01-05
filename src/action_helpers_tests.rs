@@ -89,7 +89,10 @@ fn test_extract_path_for_reveal_script() {
 fn test_extract_path_for_reveal_scriptlet() {
     let scriptlet_match = make_scriptlet_match();
     let result = extract_path_for_reveal(Some(&SearchResult::Scriptlet(scriptlet_match)));
-    assert!(matches!(result, Err(PathExtractionError::UnsupportedType(_))));
+    assert!(matches!(
+        result,
+        Err(PathExtractionError::UnsupportedType(_))
+    ));
     assert_eq!(
         result.unwrap_err().message().as_ref(),
         "Cannot reveal scriptlets in Finder"
@@ -100,7 +103,10 @@ fn test_extract_path_for_reveal_scriptlet() {
 fn test_extract_path_for_reveal_builtin() {
     let builtin_match = make_builtin_match();
     let result = extract_path_for_reveal(Some(&SearchResult::BuiltIn(builtin_match)));
-    assert!(matches!(result, Err(PathExtractionError::UnsupportedType(_))));
+    assert!(matches!(
+        result,
+        Err(PathExtractionError::UnsupportedType(_))
+    ));
     assert_eq!(
         result.unwrap_err().message().as_ref(),
         "Cannot reveal built-in features"

@@ -644,9 +644,11 @@ pub fn remove_entry(id: &str) -> Result<()> {
 
     // Get content first to check if it's a blob (for cleanup)
     let content: Option<String> = conn
-        .query_row("SELECT content FROM history WHERE id = ?", params![id], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT content FROM history WHERE id = ?",
+            params![id],
+            |row| row.get(0),
+        )
         .ok();
 
     let affected = conn
@@ -706,7 +708,10 @@ pub fn clear_history() -> Result<()> {
     }
 
     if !blob_contents.is_empty() {
-        debug!(count = blob_contents.len(), "Deleted blob files during history clear");
+        debug!(
+            count = blob_contents.len(),
+            "Deleted blob files during history clear"
+        );
     }
 
     clear_all_caches();

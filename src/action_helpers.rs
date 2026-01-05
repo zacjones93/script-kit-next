@@ -37,7 +37,9 @@ impl PathExtractionError {
 ///
 /// Supports: Script, App, Agent
 /// Not supported: Scriptlet, BuiltIn, Window
-pub fn extract_path_for_reveal(result: Option<&SearchResult>) -> Result<PathBuf, PathExtractionError> {
+pub fn extract_path_for_reveal(
+    result: Option<&SearchResult>,
+) -> Result<PathBuf, PathExtractionError> {
     match result {
         None => Err(PathExtractionError::NoSelection),
         Some(SearchResult::Script(m)) => Ok(m.script.path.clone()),
@@ -56,7 +58,9 @@ pub fn extract_path_for_reveal(result: Option<&SearchResult>) -> Result<PathBuf,
 }
 
 /// Extract the filesystem path from a SearchResult for copy path operations.
-pub fn extract_path_for_copy(result: Option<&SearchResult>) -> Result<PathBuf, PathExtractionError> {
+pub fn extract_path_for_copy(
+    result: Option<&SearchResult>,
+) -> Result<PathBuf, PathExtractionError> {
     match result {
         None => Err(PathExtractionError::NoSelection),
         Some(SearchResult::Script(m)) => Ok(m.script.path.clone()),
@@ -78,7 +82,9 @@ pub fn extract_path_for_copy(result: Option<&SearchResult>) -> Result<PathBuf, P
 ///
 /// Supports: Script, Agent
 /// Not supported: Scriptlet, BuiltIn, App, Window
-pub fn extract_path_for_edit(result: Option<&SearchResult>) -> Result<PathBuf, PathExtractionError> {
+pub fn extract_path_for_edit(
+    result: Option<&SearchResult>,
+) -> Result<PathBuf, PathExtractionError> {
     match result {
         None => Err(PathExtractionError::NoSelection),
         Some(SearchResult::Script(m)) => Ok(m.script.path.clone()),

@@ -272,7 +272,11 @@ impl ScriptletCache {
                     added: scriptlets.clone(),
                     ..Default::default()
                 };
-                v.insert(CachedScriptletFile::with_fingerprint(path, fingerprint, scriptlets));
+                v.insert(CachedScriptletFile::with_fingerprint(
+                    path,
+                    fingerprint,
+                    scriptlets,
+                ));
                 diff
             }
             Entry::Occupied(mut o) => {
@@ -1385,14 +1389,8 @@ mod tests {
         );
         assert_eq!(diff.file_path_changes.len(), 1);
         assert_eq!(diff.file_path_changes[0].name, "My Snippet");
-        assert_eq!(
-            diff.file_path_changes[0].old,
-            "/path/to/file.md#old-anchor"
-        );
-        assert_eq!(
-            diff.file_path_changes[0].new,
-            "/path/to/file.md#new-anchor"
-        );
+        assert_eq!(diff.file_path_changes[0].old, "/path/to/file.md#old-anchor");
+        assert_eq!(diff.file_path_changes[0].new, "/path/to/file.md#new-anchor");
     }
 
     #[test]

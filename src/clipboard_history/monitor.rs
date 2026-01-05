@@ -146,7 +146,11 @@ fn clipboard_monitor_loop(stop_flag: Arc<AtomicBool>) -> Result<()> {
     let has_change_detection = change_detector.has_changed().is_some();
 
     info!(
-        poll_interval_ms = if has_change_detection { 50 } else { POLL_INTERVAL_MS },
+        poll_interval_ms = if has_change_detection {
+            50
+        } else {
+            POLL_INTERVAL_MS
+        },
         has_change_detection = has_change_detection,
         "Clipboard monitor started"
     );
@@ -165,11 +169,7 @@ fn clipboard_monitor_loop(stop_flag: Arc<AtomicBool>) -> Result<()> {
 
         if should_check_payload {
             // Clipboard changed (or fallback mode), now read the actual payload
-            capture_clipboard_content(
-                &mut clipboard,
-                &mut last_text_hash,
-                &mut last_image_hash,
-            );
+            capture_clipboard_content(&mut clipboard, &mut last_text_hash, &mut last_image_hash);
         }
 
         // Sleep for remaining time in poll interval
@@ -235,7 +235,10 @@ fn capture_clipboard_content(
             } else {
                 // Same content, but OS detected a change - this means user copied same text again
                 // Update the timestamp to bubble this entry to the top
-                debug!(text_len = text.len(), "Same text copied again, updating timestamp");
+                debug!(
+                    text_len = text.len(),
+                    "Same text copied again, updating timestamp"
+                );
                 match add_entry(&text, ContentType::Text) {
                     Ok(entry_id) => {
                         debug!(entry_id = %entry_id, "Updated timestamp for existing text entry");

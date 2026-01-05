@@ -624,11 +624,7 @@ pub fn summarize_payload(json: &str) -> String {
     });
 
     match msg_type {
-        Some(t) => format!(
-            "{{type:{}, len:{}}}",
-            t,
-            json.len()
-        ),
+        Some(t) => format!("{{type:{}, len:{}}}", t, json.len()),
         None => format!("{{len:{}}}", json.len()),
     }
 }
@@ -668,7 +664,10 @@ pub fn log_protocol_send(fd: i32, json: &str) {
 pub fn log_protocol_recv(msg_type: &str, json_len: usize) {
     #[cfg(debug_assertions)]
     {
-        add_to_buffer("EXEC", &format!("←stdout: type={} len={}", msg_type, json_len));
+        add_to_buffer(
+            "EXEC",
+            &format!("←stdout: type={} len={}", msg_type, json_len),
+        );
         tracing::debug!(
             event_type = "protocol_recv",
             message_type = msg_type,

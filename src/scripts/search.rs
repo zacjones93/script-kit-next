@@ -443,10 +443,7 @@ pub fn fuzzy_search_scripts(scripts: &[Arc<Script>], query: &str) -> Vec<ScriptM
         // Score by description match - medium priority
         // Only use ASCII fast-path when both are ASCII
         if let Some(ref desc) = script.description {
-            if query_is_ascii
-                && desc.is_ascii()
-                && contains_ignore_ascii_case(desc, &query_lower)
-            {
+            if query_is_ascii && desc.is_ascii() && contains_ignore_ascii_case(desc, &query_lower) {
                 score += 25;
             }
         }
@@ -554,10 +551,7 @@ pub fn fuzzy_search_scriptlets(scriptlets: &[Arc<Scriptlet>], query: &str) -> Ve
         // Score by description match - medium priority
         // Only use ASCII fast-path when both are ASCII
         if let Some(ref desc) = scriptlet.description {
-            if query_is_ascii
-                && desc.is_ascii()
-                && contains_ignore_ascii_case(desc, &query_lower)
-            {
+            if query_is_ascii && desc.is_ascii() && contains_ignore_ascii_case(desc, &query_lower) {
                 score += 25;
             }
         }

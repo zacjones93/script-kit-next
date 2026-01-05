@@ -302,7 +302,10 @@ fn rebind_hotkey_transactional(
 
     logging::log(
         "HOTKEY",
-        &format!("Hot-reloaded {:?} hotkey: {} (id: {})", action, display, new_id),
+        &format!(
+            "Hot-reloaded {:?} hotkey: {} (id: {})",
+            action, display, new_id
+        ),
     );
     true
 }
@@ -328,7 +331,8 @@ pub fn update_hotkeys(cfg: &config::Config) {
     let main_config = &cfg.hotkey;
     if let Some((mods, code)) = parse_hotkey_config(main_config) {
         let display = hotkey_config_to_display(main_config);
-        let success = rebind_hotkey_transactional(&manager_guard, HotkeyAction::Main, mods, code, &display);
+        let success =
+            rebind_hotkey_transactional(&manager_guard, HotkeyAction::Main, mods, code, &display);
         MAIN_HOTKEY_REGISTERED.store(success, Ordering::Relaxed);
     }
 
@@ -855,12 +859,18 @@ fn register_builtin_hotkey(
     match manager.register(hotkey) {
         Ok(()) => {
             let mut routes_guard = routes().write().unwrap();
-            routes_guard.add_route(id, RegisteredHotkey {
-                hotkey,
-                action: action.clone(),
-                display: display.clone(),
-            });
-            logging::log("HOTKEY", &format!("Registered {:?} hotkey {} (id: {})", action, display, id));
+            routes_guard.add_route(
+                id,
+                RegisteredHotkey {
+                    hotkey,
+                    action: action.clone(),
+                    display: display.clone(),
+                },
+            );
+            logging::log(
+                "HOTKEY",
+                &format!("Registered {:?} hotkey {} (id: {})", action, display, id),
+            );
             Some(id)
         }
         Err(e) => {
@@ -884,16 +894,28 @@ fn register_script_hotkey_internal(
     match manager.register(hotkey) {
         Ok(()) => {
             let mut routes_guard = routes().write().unwrap();
-            routes_guard.add_route(id, RegisteredHotkey {
-                hotkey,
-                action: HotkeyAction::Script(path.to_string()),
-                display: shortcut.to_string(),
-            });
-            logging::log("HOTKEY", &format!("Registered script shortcut '{}' for {} (id: {})", shortcut, name, id));
+            routes_guard.add_route(
+                id,
+                RegisteredHotkey {
+                    hotkey,
+                    action: HotkeyAction::Script(path.to_string()),
+                    display: shortcut.to_string(),
+                },
+            );
+            logging::log(
+                "HOTKEY",
+                &format!(
+                    "Registered script shortcut '{}' for {} (id: {})",
+                    shortcut, name, id
+                ),
+            );
             Some(id)
         }
         Err(e) => {
-            logging::log("HOTKEY", &format!("{} (script: {})", format_hotkey_error(&e, shortcut), name));
+            logging::log(
+                "HOTKEY",
+                &format!("{} (script: {})", format_hotkey_error(&e, shortcut), name),
+            );
             None
         }
     }
@@ -929,7 +951,11 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
         }
 
         // Register notes and AI hotkeys
-        register_builtin_hotkey(&manager_guard, HotkeyAction::Notes, &config.get_notes_hotkey());
+        register_builtin_hotkey(
+            &manager_guard,
+            HotkeyAction::Notes,
+            &config.get_notes_hotkey(),
+        );
         register_builtin_hotkey(&manager_guard, HotkeyAction::Ai, &config.get_ai_hotkey());
 
         // Register script shortcuts
@@ -939,7 +965,9 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
         for script in &all_scripts {
             if let Some(ref shortcut) = script.shortcut {
                 let path = script.path.to_string_lossy().to_string();
-                if register_script_hotkey_internal(&manager_guard, &path, shortcut, &script.name).is_some() {
+                if register_script_hotkey_internal(&manager_guard, &path, shortcut, &script.name)
+                    .is_some()
+                {
                     script_count += 1;
                 }
             }
@@ -948,23 +976,36 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
         let all_scriptlets = scripts::load_scriptlets();
         for scriptlet in &all_scriptlets {
             if let Some(ref shortcut) = scriptlet.shortcut {
-                let path = scriptlet.file_path.clone().unwrap_or_else(|| scriptlet.name.clone());
-                if register_script_hotkey_internal(&manager_guard, &path, shortcut, &scriptlet.name).is_some() {
+                let path = scriptlet
+                    .file_path
+                    .clone()
+                    .unwrap_or_else(|| scriptlet.name.clone());
+                if register_script_hotkey_internal(&manager_guard, &path, shortcut, &scriptlet.name)
+                    .is_some()
+                {
                     script_count += 1;
                 }
             }
         }
 
-        logging::log("HOTKEY", &format!("Registered {} script/scriptlet shortcuts", script_count));
+        logging::log(
+            "HOTKEY",
+            &format!("Registered {} script/scriptlet shortcuts", script_count),
+        );
 
         // Log routing table summary
         {
             let routes_guard = routes().read().unwrap();
-            logging::log("HOTKEY", &format!(
-                "Routing table: main={:?}, notes={:?}, ai={:?}, scripts={}",
-                routes_guard.main_id, routes_guard.notes_id, routes_guard.ai_id,
-                routes_guard.script_paths.len()
-            ));
+            logging::log(
+                "HOTKEY",
+                &format!(
+                    "Routing table: main={:?}, notes={:?}, ai={:?}, scripts={}",
+                    routes_guard.main_id,
+                    routes_guard.notes_id,
+                    routes_guard.ai_id,
+                    routes_guard.script_paths.len()
+                ),
+            );
         }
 
         drop(manager_guard);
@@ -989,10 +1030,16 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
                         if hotkey_channel().0.try_send(()).is_err() {
                             logging::log("HOTKEY", "Main hotkey channel full/closed");
                         }
-                        logging::log("HOTKEY", &format!("Main hotkey pressed (trigger #{})", count + 1));
+                        logging::log(
+                            "HOTKEY",
+                            &format!("Main hotkey pressed (trigger #{})", count + 1),
+                        );
                     }
                     Some(HotkeyAction::Notes) => {
-                        logging::log("HOTKEY", "Notes hotkey pressed - dispatching to main thread");
+                        logging::log(
+                            "HOTKEY",
+                            "Notes hotkey pressed - dispatching to main thread",
+                        );
                         dispatch_notes_hotkey();
                     }
                     Some(HotkeyAction::Ai) => {
@@ -1003,7 +1050,10 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
                         logging::log("HOTKEY", &format!("Script shortcut triggered: {}", path));
                         // NON-BLOCKING: Use try_send to prevent hotkey thread from blocking
                         if script_hotkey_channel().0.try_send(path.clone()).is_err() {
-                            logging::log("HOTKEY", &format!("Script channel full/closed for {}", path));
+                            logging::log(
+                                "HOTKEY",
+                                &format!("Script channel full/closed for {}", path),
+                            );
                         }
                     }
                     None => {
@@ -1067,7 +1117,10 @@ mod tests {
 
             assert_eq!(routes.script_paths.get(&path), Some(&hotkey.id()));
             assert_eq!(routes.get_script_id(&path), Some(hotkey.id()));
-            assert_eq!(routes.get_action(hotkey.id()), Some(HotkeyAction::Script(path)));
+            assert_eq!(
+                routes.get_action(hotkey.id()),
+                Some(HotkeyAction::Script(path))
+            );
         }
 
         #[test]

@@ -120,9 +120,7 @@ fn decode_legacy_rgba(content: &str) -> Option<arboard::ImageData<'static>> {
 
     // Validate byte length with overflow-safe math
     // expected = width * height * 4 (RGBA = 4 bytes per pixel)
-    let expected = (width as u64)
-        .checked_mul(height as u64)?
-        .checked_mul(4)?;
+    let expected = (width as u64).checked_mul(height as u64)?.checked_mul(4)?;
 
     if bytes.len() != expected as usize {
         warn!(
@@ -520,7 +518,9 @@ mod tests {
         };
 
         let encoded = encode_image_as_png(&original).expect("Should encode as PNG");
-        let base64_data = encoded.strip_prefix("png:").expect("Should have png: prefix");
+        let base64_data = encoded
+            .strip_prefix("png:")
+            .expect("Should have png: prefix");
 
         // Test fast extraction
         let dims = get_png_dimensions_fast(base64_data);

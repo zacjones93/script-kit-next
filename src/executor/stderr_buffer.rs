@@ -400,9 +400,18 @@ mod tests {
 
         // Buffer should contain all lines
         let contents = capture.buffer.get_contents();
-        assert!(contents.contains("Error line 1"), "Should contain first error line");
-        assert!(contents.contains("Error line 2"), "Should contain second error line");
-        assert!(contents.contains("Stack trace here"), "Should contain stack trace");
+        assert!(
+            contents.contains("Error line 1"),
+            "Should contain first error line"
+        );
+        assert!(
+            contents.contains("Error line 2"),
+            "Should contain second error line"
+        );
+        assert!(
+            contents.contains("Stack trace here"),
+            "Should contain stack trace"
+        );
     }
 
     #[test]
@@ -417,7 +426,10 @@ mod tests {
 
         // get_contents_with_timeout should wait and return content
         let contents = capture.get_contents_with_timeout(Duration::from_millis(500));
-        assert!(contents.contains("Test error output"), "Should contain error output");
+        assert!(
+            contents.contains("Test error output"),
+            "Should contain error output"
+        );
     }
 
     #[test]
@@ -435,7 +447,10 @@ mod tests {
 
         // Buffer should be empty
         let contents = capture.buffer.get_contents();
-        assert!(contents.is_empty(), "Empty stderr should produce empty buffer");
+        assert!(
+            contents.is_empty(),
+            "Empty stderr should produce empty buffer"
+        );
     }
 
     #[test]
@@ -473,6 +488,9 @@ mod tests {
 
         // Subsequent calls should still return true
         let completed2 = capture.wait_with_timeout(Duration::from_millis(1));
-        assert!(completed2, "Should return true immediately if already finished");
+        assert!(
+            completed2,
+            "Should return true immediately if already finished"
+        );
     }
 }

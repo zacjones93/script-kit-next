@@ -560,7 +560,11 @@ mod tests {
         assert!(result.is_ok(), "Valid SVG should render: {:?}", result);
 
         let rgba = result.unwrap();
-        assert_eq!(rgba.len(), 16 * 16 * 4, "RGBA data should be width*height*4 bytes");
+        assert_eq!(
+            rgba.len(),
+            16 * 16 * 4,
+            "RGBA data should be width*height*4 bytes"
+        );
     }
 
     #[test]

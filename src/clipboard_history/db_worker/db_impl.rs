@@ -133,9 +133,11 @@ pub fn get_page_impl(conn: &Connection, limit: usize, offset: usize) -> Vec<Clip
 }
 
 pub fn get_count_impl(conn: &Connection) -> usize {
-    conn.query_row("SELECT COUNT(*) FROM history", [], |row| row.get::<_, i64>(0))
-        .map(|c| c as usize)
-        .unwrap_or(0)
+    conn.query_row("SELECT COUNT(*) FROM history", [], |row| {
+        row.get::<_, i64>(0)
+    })
+    .map(|c| c as usize)
+    .unwrap_or(0)
 }
 
 pub fn pin_impl(conn: &Connection, id: &str) -> Result<()> {
@@ -172,7 +174,8 @@ pub fn remove_impl(conn: &Connection, id: &str) -> Result<()> {
 }
 
 pub fn clear_impl(conn: &Connection) -> Result<()> {
-    conn.execute("DELETE FROM history", []).context("Failed to clear history")?;
+    conn.execute("DELETE FROM history", [])
+        .context("Failed to clear history")?;
     info!("Cleared all clipboard history");
     Ok(())
 }
@@ -202,14 +205,21 @@ pub fn trim_oversized_impl(conn: &Connection, max_len: usize) -> Result<usize> {
         )
         .context("Failed to trim oversized text entries")?;
     if deleted > 0 {
-        info!(deleted, max_len = max_len_db, "Trimmed oversized text entries");
+        info!(
+            deleted,
+            max_len = max_len_db,
+            "Trimmed oversized text entries"
+        );
     }
     Ok(deleted)
 }
 
 pub fn update_ocr_impl(conn: &Connection, id: &str, text: &str) -> Result<()> {
     let affected = conn
-        .execute("UPDATE history SET ocr_text = ? WHERE id = ?", params![text, id])
+        .execute(
+            "UPDATE history SET ocr_text = ? WHERE id = ?",
+            params![text, id],
+        )
         .context("Failed to update OCR text")?;
     if affected == 0 {
         anyhow::bail!("Entry not found: {}", id);
@@ -219,13 +229,15 @@ pub fn update_ocr_impl(conn: &Connection, id: &str, text: &str) -> Result<()> {
 }
 
 pub fn vacuum_impl(conn: &Connection) -> Result<()> {
-    conn.execute_batch("PRAGMA incremental_vacuum(100);").context("Vacuum failed")?;
+    conn.execute_batch("PRAGMA incremental_vacuum(100);")
+        .context("Vacuum failed")?;
     debug!("Incremental vacuum completed");
     Ok(())
 }
 
 pub fn checkpoint_impl(conn: &Connection) -> Result<()> {
-    conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);").context("WAL checkpoint failed")?;
+    conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);")
+        .context("WAL checkpoint failed")?;
     debug!("WAL checkpoint completed");
     Ok(())
 }

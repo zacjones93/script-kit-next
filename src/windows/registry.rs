@@ -110,7 +110,10 @@ pub fn register_window(role: WindowRole, handle: WindowHandle<Root>) {
 /// # Returns
 /// The window handle if registered (WindowHandle is Copy)
 pub fn get_window(role: WindowRole) -> Option<WindowHandle<Root>> {
-    registry().lock().ok().and_then(|reg| reg.handles.get(&role).copied())
+    registry()
+        .lock()
+        .ok()
+        .and_then(|reg| reg.handles.get(&role).copied())
 }
 
 /// Clear a window registration.

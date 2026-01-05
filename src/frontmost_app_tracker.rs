@@ -221,9 +221,7 @@ fn setup_workspace_observer() {
             let _ = std::panic::catch_unwind(|| {
                 // Create an autorelease pool to drain autoreleased objects
                 // from msg_send! calls (e.g., NSStrings created in this callback)
-                objc::rc::autoreleasepool(|| {
-                    unsafe { handle_app_activation_inner(notification) }
-                });
+                objc::rc::autoreleasepool(|| unsafe { handle_app_activation_inner(notification) });
             });
         }
 

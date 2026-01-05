@@ -41,12 +41,8 @@ pub fn store_blob(png_bytes: &[u8]) -> Result<String> {
 
     // Skip write if file already exists (content-addressed)
     if !blob_path.exists() {
-        fs::write(&blob_path, png_bytes).with_context(|| {
-            format!(
-                "Failed to write blob to {:?}",
-                blob_path.display()
-            )
-        })?;
+        fs::write(&blob_path, png_bytes)
+            .with_context(|| format!("Failed to write blob to {:?}", blob_path.display()))?;
         debug!(hash = %hash, size = png_bytes.len(), "Stored new blob");
     } else {
         debug!(hash = %hash, "Blob already exists, skipping write");
