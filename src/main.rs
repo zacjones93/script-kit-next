@@ -1058,7 +1058,13 @@ impl Render for ScriptListApp {
         let grid_config = self.grid_config.clone();
 
         // Build component bounds for the current view (for debug overlay)
-        let component_bounds = self.build_component_bounds(window_size);
+        // P0 FIX: Only compute bounds when grid overlay is actually enabled
+        // Previously this was computed unconditionally on every frame
+        let component_bounds = if grid_config.is_some() {
+            self.build_component_bounds(window_size)
+        } else {
+            Vec::new()
+        };
 
         // Build warning banner if needed (bun not available)
         let warning_banner = if self.show_bun_warning {
