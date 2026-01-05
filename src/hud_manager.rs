@@ -348,7 +348,8 @@ pub fn show_hud(text: String, duration_ms: Option<u64>, cx: &mut App) {
     match window_result {
         Ok(window_handle) => {
             // Configure the window as a floating overlay
-            configure_hud_window_by_bounds(expected_bounds);
+            // Regular HUDs without actions are click-through (true)
+            configure_hud_window_by_bounds(expected_bounds, true);
 
             // Generate unique ID for this HUD
             let hud_id = next_hud_id();
@@ -490,7 +491,8 @@ pub fn show_hud_with_action(
     match window_result {
         Ok(window_handle) => {
             // Configure the window as a floating overlay
-            configure_hud_window_by_bounds(expected_bounds);
+            // Action HUDs need to receive mouse events for button clicks (click_through = false)
+            configure_hud_window_by_bounds(expected_bounds, false);
 
             // Generate unique ID for this HUD
             let hud_id = next_hud_id();
@@ -642,8 +644,13 @@ fn calculate_hud_position(cx: &App) -> (f32, f32) {
 }
 
 /// Configure a HUD window by finding it based on expected bounds
+///
+/// # Arguments
+/// * `expected_bounds` - The bounds used to identify the HUD window
+/// * `click_through` - If true, window ignores mouse events (for plain HUDs).
+///   If false, window receives mouse events (for action HUDs with buttons).
 #[cfg(target_os = "macos")]
-fn configure_hud_window_by_bounds(expected_bounds: gpui::Bounds<Pixels>) {
+fn configure_hud_window_by_bounds(expected_bounds: gpui::Bounds<Pixels>, click_through: bool) {
     use cocoa::appkit::NSApp;
     use cocoa::base::{id, nil};
     use cocoa::foundation::NSRect;
@@ -684,8 +691,15 @@ fn configure_hud_window_by_bounds(expected_bounds: gpui::Bounds<Pixels>) {
                 let collection_behavior: u64 = 1 | 16 | 64;
                 let _: () = msg_send![window, setCollectionBehavior: collection_behavior];
 
-                // Ignore mouse events - click-through
-                let _: () = msg_send![window, setIgnoresMouseEvents: true];
+                // Set mouse event handling based on whether HUD has clickable actions
+                // Action HUDs need to receive mouse events for button clicks
+                // Use cocoa::base::BOOL (i8) for proper ObjC BOOL type on macOS
+                let ignores_mouse: cocoa::base::BOOL = if click_through {
+                    cocoa::base::YES
+                } else {
+                    cocoa::base::NO
+                };
+                let _: () = msg_send![window, setIgnoresMouseEvents: ignores_mouse];
 
                 // Don't show in window menu
                 let _: () = msg_send![window, setExcludedFromWindowsMenu: true];
@@ -693,11 +707,16 @@ fn configure_hud_window_by_bounds(expected_bounds: gpui::Bounds<Pixels>) {
                 // Order to front without activating the app
                 let _: () = msg_send![window, orderFront: nil];
 
+                let click_status = if click_through {
+                    "click-through"
+                } else {
+                    "clickable"
+                };
                 logging::log(
                     "HUD",
                     &format!(
-                        "Configured HUD NSWindow at ({:.0}, {:.0}): level={}, click-through, orderFront",
-                        frame.origin.x, frame.origin.y, hud_level
+                        "Configured HUD NSWindow at ({:.0}, {:.0}): level={}, {}, orderFront",
+                        frame.origin.x, frame.origin.y, hud_level, click_status
                     ),
                 );
                 return;
@@ -715,7 +734,7 @@ fn configure_hud_window_by_bounds(expected_bounds: gpui::Bounds<Pixels>) {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn configure_hud_window_by_bounds(_expected_bounds: gpui::Bounds<Pixels>) {
+fn configure_hud_window_by_bounds(_expected_bounds: gpui::Bounds<Pixels>, _click_through: bool) {
     logging::log(
         "HUD",
         "Non-macOS platform, skipping HUD window configuration",
@@ -912,5 +931,59 @@ mod tests {
         assert!(id3 > id2, "IDs should be strictly increasing");
         assert_ne!(id1, id2, "IDs should be unique");
         assert_ne!(id2, id3, "IDs should be unique");
+    }
+
+    #[test]
+    fn test_hud_view_has_action() {
+        // Test that HudView correctly reports whether it has an action
+        let view_without_action = HudView::new("Test message".to_string());
+        assert!(
+            !view_without_action.has_action(),
+            "HudView without action should report has_action() = false"
+        );
+
+        let view_with_action = HudView::with_action(
+            "Test message".to_string(),
+            "Open".to_string(),
+            HudAction::OpenUrl("https://example.com".to_string()),
+        );
+        assert!(
+            view_with_action.has_action(),
+            "HudView with action should report has_action() = true"
+        );
+    }
+
+    #[test]
+    fn test_hud_action_execute_open_url() {
+        // Test that HudAction::OpenUrl can be created and executed doesn't panic
+        // (actual URL opening is mocked in unit tests)
+        let action = HudAction::OpenUrl("https://example.com".to_string());
+        // Just verify it can be constructed - actual execution requires system integration
+        match action {
+            HudAction::OpenUrl(url) => assert_eq!(url, "https://example.com"),
+            _ => panic!("Expected OpenUrl variant"),
+        }
+    }
+
+    #[test]
+    fn test_hud_action_execute_open_file() {
+        // Test that HudAction::OpenFile can be created
+        let action = HudAction::OpenFile(std::path::PathBuf::from("/tmp/test.txt"));
+        match action {
+            HudAction::OpenFile(path) => {
+                assert_eq!(path, std::path::PathBuf::from("/tmp/test.txt"))
+            }
+            _ => panic!("Expected OpenFile variant"),
+        }
+    }
+
+    #[test]
+    fn test_hud_action_execute_run_command() {
+        // Test that HudAction::RunCommand can be created
+        let action = HudAction::RunCommand("echo hello".to_string());
+        match action {
+            HudAction::RunCommand(cmd) => assert_eq!(cmd, "echo hello"),
+            _ => panic!("Expected RunCommand variant"),
+        }
     }
 }
