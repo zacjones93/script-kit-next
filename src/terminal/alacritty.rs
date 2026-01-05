@@ -557,17 +557,35 @@ impl TerminalHandle {
     /// # Returns
     ///
     /// A vector of terminal events generated during processing.
+    /// Processes PTY output through terminal parser.
+    ///
+    /// Reads available data from the channel (sent by background reader thread)
+    /// and processes it through the VTE parser to update the terminal grid.
+    /// Returns a tuple of (had_output, events) where had_output is true if any
+    /// data was processed (grid may have changed), and events are terminal events
+    /// like Bell, Title changes, or Exit.
+    ///
+    /// This method is non-blocking - it only processes data that's already
+    /// been read by the background thread.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of (had_output: bool, events: Vec<TerminalEvent>)
     #[instrument(level = "trace", skip(self))]
-    pub fn process(&mut self) -> Vec<TerminalEvent> {
+    pub fn process(&mut self) -> (bool, Vec<TerminalEvent>) {
+        let mut had_output = false;
+
         // Process all available data from the background reader thread (non-blocking)
         while let Ok(data) = self.pty_output_rx.try_recv() {
             trace!(bytes = data.len(), "Processing PTY data from channel");
             let mut state = self.state.lock().unwrap();
             state.process_bytes(&data);
+            had_output = true; // Grid content may have changed
         }
 
         // Collect and return events
-        self.event_proxy.take_events()
+        let events = self.event_proxy.take_events();
+        (had_output, events)
     }
 
     /// Sends keyboard input bytes to the terminal.
@@ -1441,7 +1459,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(100));
 
             // Process should have run
-            terminal.process();
+            let _ = terminal.process();
 
             let content = terminal.content();
             // The output should contain "hello" somewhere
@@ -1463,7 +1481,7 @@ mod tests {
         if let Ok(mut terminal) = result {
             // Wait for shell to start and command to execute
             std::thread::sleep(std::time::Duration::from_millis(500));
-            terminal.process();
+            let _ = terminal.process();
 
             let content = terminal.content();
             let all_text: String = content.lines.join("\n");
@@ -1489,7 +1507,7 @@ mod tests {
 
         if let Ok(mut terminal) = result {
             std::thread::sleep(std::time::Duration::from_millis(500));
-            terminal.process();
+            let _ = terminal.process();
 
             let content = terminal.content();
             let all_text: String = content.lines.join("\n");
@@ -1515,7 +1533,7 @@ mod tests {
 
         if let Ok(mut terminal) = result {
             std::thread::sleep(std::time::Duration::from_millis(500));
-            terminal.process();
+            let _ = terminal.process();
 
             let content = terminal.content();
             let all_text: String = content.lines.join("\n");
@@ -1541,7 +1559,7 @@ mod tests {
 
         if let Ok(mut terminal) = result {
             std::thread::sleep(std::time::Duration::from_millis(500));
-            terminal.process();
+            let _ = terminal.process();
 
             let content = terminal.content();
             let all_text: String = content.lines.join("\n");
@@ -1551,6 +1569,154 @@ mod tests {
                 all_text.contains("HELLO") || all_text.contains("echo") || all_text.contains("tr"),
                 "Pipe should work, expected 'HELLO' or command, got: {}",
                 all_text
+            );
+        }
+    }
+
+    // ========================================================================
+    // Performance Regression Tests
+    //
+    // These tests ensure terminal performance characteristics are maintained.
+    // They validate algorithmic complexity and key constants.
+    // ========================================================================
+
+    #[test]
+    fn test_perf_pty_read_buffer_size() {
+        // REGRESSION: PTY read buffer should be large enough to batch reads
+        // but not so large that we waste memory
+
+        // Compile-time verification
+        const _: () = assert!(PTY_READ_BUFFER_SIZE >= 4096);
+        const _: () = assert!(PTY_READ_BUFFER_SIZE <= 65536);
+
+        // Runtime check with descriptive message
+        let size = PTY_READ_BUFFER_SIZE;
+        assert!(
+            (4096..=65536).contains(&size),
+            "PTY buffer size {} outside 4096-65536 range",
+            size
+        );
+    }
+
+    #[test]
+    fn test_perf_scrollback_default() {
+        // REGRESSION: Default scrollback should be reasonable
+        // Too small = users can't review output
+        // Too large = memory waste
+
+        // Compile-time verification
+        const _: () = assert!(DEFAULT_SCROLLBACK_LINES >= 1000);
+        const _: () = assert!(DEFAULT_SCROLLBACK_LINES <= 50000);
+
+        // Runtime check with descriptive message
+        let lines = DEFAULT_SCROLLBACK_LINES;
+        assert!(
+            (1000..=50000).contains(&lines),
+            "Scrollback {} outside 1000-50000 range",
+            lines
+        );
+    }
+
+    #[test]
+    fn test_perf_content_method_allocations() {
+        // REGRESSION: content() should use with_capacity for vectors
+        // This test documents the expected allocation pattern.
+        //
+        // The content() method creates:
+        // - lines: Vec<String> with capacity = screen_lines
+        // - styled_lines: Vec<Vec<TerminalCell>> with capacity = screen_lines
+        // - Each styled_row: Vec<TerminalCell> with capacity = columns
+        //
+        // For 80x24 terminal: 24 allocations total (not 24 + 24*80)
+        //
+        // If you change content() to not use with_capacity, performance
+        // will regress due to reallocations during render.
+
+        let result = TerminalHandle::new(80, 24);
+        if let Ok(terminal) = result {
+            // Call content() multiple times - should not cause memory growth
+            // due to reallocation (though we can't test this directly)
+            let content1 = terminal.content();
+            let content2 = terminal.content();
+
+            // Verify structure is correct
+            assert_eq!(content1.styled_lines.len(), 24, "Should have 24 rows");
+            assert_eq!(content2.styled_lines.len(), 24, "Should have 24 rows");
+            assert_eq!(
+                content1.styled_lines[0].len(),
+                80,
+                "Each row should have 80 cells"
+            );
+        }
+    }
+
+    #[test]
+    fn test_perf_process_is_nonblocking() {
+        // REGRESSION: process() must be non-blocking
+        // It uses try_recv() on the channel, not blocking recv().
+        //
+        // This test documents the expected behavior. If process() becomes
+        // blocking, the UI will freeze waiting for PTY output.
+        //
+        // We can't directly test non-blocking behavior, but we can verify
+        // process() returns quickly even with no output.
+
+        let result = TerminalHandle::new(80, 24);
+        if let Ok(mut terminal) = result {
+            let start = std::time::Instant::now();
+
+            // Call process() multiple times - should be fast
+            for _ in 0..100 {
+                let _ = terminal.process();
+            }
+
+            let elapsed = start.elapsed();
+            assert!(
+                elapsed.as_millis() < 100,
+                "process() should be non-blocking, but 100 calls took {}ms",
+                elapsed.as_millis()
+            );
+        }
+    }
+
+    #[test]
+    fn test_perf_constants_unchanged() {
+        // REGRESSION: Document key constants that affect performance
+        // If these change, verify performance wasn't impacted
+        assert_eq!(
+            DEFAULT_SCROLLBACK_LINES, 10_000,
+            "DEFAULT_SCROLLBACK_LINES changed!"
+        );
+        assert_eq!(PTY_READ_BUFFER_SIZE, 4096, "PTY_READ_BUFFER_SIZE changed!");
+    }
+
+    #[test]
+    fn test_perf_selection_range_is_lazy() {
+        // REGRESSION: Selection range calculation should only happen
+        // when there's actually a selection. content() should check
+        // selection.as_ref().and_then(...) not unconditionally compute.
+        //
+        // This test documents expected behavior. If selection calculation
+        // becomes eager (computed even without selection), it adds O(cols*rows)
+        // work per frame.
+
+        let result = TerminalHandle::new(80, 24);
+        if let Ok(terminal) = result {
+            // No selection - should be fast
+            let start = std::time::Instant::now();
+            for _ in 0..100 {
+                let content = terminal.content();
+                // Should have no selected cells
+                assert!(
+                    content.selected_cells.is_empty(),
+                    "No selection, should have no selected cells"
+                );
+            }
+            let elapsed = start.elapsed();
+            assert!(
+                elapsed.as_millis() < 500,
+                "content() without selection should be fast, took {}ms for 100 calls",
+                elapsed.as_millis()
             );
         }
     }
