@@ -909,14 +909,15 @@ Script Kit automatically watches for changes and reloads:
 | `kit/main/scripts/*.ts` | Scripts reload in launcher |
 | `kit/main/scripts/*.js` | Scripts reload in launcher |
 | `kit/main/extensions/*.md` | Extensions reload in launcher |
-| `kit/config.ts` | Configuration reloads (requires restart) |
+| `kit/config.ts` | Most settings reload live (hotkey needs restart) |
 | `kit/theme.json` | Theme reloads live (no restart) |
 
 ### Auto-Reload Behavior
 
 - **Scripts**: Changes appear immediately in the launcher
 - **Theme**: Colors update live without restart
-- **Config**: Most settings require an app restart
+- **Config**: Most settings reload live (font sizes, padding, built-ins)
+- **Main hotkey**: Requires app restart to take effect
 
 ### File Watch Triggers
 
