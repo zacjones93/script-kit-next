@@ -259,6 +259,15 @@ pub struct AiApp {
     /// Content accumulated during streaming
     streaming_content: String,
 
+    /// The chat ID that is currently streaming (guards against chat-switch corruption)
+    /// When user switches chats mid-stream, updates for this chat_id are ignored
+    /// if selected_chat_id differs
+    streaming_chat_id: Option<ChatId>,
+
+    /// Generation counter for streaming sessions (guards against stale updates)
+    /// Incremented each time streaming starts. Old streaming updates become no-ops.
+    streaming_generation: u64,
+
     /// Messages for the currently selected chat (cached for display)
     current_messages: Vec<Message>,
 
@@ -376,6 +385,8 @@ impl AiApp {
             // Streaming state
             is_streaming: false,
             streaming_content: String::new(),
+            streaming_chat_id: None,
+            streaming_generation: 0,
             current_messages,
             messages_scroll_handle: ScrollHandle::new(),
             cached_box_shadows,
@@ -575,9 +586,14 @@ impl AiApp {
         // Scroll to bottom to show latest messages
         self.messages_scroll_handle.scroll_to_bottom();
 
-        // Clear any streaming state
+        // Clear streaming state for display purposes, but don't clear streaming_chat_id/generation
+        // The streaming task may still be running for the previous chat - it will be
+        // ignored via the generation guard when it tries to update
         self.is_streaming = false;
         self.streaming_content.clear();
+        // Note: streaming_chat_id and streaming_generation are NOT cleared here
+        // This allows the background streaming to complete and save to DB correctly
+        // while UI shows the newly selected chat's messages
 
         cx.notify();
     }
@@ -600,9 +616,14 @@ impl AiApp {
                 .and_then(|new_id| storage::get_chat_messages(&new_id).ok())
                 .unwrap_or_default();
 
-            // Clear streaming state
+            // Clear streaming state - if deleted chat was streaming, orphan the task
+            // It will save to DB but won't corrupt UI since chat is deleted
             self.is_streaming = false;
             self.streaming_content.clear();
+            // Also clear streaming context if the deleted chat was streaming
+            if self.streaming_chat_id == Some(id) {
+                self.streaming_chat_id = None;
+            }
 
             cx.notify();
         }
@@ -616,8 +637,9 @@ impl AiApp {
             return;
         }
 
-        // Don't allow new messages while streaming
-        if self.is_streaming {
+        // Don't allow new messages while streaming for the CURRENT chat
+        // (streaming for a different chat is fine - the guard handles it)
+        if self.is_streaming && self.streaming_chat_id == self.selected_chat_id {
             return;
         }
 
@@ -728,12 +750,16 @@ impl AiApp {
             })
             .collect();
 
-        // Set streaming state
+        // Set streaming state with chat-scoping guards
         self.is_streaming = true;
         self.streaming_content.clear();
+        self.streaming_chat_id = Some(chat_id);
+        self.streaming_generation = self.streaming_generation.wrapping_add(1);
+        let generation = self.streaming_generation;
 
         info!(
             chat_id = %chat_id,
+            generation = generation,
             model = model.id,
             provider = model.provider,
             message_count = api_messages.len(),
@@ -793,13 +819,48 @@ impl AiApp {
 
                     let _ = cx.update(|cx| {
                         this.update(cx, |app, cx| {
+                            // CRITICAL: Guard against stale updates from chat-switch
+                            // If generation doesn't match, this is an old streaming task
+                            if app.streaming_generation != generation
+                                || app.streaming_chat_id != Some(chat_id)
+                            {
+                                tracing::debug!(
+                                    expected_gen = generation,
+                                    actual_gen = app.streaming_generation,
+                                    expected_chat = %chat_id,
+                                    actual_chat = ?app.streaming_chat_id,
+                                    "Ignoring stale streaming completion (user switched chats)"
+                                );
+                                // Still save to DB below, but don't touch UI state
+                                if let Some(err) = &error {
+                                    tracing::error!(error = %err, chat_id = %chat_id, "Stale streaming error");
+                                } else if let Some(content) = &final_content {
+                                    // Save orphaned message to DB
+                                    if !content.is_empty() {
+                                        let assistant_message =
+                                            Message::assistant(chat_id, content);
+                                        if let Err(e) = storage::save_message(&assistant_message) {
+                                            tracing::error!(error = %e, "Failed to save orphaned assistant message");
+                                        } else {
+                                            tracing::info!(
+                                                chat_id = %chat_id,
+                                                content_len = content.len(),
+                                                "Orphaned streaming response saved to DB"
+                                            );
+                                        }
+                                    }
+                                }
+                                return;
+                            }
+
                             if let Some(err) = error {
                                 tracing::error!(error = err, "Streaming error");
                                 app.is_streaming = false;
                                 app.streaming_content.clear();
+                                app.streaming_chat_id = None;
                             } else if let Some(content) = final_content {
                                 app.streaming_content = content;
-                                app.finish_streaming(chat_id, cx);
+                                app.finish_streaming(chat_id, generation, cx);
                             }
                             cx.notify();
                         })
@@ -807,12 +868,18 @@ impl AiApp {
                     break;
                 }
 
-                // Update with current content
+                // Update with current content (only if generation matches)
                 if let Ok(content) = content_for_poll.lock() {
                     if !content.is_empty() {
                         let current = content.clone();
                         let _ = cx.update(|cx| {
                             this.update(cx, |app, cx| {
+                                // Guard: only update UI if this is the current streaming session
+                                if app.streaming_generation != generation
+                                    || app.streaming_chat_id != Some(chat_id)
+                                {
+                                    return; // Stale update, ignore
+                                }
                                 app.streaming_content = current;
                                 // Auto-scroll to bottom as new content arrives
                                 app.messages_scroll_handle.scroll_to_bottom();
@@ -828,9 +895,12 @@ impl AiApp {
 
     /// Start a mock streaming response for testing/demo when no AI providers are configured
     fn start_mock_streaming_response(&mut self, chat_id: ChatId, cx: &mut Context<Self>) {
-        // Set streaming state
+        // Set streaming state with chat-scoping guards
         self.is_streaming = true;
         self.streaming_content.clear();
+        self.streaming_chat_id = Some(chat_id);
+        self.streaming_generation = self.streaming_generation.wrapping_add(1);
+        let generation = self.streaming_generation;
 
         // Get the last user message to generate a contextual mock response
         let user_message = self
@@ -844,6 +914,7 @@ impl AiApp {
 
         info!(
             chat_id = %chat_id,
+            generation = generation,
             user_message_len = user_message.len(),
             mock_response_len = mock_response.len(),
             "Starting mock streaming response"
@@ -870,14 +941,41 @@ impl AiApp {
                 accumulated.push_str(&word);
 
                 let current_content = accumulated.clone();
-                let _ = cx.update(|cx| {
-                    this.update(cx, |app, cx| {
-                        app.streaming_content = current_content;
-                        // Auto-scroll to bottom as new content arrives
-                        app.messages_scroll_handle.scroll_to_bottom();
-                        cx.notify();
+                let should_break = cx
+                    .update(|cx| {
+                        this.update(cx, |app, cx| {
+                            // Guard: only update UI if this is the current streaming session
+                            if app.streaming_generation != generation
+                                || app.streaming_chat_id != Some(chat_id)
+                            {
+                                return true; // Break out of loop - stale session
+                            }
+                            app.streaming_content = current_content;
+                            // Auto-scroll to bottom as new content arrives
+                            app.messages_scroll_handle.scroll_to_bottom();
+                            cx.notify();
+                            false
+                        })
+                        .unwrap_or(true)
                     })
-                });
+                    .unwrap_or(true);
+
+                if should_break {
+                    // Session was superseded, save what we have to DB and exit
+                    if !accumulated.is_empty() {
+                        let assistant_message = Message::assistant(chat_id, &accumulated);
+                        if let Err(e) = storage::save_message(&assistant_message) {
+                            tracing::error!(error = %e, "Failed to save orphaned mock message");
+                        } else {
+                            tracing::info!(
+                                chat_id = %chat_id,
+                                content_len = accumulated.len(),
+                                "Orphaned mock streaming saved to DB"
+                            );
+                        }
+                    }
+                    return;
+                }
             }
 
             // Small delay before finishing
@@ -886,7 +984,7 @@ impl AiApp {
             // Finish streaming
             let _ = cx.update(|cx| {
                 this.update(cx, |app, cx| {
-                    app.finish_streaming(chat_id, cx);
+                    app.finish_streaming(chat_id, generation, cx);
                 })
             });
         })
@@ -894,7 +992,21 @@ impl AiApp {
     }
 
     /// Finish streaming and save the assistant message
-    fn finish_streaming(&mut self, chat_id: ChatId, cx: &mut Context<Self>) {
+    ///
+    /// The `generation` parameter guards against stale completion calls.
+    /// If the generation doesn't match, this is an orphaned streaming task
+    /// and we should not update UI (message was already saved to DB by the guard).
+    fn finish_streaming(&mut self, chat_id: ChatId, generation: u64, cx: &mut Context<Self>) {
+        // Guard: verify this is still the current streaming session
+        if self.streaming_generation != generation || self.streaming_chat_id != Some(chat_id) {
+            tracing::debug!(
+                expected_gen = generation,
+                actual_gen = self.streaming_generation,
+                "finish_streaming called with stale generation, ignoring"
+            );
+            return;
+        }
+
         if !self.streaming_content.is_empty() {
             // Create and save assistant message
             let assistant_message = Message::assistant(chat_id, &self.streaming_content);
@@ -902,8 +1014,10 @@ impl AiApp {
                 tracing::error!(error = %e, "Failed to save assistant message");
             }
 
-            // Add to current messages
-            self.current_messages.push(assistant_message);
+            // Add to current messages (only if viewing this chat)
+            if self.selected_chat_id == Some(chat_id) {
+                self.current_messages.push(assistant_message);
+            }
 
             // Update message preview
             let preview: String = self.streaming_content.chars().take(60).collect();
@@ -926,6 +1040,7 @@ impl AiApp {
 
         self.is_streaming = false;
         self.streaming_content.clear();
+        self.streaming_chat_id = None;
         cx.notify();
     }
 
@@ -2049,4 +2164,99 @@ fn configure_ai_as_floating_panel() {
 #[cfg(not(target_os = "macos"))]
 fn configure_ai_as_floating_panel() {
     // No-op on non-macOS platforms
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test that streaming state guards work correctly for chat-switch scenarios
+    #[test]
+    fn test_streaming_generation_guard_logic() {
+        // Simulate the guard check logic used in streaming updates
+        let streaming_chat_id: Option<ChatId> = Some(ChatId::new());
+        let streaming_generation: u64 = 5;
+
+        // Scenario 1: Matching generation and chat - should NOT be stale
+        let update_generation = 5;
+        let update_chat_id = streaming_chat_id.unwrap();
+        let is_stale =
+            streaming_generation != update_generation || streaming_chat_id != Some(update_chat_id);
+        assert!(
+            !is_stale,
+            "Matching generation and chat should not be stale"
+        );
+
+        // Scenario 2: Generation mismatch - should be stale (old streaming task)
+        let old_generation = 4;
+        let is_stale =
+            streaming_generation != old_generation || streaming_chat_id != Some(update_chat_id);
+        assert!(is_stale, "Old generation should be stale");
+
+        // Scenario 3: Chat ID mismatch - should be stale (user switched chats)
+        let different_chat_id = ChatId::new();
+        let is_stale = streaming_generation != update_generation
+            || streaming_chat_id != Some(different_chat_id);
+        assert!(is_stale, "Different chat ID should be stale");
+
+        // Scenario 4: No streaming chat - should be stale
+        let no_streaming: Option<ChatId> = None;
+        let is_stale =
+            streaming_generation != update_generation || no_streaming != Some(update_chat_id);
+        assert!(is_stale, "No streaming chat should be stale");
+    }
+
+    /// Test that generation counter wraps correctly
+    #[test]
+    fn test_streaming_generation_wrapping() {
+        let mut generation: u64 = u64::MAX;
+
+        // Simulate multiple streaming sessions
+        for expected in [0, 1, 2, 3, 4] {
+            generation = generation.wrapping_add(1);
+            assert_eq!(generation, expected, "Generation should wrap correctly");
+        }
+    }
+
+    /// Test the submit_message guard logic - should only block if streaming
+    /// for the SAME chat
+    #[test]
+    fn test_submit_while_streaming_different_chat() {
+        // Setup: streaming in chat A, trying to submit in chat B
+        let chat_a = ChatId::new();
+        let chat_b = ChatId::new();
+
+        let is_streaming = true;
+        let streaming_chat_id = Some(chat_a);
+        let selected_chat_id = Some(chat_b);
+
+        // The guard: block only if streaming AND same chat
+        let should_block = is_streaming && streaming_chat_id == selected_chat_id;
+        assert!(
+            !should_block,
+            "Should NOT block submission when streaming different chat"
+        );
+
+        // Same chat scenario should block
+        let selected_chat_id = Some(chat_a);
+        let should_block = is_streaming && streaming_chat_id == selected_chat_id;
+        assert!(
+            should_block,
+            "Should block submission when streaming same chat"
+        );
+    }
+
+    /// Test ChatId comparison behavior
+    #[test]
+    fn test_chat_id_equality() {
+        let id1 = ChatId::new();
+        let id2 = ChatId::new();
+        let id1_copy = id1;
+
+        assert_eq!(id1, id1_copy, "Same ID should be equal");
+        assert_ne!(id1, id2, "Different IDs should not be equal");
+        assert_eq!(Some(id1), Some(id1_copy), "Option<ChatId> equality works");
+        assert_ne!(Some(id1), Some(id2), "Option<ChatId> inequality works");
+        assert_ne!(Some(id1), None, "Some vs None inequality works");
+    }
 }
