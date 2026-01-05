@@ -814,6 +814,9 @@ struct ScriptListApp {
     grid_config: Option<debug_grid::GridConfig>,
     // Navigation coalescing for rapid arrow key events (20ms window)
     nav_coalescer: NavCoalescer,
+    // Wheel scroll accumulator for smooth trackpad scrolling
+    // Accumulates fractional deltas until they cross 1.0, then converts to item steps
+    wheel_accum: f32,
     // Window focus tracking - for detecting focus lost and auto-dismissing prompts
     // When window loses focus while in a dismissable prompt, close and reset
     was_window_focused: bool,

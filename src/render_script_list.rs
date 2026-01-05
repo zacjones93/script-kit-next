@@ -18,18 +18,18 @@ impl ScriptListApp {
         let design_spacing = tokens.spacing();
         let design_visual = tokens.visual();
         let design_typography = tokens.typography();
-        let theme = &self.theme;
 
         // For Default design, use theme.colors for backward compatibility
         // For other designs, use design tokens
         let is_default_design = self.current_design == DesignVariant::Default;
 
-        // P4: Pre-compute theme values using ListItemColors
-        let _list_colors = ListItemColors::from_theme(theme);
-        logging::log_debug("PERF", "P4: Using ListItemColors for render closure");
-
         let item_count = grouped_items.len();
         let _total_len = self.scripts.len() + self.scriptlets.len();
+
+        // ============================================================
+        // MUTABLE OPERATIONS BLOCK - do all &mut self calls here BEFORE
+        // taking immutable borrows of theme for UI building
+        // ============================================================
 
         // Handle edge cases - keep selected_index in valid bounds
         // Also skip section headers when adjusting bounds
@@ -49,6 +49,45 @@ impl ScriptListApp {
                 }
             }
         }
+
+        // Update list state if item count changed
+        // Use splice instead of reset to preserve scroll events and measurement cache
+        // reset() drops scroll events until the list is painted, which can break scroll-driven UI
+        let old_list_count = self.main_list_state.item_count();
+        if old_list_count != item_count {
+            self.main_list_state.splice(0..old_list_count, item_count);
+            // Invalidate last_scrolled_index since list structure changed
+            self.last_scrolled_index = None;
+        }
+
+        // Only scroll to reveal selection when selection actually changed
+        // This prevents fighting trackpad/wheel scrolling and reduces redundant scroll calls
+        self.scroll_to_selected_if_needed("render_list");
+
+        // Get scroll offset AFTER updates for scrollbar
+        let scroll_offset = self.main_list_state.logical_scroll_top().item_ix;
+
+        // ============================================================
+        // IMMUTABLE BORROWS BLOCK - extract theme values for UI building
+        // ============================================================
+
+        // Extract theme values as owned copies for UI building
+        let log_panel_bg = self.theme.colors.background.log_panel;
+        let log_panel_border = self.theme.colors.ui.border;
+        let log_panel_success = self.theme.colors.ui.success;
+
+        // Pre-compute scrollbar colors (Copy type)
+        let scrollbar_colors = if is_default_design {
+            ScrollbarColors::from_theme(&self.theme)
+        } else {
+            ScrollbarColors::from_design(&design_colors)
+        };
+        // Pre-compute list item colors for closure (Copy type)
+        let theme_colors = ListItemColors::from_theme(&self.theme);
+
+        let theme = &self.theme;
+
+        logging::log_debug("PERF", "P4: Using ListItemColors for render closure");
 
         // Build script list using uniform_list for proper virtualized scrolling
         // Use design tokens for empty state styling
@@ -114,36 +153,19 @@ impl ScriptListApp {
             };
             let visible_items = ((item_count as f32) * visible_ratio).ceil() as usize;
 
-            // Get actual scroll position from ListState (not approximated from selected_index)
-            let scroll_offset = self.main_list_state.logical_scroll_top().item_ix;
+            // Note: list state updates and scroll_to_selected_if_needed already done above
+            // before the theme borrow section
 
-            // Get scrollbar colors from theme or design
-            let scrollbar_colors = if is_default_design {
-                ScrollbarColors::from_theme(theme)
-            } else {
-                ScrollbarColors::from_design(&design_colors)
-            };
-
-            // Create scrollbar (only visible if content overflows and scrolling is active)
+            // Create scrollbar using pre-computed scrollbar_colors and scroll_offset
             let scrollbar =
                 Scrollbar::new(item_count, visible_items, scroll_offset, scrollbar_colors)
                     .container_height(estimated_container_height)
                     .visible(self.is_scrolling);
 
-            // Update list state if item count changed
-            if self.main_list_state.item_count() != item_count {
-                self.main_list_state.reset(item_count);
-            }
-
-            // Scroll to reveal selected item
-            self.main_list_state
-                .scroll_to_reveal_item(self.selected_index);
-
             // Capture entity handle for use in the render closure
             let entity = cx.entity();
 
-            // Clone values needed in the closure (can't access self in FnMut)
-            let theme_colors = ListItemColors::from_theme(&self.theme);
+            // theme_colors was pre-computed above to avoid borrow conflicts
             let current_design = self.current_design;
 
             let variable_height_list =
@@ -334,7 +356,7 @@ impl ScriptListApp {
                     move |this, event: &gpui::ScrollWheelEvent, _window, cx| {
                         // Convert scroll delta to lines/items
                         // Lines: direct item count, Pixels: convert based on average item height
-                        let lines = match event.delta {
+                        let delta_lines: f32 = match event.delta {
                             gpui::ScrollDelta::Lines(point) => point.y,
                             gpui::ScrollDelta::Pixels(point) => {
                                 // Convert pixels to items using average item height
@@ -343,21 +365,28 @@ impl ScriptListApp {
                             }
                         };
 
-                        // Convert to integer item delta (negative = scroll up, positive = scroll down)
-                        // Invert because scroll wheel up (positive delta) should show earlier items
-                        let item_delta = -lines.round() as i32;
+                        // Accumulate smoothly for high-resolution trackpads
+                        // Invert so scroll down (negative delta) moves selection down (positive)
+                        this.wheel_accum += -delta_lines;
 
-                        if item_delta != 0 {
+                        // Only apply integer steps when magnitude crosses 1.0
+                        // This preserves smooth scrolling feel on trackpads
+                        let steps = this.wheel_accum.trunc() as i32;
+                        if steps != 0 {
+                            // Subtract the applied steps from accumulator
+                            this.wheel_accum -= steps as f32;
+
                             // Use the existing move_selection_by which handles section headers
                             // and properly updates scroll via scroll_to_selected_if_needed
-                            this.move_selection_by(item_delta, cx);
+                            this.move_selection_by(steps, cx);
 
                             // Log for observability
                             tracing::trace!(
-                                delta = item_delta,
+                                delta = steps,
+                                accum = this.wheel_accum,
                                 new_index = this.selected_index,
                                 total_items = scroll_item_count,
-                                "Mouse wheel scroll - index-based"
+                                "Mouse wheel scroll - accumulated"
                             );
                         }
                     },
@@ -367,16 +396,16 @@ impl ScriptListApp {
                 .into_any_element()
         };
 
-        // Log panel
+        // Log panel - uses pre-extracted theme values to avoid borrow conflicts
         let log_panel = if self.show_logs {
             let logs = logging::get_last_logs(10);
             let mut log_container = div()
                 .flex()
                 .flex_col()
                 .w_full()
-                .bg(rgb(theme.colors.background.log_panel))
+                .bg(rgb(log_panel_bg))
                 .border_t_1()
-                .border_color(rgb(theme.colors.ui.border))
+                .border_color(rgb(log_panel_border))
                 .p(px(design_spacing.padding_md))
                 .max_h(px(120.))
                 .font_family("SF Mono");
@@ -384,7 +413,7 @@ impl ScriptListApp {
             for log_line in logs.iter().rev() {
                 log_container = log_container.child(
                     div()
-                        .text_color(rgb(theme.colors.ui.success))
+                        .text_color(rgb(log_panel_success))
                         .text_xs()
                         .child(log_line.clone()),
                 );

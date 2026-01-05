@@ -259,6 +259,8 @@ impl ScriptListApp {
             },
             // Navigation coalescing for rapid arrow key events
             nav_coalescer: NavCoalescer::new(),
+            // Wheel scroll accumulator starts at 0
+            wheel_accum: 0.0,
             // Window focus tracking - for detecting focus lost and auto-dismissing prompts
             was_window_focused: false,
             // Scroll stabilization: track last scrolled index for each handle
