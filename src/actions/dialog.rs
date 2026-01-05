@@ -593,9 +593,9 @@ impl ActionsDialog {
         &self,
         colors: &crate::designs::DesignColors,
     ) -> (gpui::Rgba, gpui::Rgba, gpui::Rgba) {
-        // Use theme opacity for dialog background to support vibrancy
-        let opacity = self.theme.get_opacity();
-        let dialog_alpha = (opacity.dialog * 255.0) as u8;
+        // Use very low opacity for actions popup to let vibrancy blur show through
+        // This creates the frosted glass effect like Raycast/Spotlight
+        let dialog_alpha: u8 = 0x15; // ~8% opacity - very transparent
 
         if self.design_variant == DesignVariant::Default {
             (
@@ -603,13 +603,13 @@ impl ActionsDialog {
                     self.theme.colors.background.main,
                     dialog_alpha,
                 )),
-                rgba(hex_with_alpha(self.theme.colors.ui.border, 0x80)),
+                rgba(hex_with_alpha(self.theme.colors.ui.border, 0x40)),
                 rgb(self.theme.colors.text.secondary),
             )
         } else {
             (
                 rgba(hex_with_alpha(colors.background, dialog_alpha)),
-                rgba(hex_with_alpha(colors.border, 0x80)),
+                rgba(hex_with_alpha(colors.border, 0x40)),
                 rgb(colors.text_secondary),
             )
         }
