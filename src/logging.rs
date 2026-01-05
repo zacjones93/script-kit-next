@@ -598,6 +598,99 @@ pub fn log_error(category: &str, error: &str, context: Option<&str>) {
 }
 
 // =============================================================================
+// PAYLOAD TRUNCATION HELPERS
+// Purpose: Avoid logging sensitive/large data like base64 screenshots, clipboard
+// =============================================================================
+
+/// Maximum length for logged message payloads
+const MAX_PAYLOAD_LOG_LEN: usize = 200;
+
+/// Truncate a string for logging, adding "..." suffix if truncated
+pub fn truncate_for_log(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...({})", &s[..max_len], s.len())
+    }
+}
+
+/// Summarize a JSON payload for logging (type + length, truncated preview)
+/// Used for protocol messages to avoid logging full screenshots/clipboard data
+pub fn summarize_payload(json: &str) -> String {
+    // Try to extract message type from JSON
+    let msg_type = json.find("\"type\":\"").and_then(|pos| {
+        let start = pos + 8; // length of "\"type\":\""
+        json[start..].find('"').map(|end| &json[start..start + end])
+    });
+
+    match msg_type {
+        Some(t) => format!(
+            "{{type:{}, len:{}}}",
+            t,
+            json.len()
+        ),
+        None => format!("{{len:{}}}", json.len()),
+    }
+}
+
+/// Log a protocol message being sent to script (truncated for performance/privacy)
+pub fn log_protocol_send(fd: i32, json: &str) {
+    // In debug/verbose mode, show truncated preview
+    // In normal mode, just show type + length
+    #[cfg(debug_assertions)]
+    {
+        let summary = summarize_payload(json);
+        add_to_buffer("EXEC", &format!("→stdin fd={}: {}", fd, summary));
+        tracing::debug!(
+            event_type = "protocol_send",
+            fd = fd,
+            payload_len = json.len(),
+            summary = %summary,
+            "Sending to script stdin"
+        );
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        // Minimal logging in release - just type + length
+        let summary = summarize_payload(json);
+        tracing::info!(
+            event_type = "protocol_send",
+            fd = fd,
+            payload_len = json.len(),
+            "→script: {}",
+            summary
+        );
+    }
+}
+
+/// Log a protocol message received from script (truncated for performance/privacy)
+pub fn log_protocol_recv(msg_type: &str, json_len: usize) {
+    #[cfg(debug_assertions)]
+    {
+        add_to_buffer("EXEC", &format!("←stdout: type={} len={}", msg_type, json_len));
+        tracing::debug!(
+            event_type = "protocol_recv",
+            message_type = msg_type,
+            payload_len = json_len,
+            "Received from script"
+        );
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        tracing::info!(
+            event_type = "protocol_recv",
+            message_type = msg_type,
+            payload_len = json_len,
+            "←script: type={} len={}",
+            msg_type,
+            json_len
+        );
+    }
+}
+
+// =============================================================================
 // MOUSE HOVER LOGGING
 // Category: MOUSE_HOVER
 // Purpose: Log mouse enter/leave events on list items for debugging hover/focus behavior
@@ -1520,5 +1613,57 @@ mod tests {
         assert!(!parse_ai_log("false"));
         assert!(!parse_ai_log("no"));
         assert!(!parse_ai_log(""));
+    }
+
+    // -------------------------------------------------------------------------
+    // Payload truncation tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_truncate_for_log_short_string() {
+        let s = "hello";
+        assert_eq!(truncate_for_log(s, 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_for_log_exact_limit() {
+        let s = "hello";
+        assert_eq!(truncate_for_log(s, 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_for_log_long_string() {
+        let s = "hello world this is a long string";
+        let result = truncate_for_log(s, 10);
+        assert!(result.starts_with("hello worl"));
+        assert!(result.contains("...(33)")); // Original length in parens
+    }
+
+    #[test]
+    fn test_summarize_payload_with_type() {
+        let json = r#"{"type":"submit","id":"test","value":"foo"}"#;
+        let summary = summarize_payload(json);
+        assert!(summary.contains("type:submit"));
+        assert!(summary.contains(&format!("len:{}", json.len())));
+    }
+
+    #[test]
+    fn test_summarize_payload_without_type() {
+        let json = r#"{"data":"some value"}"#;
+        let summary = summarize_payload(json);
+        assert!(summary.contains(&format!("len:{}", json.len())));
+        assert!(!summary.contains("type:"));
+    }
+
+    #[test]
+    fn test_summarize_payload_large_base64() {
+        // Simulate a large base64 screenshot payload
+        let base64_data = "a".repeat(100000);
+        let json = format!(r#"{{"type":"screenshotResult","data":"{}"}}"#, base64_data);
+        let summary = summarize_payload(&json);
+        // Summary should be compact, not contain the full base64
+        assert!(summary.len() < 100);
+        assert!(summary.contains("type:screenshotResult"));
+        assert!(summary.contains(&format!("len:{}", json.len())));
     }
 }

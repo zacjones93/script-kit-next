@@ -125,10 +125,8 @@ impl ScriptListApp {
                                         continue;
                                     }
                                 };
-                                logging::log(
-                                    "EXEC",
-                                    &format!("Writing to stdin fd={}: {}", fd, json),
-                                );
+                                // Use truncated logging to avoid full payload in logs
+                                logging::log_protocol_send(fd, &json);
                                 let bytes = format!("{}\n", json);
                                 let bytes_len = bytes.len();
 

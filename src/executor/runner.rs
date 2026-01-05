@@ -451,7 +451,8 @@ impl ScriptSession {
     pub fn send_message(&mut self, msg: &Message) -> Result<(), String> {
         let json =
             serialize_message(msg).map_err(|e| format!("Failed to serialize message: {}", e))?;
-        logging::log("EXEC", &format!("Sending to script: {}", json));
+        // Use truncated logging - avoids full payload (screenshots, clipboard, etc.)
+        logging::log_protocol_send(0, &json);
         writeln!(self.stdin, "{}", json)
             .map_err(|e| format!("Failed to write to script stdin: {}", e))?;
         self.stdin
@@ -467,7 +468,11 @@ impl ScriptSession {
             .next_message()
             .map_err(|e| format!("Failed to read from script stdout: {}", e));
         if let Ok(Some(ref msg)) = result {
-            logging::log("EXEC", &format!("Received from script: {:?}", msg));
+            // Use truncated logging - message Debug impl may contain large payloads
+            // Extract type name from Debug output: "Variant { ... }" -> "Variant"
+            let debug_str = format!("{:?}", msg);
+            let msg_type = debug_str.split_whitespace().next().unwrap_or("Unknown");
+            logging::log_protocol_recv(msg_type, std::mem::size_of_val(msg));
         }
         result
     }
