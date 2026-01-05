@@ -11,8 +11,8 @@ use crate::logging;
 use crate::protocol::ProtocolAction;
 use crate::theme;
 use gpui::{
-    div, point, prelude::*, px, rgb, rgba, uniform_list, App, BoxShadow, Context, FocusHandle,
-    Focusable, Hsla, Render, ScrollStrategy, SharedString, UniformListScrollHandle, Window,
+    div, prelude::*, px, rgb, rgba, uniform_list, App, BoxShadow, Context, FocusHandle, Focusable,
+    Render, ScrollStrategy, SharedString, UniformListScrollHandle, Window,
 };
 use std::sync::Arc;
 
@@ -548,22 +548,11 @@ impl ActionsDialog {
     }
 
     /// Create box shadow for the overlay popup
-    /// Uses very subtle shadow - just enough to separate from background
+    /// When rendered in a separate vibrancy window, no shadow is needed
+    /// (the window vibrancy provides visual separation)
     pub(super) fn create_popup_shadow() -> Vec<BoxShadow> {
-        vec![
-            // Single very subtle shadow
-            BoxShadow {
-                color: Hsla {
-                    h: 0.0,
-                    s: 0.0,
-                    l: 0.0,
-                    a: 0.05, // Very subtle
-                },
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(4.0),
-                spread_radius: px(0.0),
-            },
-        ]
+        // No shadow - vibrancy window provides visual separation
+        vec![]
     }
 
     /// Get colors for the search box based on design variant

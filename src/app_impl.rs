@@ -1,5 +1,10 @@
 impl ScriptListApp {
-    fn new(config: config::Config, bun_available: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        config: config::Config,
+        bun_available: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         // PERF: Measure script loading time
         let load_start = std::time::Instant::now();
         let scripts = scripts::read_scripts();
@@ -256,7 +261,10 @@ impl ScriptListApp {
             action_shortcuts: std::collections::HashMap::new(),
             // Debug grid overlay - check env var at startup
             grid_config: if std::env::var("SCRIPT_KIT_DEBUG_GRID").is_ok() {
-                logging::log("DEBUG_GRID", "SCRIPT_KIT_DEBUG_GRID env var set - enabling grid overlay");
+                logging::log(
+                    "DEBUG_GRID",
+                    "SCRIPT_KIT_DEBUG_GRID env var set - enabling grid overlay",
+                );
                 Some(debug_grid::GridConfig::default())
             } else {
                 None
@@ -616,10 +624,7 @@ impl ScriptListApp {
         let diff = diff_scriptlets(&old_scriptlets, &new_scriptlets);
 
         if diff.is_empty() {
-            logging::log(
-                "APP",
-                &format!("No changes detected in {}", path.display()),
-            );
+            logging::log("APP", &format!("No changes detected in {}", path.display()));
             return;
         }
 
@@ -711,8 +716,12 @@ impl ScriptListApp {
         // Update the scriptlets list
         // Remove old scriptlets from this file
         let path_str = path.to_string_lossy().to_string();
-        self.scriptlets
-            .retain(|s| !s.file_path.as_ref().map(|fp| fp.starts_with(&path_str)).unwrap_or(false));
+        self.scriptlets.retain(|s| {
+            !s.file_path
+                .as_ref()
+                .map(|fp| fp.starts_with(&path_str))
+                .unwrap_or(false)
+        });
 
         // Add new scriptlets from this file
         self.scriptlets.extend(new_scripts_scriptlets);
@@ -753,10 +762,7 @@ impl ScriptListApp {
         let filter_text = self.filter_text();
         // P1: Return cached results if filter hasn't changed
         if filter_text == self.filter_cache_key {
-            logging::log_debug(
-                "CACHE",
-                &format!("Filter cache HIT for '{}'", filter_text),
-            );
+            logging::log_debug("CACHE", &format!("Filter cache HIT for '{}'", filter_text));
             return self.cached_filtered_results.clone();
         }
 
@@ -771,8 +777,7 @@ impl ScriptListApp {
 
         // PERF: Measure search time (only log when actually filtering)
         let search_start = std::time::Instant::now();
-        let results =
-            scripts::fuzzy_search_unified(&self.scripts, &self.scriptlets, filter_text);
+        let results = scripts::fuzzy_search_unified(&self.scripts, &self.scriptlets, filter_text);
         let search_elapsed = search_start.elapsed();
 
         // Only log search performance when there's an active filter
@@ -873,10 +878,13 @@ impl ScriptListApp {
 
         let start = std::time::Instant::now();
         let suggested_config = self.config.get_suggested();
-        
+
         // Get menu bar items from the background tracker (pre-fetched when apps activate)
         #[cfg(target_os = "macos")]
-        let (menu_bar_items, menu_bar_bundle_id): (Vec<menu_bar::MenuBarItem>, Option<String>) = {
+        let (menu_bar_items, menu_bar_bundle_id): (
+            Vec<menu_bar::MenuBarItem>,
+            Option<String>,
+        ) = {
             let cached = frontmost_app_tracker::get_cached_menu_items();
             let bundle_id = frontmost_app_tracker::get_last_real_app().map(|a| a.bundle_id);
             // No conversion needed - tracker is compiled as part of binary crate
@@ -884,14 +892,20 @@ impl ScriptListApp {
             (cached, bundle_id)
         };
         #[cfg(not(target_os = "macos"))]
-        let (menu_bar_items, menu_bar_bundle_id): (Vec<menu_bar::MenuBarItem>, Option<String>) = (Vec::new(), None);
-        
-        logging::log("APP", &format!(
-            "get_grouped_results: filter='{}', menu_bar_items={}, bundle_id={:?}",
-            self.computed_filter_text,
-            menu_bar_items.len(),
-            menu_bar_bundle_id
-        ));
+        let (menu_bar_items, menu_bar_bundle_id): (
+            Vec<menu_bar::MenuBarItem>,
+            Option<String>,
+        ) = (Vec::new(), None);
+
+        logging::log(
+            "APP",
+            &format!(
+                "get_grouped_results: filter='{}', menu_bar_items={}, bundle_id={:?}",
+                self.computed_filter_text,
+                menu_bar_items.len(),
+                menu_bar_bundle_id
+            ),
+        );
         let (grouped_items, flat_results) = get_grouped_results(
             &self.scripts,
             &self.scriptlets,
@@ -1059,7 +1073,6 @@ impl ScriptListApp {
         None
     }
 
-
     fn execute_selected(&mut self, cx: &mut Context<Self>) {
         // Get grouped results to map from selected_index to actual result (cached)
         let (grouped_items, flat_results) = self.get_grouped_results_cached();
@@ -1163,6 +1176,12 @@ impl ScriptListApp {
             return;
         }
 
+        // Skip filter updates when actions popup is open
+        // (text input should go to actions dialog search, not main filter)
+        if self.show_actions_popup {
+            return;
+        }
+
         let new_text = self.gpui_input_state.read(cx).value().to_string();
         if new_text == self.filter_text {
             return;
@@ -1184,10 +1203,7 @@ impl ScriptListApp {
             let trimmed = new_text.trim_end_matches(' ');
             if !trimmed.is_empty() && trimmed == previous_text {
                 if let Some(alias_match) = self.find_alias_match(trimmed) {
-                    logging::log(
-                        "ALIAS",
-                        &format!("Alias '{}' triggered execution", trimmed),
-                    );
+                    logging::log("ALIAS", &format!("Alias '{}' triggered execution", trimmed));
                     match alias_match {
                         AliasMatch::Script(script) => {
                             self.execute_interactive(&script, cx);
@@ -1316,9 +1332,7 @@ impl ScriptListApp {
             }
             AppView::DivPrompt { .. } => (ViewType::DivPrompt, 0),
             AppView::FormPrompt { .. } => (ViewType::DivPrompt, 0), // Use DivPrompt size for forms
-            AppView::EditorPrompt { .. } => {
-                (ViewType::EditorPrompt, 0)
-            }
+            AppView::EditorPrompt { .. } => (ViewType::EditorPrompt, 0),
             AppView::SelectPrompt { .. } => (ViewType::ArgPromptWithChoices, 0),
             AppView::PathPrompt { .. } => (ViewType::DivPrompt, 0),
             AppView::EnvPrompt { .. } => (ViewType::ArgPromptNoChoices, 0), // Env prompt is a simple input
@@ -1384,12 +1398,8 @@ impl ScriptListApp {
                 };
                 (ViewType::ScriptList, filtered_count)
             }
-            AppView::ScratchPadView { .. } => {
-                (ViewType::EditorPrompt, 0)
-            }
-            AppView::QuickTerminalView { .. } => {
-                (ViewType::TermPrompt, 0)
-            }
+            AppView::ScratchPadView { .. } => (ViewType::EditorPrompt, 0),
+            AppView::QuickTerminalView { .. } => (ViewType::TermPrompt, 0),
         };
 
         let target_height = height_for_view(view_type, item_count);
@@ -1448,40 +1458,73 @@ impl ScriptListApp {
 
     fn toggle_actions(&mut self, cx: &mut Context<Self>, window: &mut Window) {
         logging::log("KEY", "Toggling actions popup");
-        if self.show_actions_popup {
+        if self.show_actions_popup || is_actions_window_open() {
             // Close - return focus to main filter
             self.show_actions_popup = false;
             self.actions_dialog = None;
             self.focused_input = FocusedInput::MainFilter;
             self.pending_focus = Some(FocusTarget::MainFilter);
+
+            // Close the separate actions window via spawn
+            cx.spawn(async move |_this, cx| {
+                cx.update(|cx| {
+                    close_actions_window(cx);
+                })
+                .ok();
+            })
+            .detach();
+
+            // Refocus main filter
+            self.focus_main_filter(window, cx);
             logging::log("FOCUS", "Actions closed, focus returned to MainFilter");
         } else {
-            // Open - create dialog entity
+            // Open actions as a separate window with vibrancy blur
             self.show_actions_popup = true;
-            self.focused_input = FocusedInput::ActionsSearch;
+
+            // CRITICAL: Transfer focus from Input to main focus_handle
+            // This prevents the Input from receiving text (which would go to main filter)
+            // while keeping keyboard focus in main window for routing to actions dialog
+            self.focus_handle.focus(window, cx);
+            self.gpui_input_focused = false;
+            self.focused_input = FocusedInput::None;
+
             let script_info = self.get_focused_script_info();
 
+            // Create the dialog entity HERE in main app (for keyboard routing)
             let theme_arc = std::sync::Arc::new(self.theme.clone());
             let dialog = cx.new(|cx| {
                 let focus_handle = cx.focus_handle();
+                // Show the search input in the actions dialog
+                // Text input is routed here from main window keyboard events
                 ActionsDialog::with_script(
                     focus_handle,
-                    std::sync::Arc::new(|_action_id| {}), // Callback handled separately
-                    script_info,
+                    std::sync::Arc::new(|_action_id| {}), // Callback handled via main app
+                    script_info.clone(),
                     theme_arc,
                 )
             });
 
-            // Hide the dialog's built-in search input since header already has search
-            dialog.update(cx, |d, _| d.set_hide_search(true));
-
-            // Focus the dialog's internal focus handle via pending_focus mechanism
+            // Store the dialog entity for keyboard routing
             self.actions_dialog = Some(dialog.clone());
-            self.pending_focus = Some(FocusTarget::ActionsDialog);
-            // Also apply immediately since we have window access
-            let dialog_focus_handle = dialog.read(cx).focus_handle.clone();
-            window.focus(&dialog_focus_handle, cx);
-            logging::log("FOCUS", "Actions opened, focus moved to ActionsSearch");
+
+            // Get main window bounds to position the actions window
+            let main_bounds = window.bounds();
+
+            // Open the actions window via spawn, passing the shared dialog entity
+            cx.spawn(async move |_this, cx| {
+                cx.update(|cx| match open_actions_window(cx, main_bounds, dialog) {
+                    Ok(_handle) => {
+                        logging::log("ACTIONS", "Actions popup window opened");
+                    }
+                    Err(e) => {
+                        logging::log("ACTIONS", &format!("Failed to open actions window: {}", e));
+                    }
+                })
+                .ok();
+            })
+            .detach();
+
+            logging::log("FOCUS", "Actions opened, keyboard routing active");
         }
         cx.notify();
     }
@@ -1554,7 +1597,6 @@ impl ScriptListApp {
         }
         cx.notify();
     }
-
 
     /// Edit a script in configured editor (config.editor > $EDITOR > "code")
     #[allow(dead_code)]
@@ -2115,10 +2157,9 @@ impl ScriptListApp {
                     "EXEC",
                     "Exit message dropped - channel full (script may be stuck)",
                 ),
-                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => logging::log(
-                    "EXEC",
-                    "Exit message dropped - script already exited",
-                ),
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                    logging::log("EXEC", "Exit message dropped - script already exited")
+                }
             }
         } else {
             logging::log("EXEC", "No response_sender - script may not be running");
@@ -2177,6 +2218,20 @@ impl ScriptListApp {
     fn close_and_reset_window(&mut self, cx: &mut Context<Self>) {
         logging::log("VISIBILITY", "=== Close and reset window ===");
 
+        // Close actions window FIRST if open (it's a child of main window)
+        if self.show_actions_popup || is_actions_window_open() {
+            self.show_actions_popup = false;
+            self.actions_dialog = None;
+            cx.spawn(async move |_this, cx| {
+                cx.update(|cx| {
+                    close_actions_window(cx);
+                })
+                .ok();
+            })
+            .detach();
+            logging::log("VISIBILITY", "Closed actions window before hiding main");
+        }
+
         // Save window position BEFORE hiding (main window is hidden, not closed)
         if let Some((x, y, w, h)) = crate::platform::get_main_window_bounds() {
             crate::window_state::save_window_bounds(
@@ -2191,7 +2246,10 @@ impl ScriptListApp {
 
         // If in a prompt, cancel the script execution
         if self.is_in_prompt() {
-            logging::log("VISIBILITY", "In prompt mode - canceling script before hiding");
+            logging::log(
+                "VISIBILITY",
+                "In prompt mode - canceling script before hiding",
+            );
             self.cancel_script_execution(cx);
         } else {
             // Just reset to script list (clears filter, selection, scroll)
@@ -2345,7 +2403,6 @@ impl ScriptListApp {
         logging::log("DEBUG_GRID", "Grid overlay hidden");
         cx.notify();
     }
-
 
     /// Rebuild alias and shortcut registries from current scripts/scriptlets.
     /// Returns a list of conflict messages (if any) for HUD display.
