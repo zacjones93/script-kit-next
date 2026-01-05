@@ -1,7 +1,7 @@
 //! Script loading from file system
 //!
 //! This module provides functions for loading scripts from the
-//! ~/.sk/kit/*/scripts/ directories.
+//! ~/.scriptkit/*/scripts/ directories.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,7 +14,7 @@ use crate::setup::get_kit_path;
 use super::metadata::extract_metadata_full;
 use super::types::Script;
 
-/// Reads scripts from ~/.sk/kit/*/scripts/ directories
+/// Reads scripts from ~/.scriptkit/*/scripts/ directories
 /// Returns a sorted list of Arc-wrapped Script structs for .ts and .js files
 /// Returns empty vec if directory doesn't exist or is inaccessible
 ///

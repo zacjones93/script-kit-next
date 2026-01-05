@@ -1,7 +1,7 @@
 //! Theme module - Color schemes and styling
 //!
 //! This module provides functionality for:
-//! - Loading theme from ~/.sk/kit/theme.json
+//! - Loading theme from ~/.scriptkit/theme.json
 //! - Color scheme definitions (dark/light mode)
 //! - Focus-aware color variations
 //! - Terminal ANSI color palette

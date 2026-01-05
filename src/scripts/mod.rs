@@ -1,8 +1,8 @@
 //! Scripts module - Script and scriptlet management
 //!
 //! This module provides functionality for:
-//! - Loading scripts from ~/.sk/kit/*/scripts/
-//! - Loading scriptlets from ~/.sk/kit/*/scriptlets/
+//! - Loading scripts from ~/.scriptkit/*/scripts/
+//! - Loading scriptlets from ~/.scriptkit/*/scriptlets/
 //! - Fuzzy search across scripts, scriptlets, built-ins, apps, and windows
 //! - Grouping results by frecency and type
 //! - Registering scheduled scripts

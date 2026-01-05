@@ -66,9 +66,9 @@ fn ensure_tsconfig_paths(_tsconfig_path: &PathBuf) {
 /// Get the SDK path - SDK extraction is now handled by setup::ensure_kit_setup() at startup
 /// This function just returns the expected path since setup has already done the work
 fn ensure_sdk_extracted() -> Option<PathBuf> {
-    // Target path: ~/.sk/kit/sdk/kit-sdk.ts
+    // Target path: ~/.scriptkit/sdk/kit-sdk.ts
     // This is extracted by setup::ensure_kit_setup() which runs at app startup
-    let sdk_path = dirs::home_dir()?.join(".sk/kit/sdk/kit-sdk.ts");
+    let sdk_path = dirs::home_dir()?.join(".scriptkit/sdk/kit-sdk.ts");
 
     if sdk_path.exists() {
         Some(sdk_path)
@@ -79,7 +79,7 @@ fn ensure_sdk_extracted() -> Option<PathBuf> {
             "EXEC",
             "SDK not found at expected path, extracting embedded SDK",
         );
-        let kit_sdk = dirs::home_dir()?.join(".sk/kit/sdk");
+        let kit_sdk = dirs::home_dir()?.join(".scriptkit/sdk");
         if !kit_sdk.exists() {
             std::fs::create_dir_all(&kit_sdk).ok()?;
         }
@@ -96,9 +96,9 @@ fn ensure_sdk_extracted() -> Option<PathBuf> {
 pub fn find_sdk_path() -> Option<PathBuf> {
     logging::log("EXEC", "Looking for SDK...");
 
-    // 1. Check ~/.sk/kit/sdk/kit-sdk.ts (primary location)
+    // 1. Check ~/.scriptkit/sdk/kit-sdk.ts (primary location)
     if let Some(home) = dirs::home_dir() {
-        let kit_sdk = home.join(".sk/kit/sdk/kit-sdk.ts");
+        let kit_sdk = home.join(".scriptkit/sdk/kit-sdk.ts");
         logging::log(
             "EXEC",
             &format!("  Checking kit sdk: {}", kit_sdk.display()),
@@ -109,7 +109,7 @@ pub fn find_sdk_path() -> Option<PathBuf> {
         }
     }
 
-    // 2. Extract embedded SDK to ~/.sk/kit/sdk/kit-sdk.ts (production)
+    // 2. Extract embedded SDK to ~/.scriptkit/sdk/kit-sdk.ts (production)
     logging::log("EXEC", "  Trying to extract embedded SDK...");
     if let Some(sdk_path) = ensure_sdk_extracted() {
         logging::log(

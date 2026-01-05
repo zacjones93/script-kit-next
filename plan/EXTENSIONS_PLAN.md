@@ -309,7 +309,7 @@ pub const VALID_CATEGORIES: &[&str] = &[
 
 | Current | New |
 |---------|-----|
-| `~/.sk/kit/snippets/` | `~/.sk/kit/extensions/` |
+| `~/.scriptkit/snippets/` | `~/.scriptkit/extensions/` |
 
 ### Struct/Type Renames (CORRECTED)
 
@@ -349,7 +349,7 @@ pub type ScriptletMetadata = CommandMetadata;
 ### Location
 
 ```
-~/.sk/kit/examples/extensions/
+~/.scriptkit/examples/extensions/
 ├── cleanshot.md        # CleanShot X integration
 ├── chrome.md           # Chrome browser integration  
 └── README.md           # Examples documentation
@@ -824,7 +824,7 @@ end tell
 **Decision**: Use JSON file per extension.
 
 ```
-~/.sk/kit/preferences/
+~/.scriptkit/preferences/
 ├── cleanshot.json
 ├── chrome.json
 └── ...
@@ -890,7 +890,7 @@ For now: single-file `.md` extensions only.
 
 Future (when we need assets/multi-file):
 ```
-~/.sk/kit/extensions/
+~/.scriptkit/extensions/
 ├── cleanshot.md              # Single-file extension
 └── github/                   # Folder extension
     ├── manifest.yaml
@@ -927,14 +927,14 @@ Future (when we need assets/multi-file):
 
 ### 5.3 Directory Migration (Priority: Medium)
 
-- [ ] Add `~/.sk/kit/extensions/` path support
+- [ ] Add `~/.scriptkit/extensions/` path support
 - [ ] Keep `snippets/` working during transition
 - [ ] Update file watchers
 - [ ] Update cache keys
 
 ### 5.4 Preference System (Priority: Medium)
 
-- [ ] Create `~/.sk/kit/preferences/` directory structure
+- [ ] Create `~/.scriptkit/preferences/` directory structure
 - [ ] Implement `getPreference(name)` SDK function
 - [ ] Add preference validation on extension load
 - [ ] Add "required preference" gating before command runs
@@ -961,7 +961,7 @@ Future (when we need assets/multi-file):
 
 ### Integration Tests
 
-- [ ] Load extensions from `~/.sk/kit/extensions/`
+- [ ] Load extensions from `~/.scriptkit/extensions/`
 - [ ] CleanShot commands trigger URL schemes
 - [ ] Chrome commands read bookmarks/history
 - [ ] Preferences persist and load correctly

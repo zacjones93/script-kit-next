@@ -16,7 +16,7 @@ use super::metadata::extract_schedule_metadata_from_file;
 
 /// Scan scripts directory and register scripts with schedule metadata
 ///
-/// Walks through ~/.sk/kit/*/scripts/ looking for .ts/.js files with
+/// Walks through ~/.scriptkit/*/scripts/ looking for .ts/.js files with
 /// `// Cron:` or `// Schedule:` metadata comments, and registers them
 /// with the provided scheduler.
 ///

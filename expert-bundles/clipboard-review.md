@@ -345,13 +345,13 @@ pub fn set_retention_days(days: u32) {
     let _ = RETENTION_DAYS.set(days);
 }
 
-/// Get the database path (~/.sk/kit/clipboard-history.db)
+/// Get the database path (~/.scriptkit/clipboard-history.db)
 fn get_db_path() -> Result<PathBuf> {
-    let kenv_dir = PathBuf::from(shellexpand::tilde("~/.sk/kit").as_ref());
+    let kenv_dir = PathBuf::from(shellexpand::tilde("~/.scriptkit").as_ref());
 
-    // Create ~/.sk/kit if it doesn't exist
+    // Create ~/.scriptkit if it doesn't exist
     if !kenv_dir.exists() {
-        std::fs::create_dir_all(&kenv_dir).context("Failed to create ~/.sk/kit directory")?;
+        std::fs::create_dir_all(&kenv_dir).context("Failed to create ~/.scriptkit directory")?;
     }
 
     Ok(kenv_dir.join("clipboard-history.db"))

@@ -408,7 +408,7 @@ export interface LayoutInfo {
 }
 
 // =============================================================================
-// Config Types (for ~/.sk/kit/config.ts)
+// Config Types (for ~/.scriptkit/config.ts)
 // =============================================================================
 
 /**
@@ -614,7 +614,7 @@ export interface ProcessLimits {
 /**
  * Script Kit configuration schema.
  * 
- * This configuration is loaded from `~/.sk/kit/config.ts` and controls
+ * This configuration is loaded from `~/.scriptkit/config.ts` and controls
  * Script Kit's behavior, appearance, and built-in features.
  * 
  * @example Minimal configuration (only hotkey required)
@@ -2393,17 +2393,17 @@ declare global {
   function home(...segments: string[]): string;
   
   /**
-   * Returns path relative to ~/.sk/kit
+   * Returns path relative to ~/.scriptkit
    * @param segments - Path segments to join
    * @returns Full path from sk/kit directory
    */
   function skPath(...segments: string[]): string;
   
   /**
-   * Returns path relative to ~/.sk/kit (unified Script Kit directory)
+   * Returns path relative to ~/.scriptkit (unified Script Kit directory)
    * @param segments - Path segments to join
    * @returns Full path from sk/kit directory
-   * @deprecated Use skPath() instead - kitPath() now returns ~/.sk/kit paths for backwards compatibility
+   * @deprecated Use skPath() instead - kitPath() now returns ~/.scriptkit paths for backwards compatibility
    */
   function kitPath(...segments: string[]): string;
   
@@ -4434,12 +4434,12 @@ globalThis.home = function home(...segments: string[]): string {
 };
 
 globalThis.skPath = function skPath(...segments: string[]): string {
-  return nodePath.join(os.homedir(), '.sk/kit', ...segments);
+  return nodePath.join(os.homedir(), '.scriptkit', ...segments);
 };
 
 globalThis.kitPath = function kitPath(...segments: string[]): string {
-  // Now returns ~/.sk/kit paths - ~/.kit is deprecated
-  return nodePath.join(os.homedir(), '.sk/kit', ...segments);
+  // Now returns ~/.scriptkit paths - ~/.kit is deprecated
+  return nodePath.join(os.homedir(), '.scriptkit', ...segments);
 };
 
 globalThis.tmpPath = function tmpPath(...segments: string[]): string {

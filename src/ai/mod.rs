@@ -17,7 +17,7 @@
 //!
 //! # Database Location
 //!
-//! The AI chats database is stored at `~/.sk/kit/ai-chats.db`.
+//! The AI chats database is stored at `~/.scriptkit/ai-chats.db`.
 //!
 //!
 //! # Features

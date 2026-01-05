@@ -66,5 +66,5 @@ console.error('[SMOKE] App cache startup test complete');
 console.error('[SMOKE] Performance notes:');
 console.error('[SMOKE]   - First run: Apps scanned from disk, cached to SQLite');
 console.error('[SMOKE]   - Subsequent runs: Apps loaded instantly from SQLite cache');
-console.error('[SMOKE]   - Cache location: ~/.sk/kit/db/apps.sqlite');
+console.error('[SMOKE]   - Cache location: ~/.scriptkit/db/apps.sqlite');
 process.exit(0);

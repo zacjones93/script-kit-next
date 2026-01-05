@@ -301,7 +301,7 @@ pub fn diff_scriptlets(old: &[CachedScriptlet], new: &[CachedScriptlet]) -> Scri
 /// Get the path to the Script Kit log file
 pub fn get_log_file_path() -> PathBuf {
     std::env::var("HOME")
-        .map(|home| PathBuf::from(home).join(".sk/kit/logs/script-kit-gpui.jsonl"))
+        .map(|home| PathBuf::from(home).join(".scriptkit/logs/script-kit-gpui.jsonl"))
         .unwrap_or_else(|_| PathBuf::from("/tmp/script-kit-gpui.jsonl"))
 }
 
@@ -1158,11 +1158,11 @@ mod tests {
         let path = super::get_log_file_path();
         // Should end with the expected filename
         assert!(path.ends_with("script-kit-gpui.jsonl"));
-        // Should contain .sk/kit/logs in the path (or /tmp as fallback)
+        // Should contain .scriptkit/logs in the path (or /tmp as fallback)
         let path_str = path.to_string_lossy();
         assert!(
-            path_str.contains(".sk/kit/logs") || path_str.contains("/tmp"),
-            "Path should be in .sk/kit/logs or /tmp, got: {}",
+            path_str.contains(".scriptkit/logs") || path_str.contains("/tmp"),
+            "Path should be in .scriptkit/logs or /tmp, got: {}",
             path_str
         );
     }

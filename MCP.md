@@ -15,13 +15,13 @@ The MCP server starts automatically on port **43210**.
 ### 2. Get Your Token
 
 ```bash
-cat ~/.sk/kit/agent-token
+cat ~/.scriptkit/agent-token
 ```
 
 ### 3. Test the Connection
 
 ```bash
-TOKEN=$(cat ~/.sk/kit/agent-token)
+TOKEN=$(cat ~/.scriptkit/agent-token)
 
 curl -X POST "http://localhost:43210/rpc" \
   -H "Authorization: Bearer $TOKEN" \
@@ -44,7 +44,7 @@ curl -X POST "http://localhost:43210/rpc" \
 ├──────────────┬──────────────┬───────────────┬───────────────────────┤
 │   Kit Tools  │ Script Tools │   Resources   │     Authentication    │
 │  kit/show    │ scripts/*    │ kit://state   │    Bearer Token       │
-│  kit/hide    │              │ scripts://    │  ~/.sk/kit/agent-token  │
+│  kit/hide    │              │ scripts://    │  ~/.scriptkit/agent-token  │
 │  kit/state   │              │ scriptlets:// │                       │
 └──────────────┴──────────────┴───────────────┴───────────────────────┘
                               │
@@ -53,7 +53,7 @@ curl -X POST "http://localhost:43210/rpc" \
 ├─────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐              │
 │  │   Scripts   │    │  Scriptlets │    │     SDK     │              │
-│  │ ~/.sk/kit/    │    │ ~/.sk/kit/    │    │ input()     │              │
+│  │ ~/.scriptkit/    │    │ ~/.scriptkit/    │    │ input()     │              │
 │  │  scripts/   │    │ scriptlets/ │    │ output()    │              │
 │  └─────────────┘    └─────────────┘    └─────────────┘              │
 └─────────────────────────────────────────────────────────────────────┘
@@ -64,10 +64,10 @@ curl -X POST "http://localhost:43210/rpc" \
 | Setting | Default | Environment Variable | Description |
 |---------|---------|---------------------|-------------|
 | Port | 43210 | `MCP_PORT` | HTTP server port |
-| Token File | `~/.sk/kit/agent-token` | - | Authentication token location |
-| Discovery File | `~/.sk/kit/server.json` | - | Server info for clients |
+| Token File | `~/.scriptkit/agent-token` | - | Authentication token location |
+| Discovery File | `~/.scriptkit/server.json` | - | Server info for clients |
 
-### Discovery File (`~/.sk/kit/server.json`)
+### Discovery File (`~/.scriptkit/server.json`)
 
 ```json
 {
@@ -95,7 +95,7 @@ curl -X POST "http://localhost:43210/rpc" \
   -d '...'
 ```
 
-The token is automatically generated on first run and stored at `~/.sk/kit/agent-token`.
+The token is automatically generated on first run and stored at `~/.scriptkit/agent-token`.
 
 ## API Reference
 
@@ -302,7 +302,7 @@ List of all scripts.
 [
   {
     "name": "Hello World",
-    "path": "/Users/x/.sk/kit/scripts/hello-world.ts",
+    "path": "/Users/x/.scriptkit/scripts/hello-world.ts",
     "extension": "ts",
     "description": "A simple greeting script",
     "has_schema": true
@@ -525,7 +525,7 @@ sleep 3
 ### Manual Testing with curl
 
 ```bash
-TOKEN=$(cat ~/.sk/kit/agent-token)
+TOKEN=$(cat ~/.scriptkit/agent-token)
 
 # List tools
 curl -s -X POST "http://localhost:43210/rpc" \
@@ -581,14 +581,14 @@ See `tests/mcp/scripts/` for complete examples:
 lsof -i :43210
 
 # Check logs
-tail -100 ~/.sk/kit/logs/script-kit-gpui.jsonl | grep -i mcp
+tail -100 ~/.scriptkit/logs/script-kit-gpui.jsonl | grep -i mcp
 ```
 
 ### Token Issues
 
 ```bash
 # Verify token exists
-cat ~/.sk/kit/agent-token
+cat ~/.scriptkit/agent-token
 
 # Token is regenerated on app restart if missing
 ```
@@ -610,11 +610,11 @@ Currently, `tools/call` returns `"status": "pending"` - the script is queued but
 
 | File | Purpose |
 |------|---------|
-| `~/.sk/kit/agent-token` | Authentication token |
-| `~/.sk/kit/server.json` | Server discovery info |
-| `~/.sk/kit/scripts/` | User scripts |
-| `~/.sk/kit/scriptlets/` | Scriptlet markdown files |
-| `~/.sk/kit/logs/script-kit-gpui.jsonl` | Application logs |
+| `~/.scriptkit/agent-token` | Authentication token |
+| `~/.scriptkit/server.json` | Server discovery info |
+| `~/.scriptkit/scripts/` | User scripts |
+| `~/.scriptkit/scriptlets/` | Scriptlet markdown files |
+| `~/.scriptkit/logs/script-kit-gpui.jsonl` | Application logs |
 
 ---
 

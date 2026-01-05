@@ -1,6 +1,6 @@
 //! Script Kit environment setup and initialization.
 //!
-//! Ensures ~/.sk/kit exists with required directories and starter files.
+//! Ensures ~/.scriptkit exists with required directories and starter files.
 //! The path can be overridden via the SK_PATH environment variable.
 //! Idempotent: user-owned files are never overwritten; app-owned files may be refreshed.
 
@@ -273,7 +273,7 @@ const w = await widget(`<h1>Floating Widget</h1>`, {
 
 ## Scriptlet Format
 
-Scriptlets are markdown files with embedded code blocks. They live in `~/.sk/kit/main/scriptlets/`.
+Scriptlets are markdown files with embedded code blocks. They live in `~/.scriptkit/main/scriptlets/`.
 
 ### Basic Scriptlet
 
@@ -328,7 +328,7 @@ Best regards
 
 ## Configuration (config.ts)
 
-The `~/.sk/kit/config.ts` file configures Script Kit:
+The `~/.scriptkit/config.ts` file configures Script Kit:
 
 ```typescript
 import type { Config } from "@scriptkit/sdk";
@@ -376,7 +376,7 @@ export default {
 
 ```bash
 # Using bun directly
-bun run ~/.sk/kit/main/scripts/my-script.ts
+bun run ~/.scriptkit/main/scripts/my-script.ts
 
 # With the kit CLI (if installed)
 kit run my-script
@@ -537,22 +537,22 @@ if (files.length === 0) {
 
 | Path | Purpose |
 |------|---------|
-| `~/.sk/kit/main/scripts/` | Your scripts |
-| `~/.sk/kit/main/scriptlets/` | Your scriptlets |
-| `~/.sk/kit/config.ts` | Configuration |
-| `~/.sk/kit/theme.json` | Theme customization |
-| `~/.sk/kit/sdk/` | SDK (managed by app) |
+| `~/.scriptkit/main/scripts/` | Your scripts |
+| `~/.scriptkit/main/scriptlets/` | Your scriptlets |
+| `~/.scriptkit/config.ts` | Configuration |
+| `~/.scriptkit/theme.json` | Theme customization |
+| `~/.scriptkit/sdk/` | SDK (managed by app) |
 "###;
 
-/// Environment variable to override the default ~/.sk/kit path
+/// Environment variable to override the default ~/.scriptkit path
 pub const SK_PATH_ENV: &str = "SK_PATH";
 
 /// Result of setup process
 #[derive(Debug)]
 pub struct SetupResult {
-    /// Whether ~/.sk/kit didn't exist before this run
+    /// Whether ~/.scriptkit didn't exist before this run
     pub is_fresh_install: bool,
-    /// Path to ~/.sk/kit (or SK_PATH override, or fallback if home dir couldn't be resolved)
+    /// Path to ~/.scriptkit (or SK_PATH override, or fallback if home dir couldn't be resolved)
     pub kit_path: PathBuf,
     /// Whether bun looks discoverable on this machine
     pub bun_available: bool,
@@ -564,7 +564,7 @@ pub struct SetupResult {
 ///
 /// Priority:
 /// 1. SK_PATH environment variable (if set)
-/// 2. ~/.sk/kit (default)
+/// 2. ~/.scriptkit (default)
 /// 3. Temp directory fallback (if home dir unavailable)
 pub fn get_kit_path() -> PathBuf {
     // Check for SK_PATH override first
@@ -572,20 +572,20 @@ pub fn get_kit_path() -> PathBuf {
         return PathBuf::from(shellexpand::tilde(&sk_path).as_ref());
     }
 
-    // Default: ~/.sk/kit
+    // Default: ~/.scriptkit
     match dirs::home_dir() {
-        Some(home) => home.join(".sk").join("kit"),
+        Some(home) => home.join(".scriptkit"),
         None => std::env::temp_dir().join("script-kit"),
     }
 }
 
-/// Migrate from legacy ~/.kenv to new ~/.sk/kit structure
+/// Migrate from legacy ~/.kenv to new ~/.scriptkit structure
 ///
 /// This function handles one-time migration from the old directory structure:
-/// - Moves ~/.kenv contents to ~/.sk/kit
-/// - Moves ~/.kenv/scripts to ~/.sk/kit/main/scripts  
-/// - Moves ~/.kenv/scriptlets to ~/.sk/kit/main/scriptlets
-/// - Creates a symlink ~/.kenv -> ~/.sk/kit for backwards compatibility
+/// - Moves ~/.kenv contents to ~/.scriptkit
+/// - Moves ~/.kenv/scripts to ~/.scriptkit/main/scripts  
+/// - Moves ~/.kenv/scriptlets to ~/.scriptkit/main/scriptlets
+/// - Creates a symlink ~/.kenv -> ~/.scriptkit for backwards compatibility
 ///
 /// Returns true if migration was performed, false if not needed
 #[instrument(level = "info", name = "migrate_from_kenv")]
@@ -596,28 +596,22 @@ pub fn migrate_from_kenv() -> bool {
     };
 
     let old_kenv = home.join(".kenv");
-    let new_sk_kit = home.join(".sk").join("kit");
+    let new_scriptkit = home.join(".scriptkit");
 
     // Only migrate if old path exists and new path doesn't
-    if !old_kenv.exists() || new_sk_kit.exists() {
+    if !old_kenv.exists() || new_scriptkit.exists() {
         return false;
     }
 
     info!(
         old_path = %old_kenv.display(),
-        new_path = %new_sk_kit.display(),
-        "Migrating from ~/.kenv to ~/.sk/kit"
+        new_path = %new_scriptkit.display(),
+        "Migrating from ~/.kenv to ~/.scriptkit"
     );
 
-    // Ensure parent directory exists
-    if let Err(e) = fs::create_dir_all(home.join(".sk")) {
-        warn!(error = %e, "Failed to create ~/.sk directory");
-        return false;
-    }
-
     // Create the new structure
-    let main_scripts = new_sk_kit.join("main").join("scripts");
-    let main_scriptlets = new_sk_kit.join("main").join("scriptlets");
+    let main_scripts = new_scriptkit.join("main").join("scripts");
+    let main_scriptlets = new_scriptkit.join("main").join("scriptlets");
 
     if let Err(e) = fs::create_dir_all(&main_scripts) {
         warn!(error = %e, "Failed to create main/scripts directory");
@@ -629,7 +623,7 @@ pub fn migrate_from_kenv() -> bool {
         return false;
     }
 
-    // Move scripts from ~/.kenv/scripts to ~/.sk/kit/main/scripts
+    // Move scripts from ~/.kenv/scripts to ~/.scriptkit/main/scripts
     let old_scripts = old_kenv.join("scripts");
     if old_scripts.exists() && old_scripts.is_dir() {
         if let Ok(entries) = fs::read_dir(&old_scripts) {
@@ -650,7 +644,7 @@ pub fn migrate_from_kenv() -> bool {
         }
     }
 
-    // Move scriptlets from ~/.kenv/scriptlets to ~/.sk/kit/main/scriptlets
+    // Move scriptlets from ~/.kenv/scriptlets to ~/.scriptkit/main/scriptlets
     let old_scriptlets = old_kenv.join("scriptlets");
     if old_scriptlets.exists() && old_scriptlets.is_dir() {
         if let Ok(entries) = fs::read_dir(&old_scriptlets) {
@@ -675,7 +669,7 @@ pub fn migrate_from_kenv() -> bool {
     let config_files = ["config.ts", "theme.json", "tsconfig.json", ".gitignore"];
     for file in config_files {
         let old_path = old_kenv.join(file);
-        let new_path = new_sk_kit.join(file);
+        let new_path = new_scriptkit.join(file);
         if old_path.exists() && !new_path.exists() {
             if let Err(e) = fs::rename(&old_path, &new_path) {
                 warn!(error = %e, file = file, "Failed to move config file");
@@ -687,7 +681,7 @@ pub fn migrate_from_kenv() -> bool {
     let data_dirs = ["logs", "cache", "db", "sdk"];
     for dir in data_dirs {
         let old_path = old_kenv.join(dir);
-        let new_path = new_sk_kit.join(dir);
+        let new_path = new_scriptkit.join(dir);
         if old_path.exists() && old_path.is_dir() && !new_path.exists() {
             if let Err(e) = fs::rename(&old_path, &new_path) {
                 warn!(error = %e, dir = dir, "Failed to move data directory");
@@ -707,7 +701,7 @@ pub fn migrate_from_kenv() -> bool {
     ];
     for file in data_files {
         let old_path = old_kenv.join(file);
-        let new_path = new_sk_kit.join(file);
+        let new_path = new_scriptkit.join(file);
         if old_path.exists() && !new_path.exists() {
             if let Err(e) = fs::rename(&old_path, &new_path) {
                 warn!(error = %e, file = file, "Failed to move data file");
@@ -723,25 +717,25 @@ pub fn migrate_from_kenv() -> bool {
     // Create symlink for backwards compatibility (Unix only)
     #[cfg(unix)]
     {
-        if let Err(e) = std::os::unix::fs::symlink(&new_sk_kit, &old_kenv) {
+        if let Err(e) = std::os::unix::fs::symlink(&new_scriptkit, &old_kenv) {
             warn!(error = %e, "Failed to create ~/.kenv symlink for backwards compatibility");
         } else {
-            info!("Created ~/.kenv -> ~/.sk/kit symlink for backwards compatibility");
+            info!("Created ~/.kenv -> ~/.scriptkit symlink for backwards compatibility");
         }
     }
 
-    info!("Migration from ~/.kenv to ~/.sk/kit complete");
+    info!("Migration from ~/.kenv to ~/.scriptkit complete");
     true
 }
 
-/// Ensure the ~/.sk/kit environment is properly set up.
+/// Ensure the ~/.scriptkit environment is properly set up.
 ///
 /// This function is idempotent - it will create missing directories and files
 /// without overwriting existing user configurations.
 ///
 /// # Directory Structure Created
 /// ```text
-/// ~/.sk/kit/                  # Root (can be overridden via SK_PATH)
+/// ~/.scriptkit/                  # Root (can be overridden via SK_PATH)
 /// ├── main/                   # Default user kit
 /// │   ├── scripts/            # User scripts (.ts, .js files)
 /// │   └── scriptlets/         # Markdown scriptlet files
@@ -760,7 +754,7 @@ pub fn migrate_from_kenv() -> bool {
 /// ```
 ///
 /// # Environment Variables
-/// - `SK_PATH`: Override the default ~/.sk/kit path
+/// - `SK_PATH`: Override the default ~/.scriptkit path
 ///
 /// # Returns
 /// `SetupResult` with information about the setup process.
@@ -868,7 +862,7 @@ pub fn ensure_kit_setup() -> SetupResult {
 # =============================================================================
 # Node.js / Bun dependencies
 # =============================================================================
-# Root node_modules (for package.json at ~/.sk/kit/)
+# Root node_modules (for package.json at ~/.scriptkit/)
 node_modules/
 
 # Kit-specific node_modules (e.g., main/node_modules, examples/node_modules)
@@ -1302,7 +1296,7 @@ Welcome to Script Kit! This directory contains your scripts, configuration, and 
 ## Directory Structure
 
 ```
-~/.sk/kit/
+~/.scriptkit/
 ├── main/                   # Your default kit (scripts & scriptlets)
 │   ├── scripts/            # TypeScript/JavaScript scripts (.ts, .js)
 │   └── scriptlets/         # Markdown scriptlet files (.md)
@@ -1506,11 +1500,10 @@ mod tests {
 
     #[test]
     fn test_get_kit_path_default() {
-        // Without SK_PATH set, should return ~/.sk/kit
+        // Without SK_PATH set, should return ~/.scriptkit
         std::env::remove_var(SK_PATH_ENV);
         let path = get_kit_path();
-        assert!(path.to_string_lossy().contains(".sk"));
-        assert!(path.to_string_lossy().ends_with("kit"));
+        assert!(path.to_string_lossy().contains(".scriptkit"));
     }
 
     #[test]

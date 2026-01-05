@@ -132,7 +132,7 @@ pub mod ocr;
 pub mod scheduler;
 
 // Kenv environment setup and initialization
-// Ensures ~/.sk/kit exists with required directories and starter files
+// Ensures ~/.scriptkit exists with required directories and starter files
 pub mod setup;
 
 // Storybook - Component preview system for development
@@ -174,12 +174,12 @@ pub mod stdin_commands;
 pub mod notes;
 
 // AI Chat - Separate floating window for AI conversations
-// BYOK (Bring Your Own Key) with SQLite storage at ~/.sk/kit/ai-chats.db
+// BYOK (Bring Your Own Key) with SQLite storage at ~/.scriptkit/ai-chats.db
 pub mod ai;
 
 // Agents - mdflow agent integration
 // Executable markdown prompts that run against Claude, Gemini, Codex, or Copilot
-// Located in ~/.sk/kit/*/agents/*.md
+// Located in ~/.scriptkit/*/agents/*.md
 pub mod agents;
 
 // macOS launch-at-login via SMAppService

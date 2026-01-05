@@ -22,7 +22,7 @@ Build an autonomous testing framework that validates all Script Kit GPUI APIs wi
 | **SDK (`kit-sdk.ts`)** | ✅ Complete | 47+ global functions implemented |
 | **Protocol (`protocol.rs`)** | ✅ Complete | All message types defined |
 | **Manual Tests** | ⚠️ Partial | `tests/sdk/` has 4 tests, `tests/smoke/` has 3 |
-| **gpui-*.ts Demos** | ✅ 47 scripts | In `~/.sk/kit/scripts/` - API coverage reference |
+| **gpui-*.ts Demos** | ✅ 47 scripts | In `~/.scriptkit/scripts/` - API coverage reference |
 | **Autonomous Runner** | ❌ Missing | Need test harness with auto-submit |
 
 ### Target State
@@ -776,7 +776,7 @@ TOTAL TIME: 264ms
 
 ### Demo Scripts (API Reference)
 
-All 47 demo scripts in `~/.sk/kit/scripts/gpui-*.ts` serve as API usage reference:
+All 47 demo scripts in `~/.scriptkit/scripts/gpui-*.ts` serve as API usage reference:
 
 ```
 gpui-beep.ts          gpui-browse.ts        gpui-chat.ts

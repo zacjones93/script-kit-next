@@ -1318,11 +1318,11 @@ use super::model::{Chat, ChatId, Message, MessageRole};
 /// Global database connection for AI chats
 static AI_DB: OnceLock<Arc<Mutex<Connection>>> = OnceLock::new();
 
-/// Get the path to the AI chats database (~/.sk/kit/db/ai-chats.sqlite)
+/// Get the path to the AI chats database (~/.scriptkit/db/ai-chats.sqlite)
 fn get_ai_db_path() -> PathBuf {
     let kit_dir = dirs::home_dir()
-        .map(|h| h.join(".sk/kit"))
-        .unwrap_or_else(|| PathBuf::from(".sk/kit"));
+        .map(|h| h.join(".scriptkit"))
+        .unwrap_or_else(|| PathBuf::from(".scriptkit"));
 
     kit_dir.join("db").join("ai-chats.sqlite")
 }
@@ -2487,7 +2487,7 @@ mod tests {
     fn test_db_path() {
         let path = get_ai_db_path();
         assert!(path.to_string_lossy().contains("ai-chats.sqlite"));
-        assert!(path.to_string_lossy().contains(".sk/kit/db"));
+        assert!(path.to_string_lossy().contains(".scriptkit/db"));
     }
 }
 
@@ -2513,7 +2513,7 @@ mod tests {
 //!
 //! # Database Location
 //!
-//! The AI chats database is stored at `~/.sk/kit/ai-chats.db`.
+//! The AI chats database is stored at `~/.scriptkit/ai-chats.db`.
 //!
 //!
 //! # Features
@@ -2698,15 +2698,15 @@ fn generate_mock_response(user_message: &str) -> String {
     }
 
     if msg_lower.contains("help") || msg_lower.contains("how") {
-        return "I'm here to help! In demo mode, I can explain Script Kit concepts:\n\n• **Scripts** live in `~/.sk/kit/scripts/`\n• **SDK** provides `arg()`, `div()`, `editor()`, and more\n• **Hotkeys** are configured in script metadata\n• **This AI chat** works with Claude or GPT when you add an API key\n\nWhat would you like to know more about?".to_string();
+        return "I'm here to help! In demo mode, I can explain Script Kit concepts:\n\n• **Scripts** live in `~/.scriptkit/scripts/`\n• **SDK** provides `arg()`, `div()`, `editor()`, and more\n• **Hotkeys** are configured in script metadata\n• **This AI chat** works with Claude or GPT when you add an API key\n\nWhat would you like to know more about?".to_string();
     }
 
     if msg_lower.contains("code") || msg_lower.contains("example") {
-        return "Here's a simple Script Kit example:\n\n```typescript\n// Name: Hello World\n// Shortcut: cmd+shift+h\n\nconst name = await arg(\"What's your name?\");\nawait div(`<h1>Hello, ${name}!</h1>`);\n```\n\nThis creates a script that:\n1. Asks for your name via a prompt\n2. Displays a greeting in an HTML view\n\nSave this to `~/.sk/kit/scripts/hello.ts` and run it!".to_string();
+        return "Here's a simple Script Kit example:\n\n```typescript\n// Name: Hello World\n// Shortcut: cmd+shift+h\n\nconst name = await arg(\"What's your name?\");\nawait div(`<h1>Hello, ${name}!</h1>`);\n```\n\nThis creates a script that:\n1. Asks for your name via a prompt\n2. Displays a greeting in an HTML view\n\nSave this to `~/.scriptkit/scripts/hello.ts` and run it!".to_string();
     }
 
     if msg_lower.contains("api") || msg_lower.contains("key") || msg_lower.contains("configure") {
-        return "To enable real AI responses, configure an API key:\n\n**For Claude (Anthropic):**\n```bash\nexport SCRIPT_KIT_ANTHROPIC_API_KEY=\"sk-ant-...\"\n```\n\n**For GPT (OpenAI):**\n```bash\nexport SCRIPT_KIT_OPENAI_API_KEY=\"sk-...\"\n```\n\nAdd these to your `~/.zshrc` or `~/.sk/kit/.env` file, then restart Script Kit.".to_string();
+        return "To enable real AI responses, configure an API key:\n\n**For Claude (Anthropic):**\n```bash\nexport SCRIPT_KIT_ANTHROPIC_API_KEY=\"sk-ant-...\"\n```\n\n**For GPT (OpenAI):**\n```bash\nexport SCRIPT_KIT_OPENAI_API_KEY=\"sk-...\"\n```\n\nAdd these to your `~/.zshrc` or `~/.scriptkit/.env` file, then restart Script Kit.".to_string();
     }
 
     // Default response for unrecognized queries
@@ -4333,7 +4333,7 @@ pub fn open_ai_window(cx: &mut App) -> Result<()> {
     // that can go behind other windows
 
     // Theme hot-reload watcher for AI window
-    // Spawns a background task that watches ~/.sk/kit/theme.json for changes
+    // Spawns a background task that watches ~/.scriptkit/theme.json for changes
     let app_entity_holder_ref = AI_APP_ENTITY.get_or_init(|| std::sync::Mutex::new(None));
     if let Some(ai_app) = app_entity_holder_ref.lock().unwrap().clone() {
         let ai_app_for_theme = ai_app.clone();
@@ -4942,7 +4942,7 @@ Streaming implementation:
 API keys are sourced from:
 - `SCRIPT_KIT_ANTHROPIC_API_KEY`
 - `SCRIPT_KIT_OPENAI_API_KEY`
-- `~/.sk/kit/.env` file
+- `~/.scriptkit/.env` file
 
 **Questions:**
 - Is environment variable storage secure enough?

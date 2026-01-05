@@ -59,11 +59,11 @@ fn test_load_scriptlets_returns_vec() {
 #[test]
 fn test_extract_kit_from_path_nested() {
     use std::path::Path;
-    // kit_root is ~/.sk/kit, not home directory
-    let kit_root = Path::new("/Users/test/.sk/kit");
+    // kit_root is ~/.scriptkit, not home directory
+    let kit_root = Path::new("/Users/test/.scriptkit");
 
-    // Nested kit path: ~/.sk/kit/my-kit/scriptlets/file.md -> kit = "my-kit"
-    let nested_path = Path::new("/Users/test/.sk/kit/my-kit/scriptlets/file.md");
+    // Nested kit path: ~/.scriptkit/my-kit/scriptlets/file.md -> kit = "my-kit"
+    let nested_path = Path::new("/Users/test/.scriptkit/my-kit/scriptlets/file.md");
     let kit = extract_kit_from_path(nested_path, kit_root);
     assert_eq!(kit, Some("my-kit".to_string()));
 }
@@ -71,11 +71,11 @@ fn test_extract_kit_from_path_nested() {
 #[test]
 fn test_extract_kit_from_path_main_kit() {
     use std::path::Path;
-    // kit_root is ~/.sk/kit, not home directory
-    let kit_root = Path::new("/Users/test/.sk/kit");
+    // kit_root is ~/.scriptkit, not home directory
+    let kit_root = Path::new("/Users/test/.scriptkit");
 
-    // Main kit path: ~/.sk/kit/main/scriptlets/file.md -> kit = "main"
-    let main_path = Path::new("/Users/test/.sk/kit/main/scriptlets/file.md");
+    // Main kit path: ~/.scriptkit/main/scriptlets/file.md -> kit = "main"
+    let main_path = Path::new("/Users/test/.scriptkit/main/scriptlets/file.md");
     let kit = extract_kit_from_path(main_path, kit_root);
     assert_eq!(kit, Some("main".to_string()));
 }
@@ -83,11 +83,11 @@ fn test_extract_kit_from_path_main_kit() {
 #[test]
 fn test_build_scriptlet_file_path() {
     use std::path::Path;
-    let md_path = Path::new("/Users/test/.sk/kit/main/scriptlets/my-scripts.md");
+    let md_path = Path::new("/Users/test/.scriptkit/main/scriptlets/my-scripts.md");
     let result = build_scriptlet_file_path(md_path, "my-slug");
     assert_eq!(
         result,
-        "/Users/test/.sk/kit/main/scriptlets/my-scripts.md#my-slug"
+        "/Users/test/.scriptkit/main/scriptlets/my-scripts.md#my-slug"
     );
 }
 
@@ -648,7 +648,7 @@ fn test_fuzzy_search_by_path() {
     let scripts = wrap_scripts(vec![
         Script {
             name: "foo".to_string(),
-            path: PathBuf::from("/home/user/.sk/kit/main/scripts/open.ts"),
+            path: PathBuf::from("/home/user/.scriptkit/main/scripts/open.ts"),
             extension: "ts".to_string(),
             icon: None,
             description: None,
@@ -668,8 +668,8 @@ fn test_fuzzy_search_by_path() {
         },
     ]);
 
-    // Search for ".sk" which is in the new path structure
-    let results = fuzzy_search_scripts(&scripts, ".sk");
+    // Search for ".scriptkit" which is in the new path structure
+    let results = fuzzy_search_scripts(&scripts, ".scriptkit");
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].script.name, "foo");
 }
@@ -1328,7 +1328,7 @@ fn test_extract_script_metadata_within_first_20_lines() {
 fn test_script_struct_creation_and_properties() {
     let script = Script {
         name: "myScript".to_string(),
-        path: PathBuf::from("/home/user/.sk/kit/scripts/myScript.ts"),
+        path: PathBuf::from("/home/user/.scriptkit/scripts/myScript.ts"),
         extension: "ts".to_string(),
         icon: None,
         description: Some("My custom script".to_string()),
@@ -2237,7 +2237,7 @@ fn test_search_quality_metrics() {
     let scripts = wrap_scripts(vec![
         Script {
             name: "zzzFile".to_string(),
-            path: PathBuf::from("/home/user/.sk/kit/scripts/zzzFile.ts"),
+            path: PathBuf::from("/home/user/.scriptkit/scripts/zzzFile.ts"),
             extension: "ts".to_string(),
             icon: None,
             description: Some("Opens a file dialog".to_string()),
@@ -2247,7 +2247,7 @@ fn test_search_quality_metrics() {
         },
         Script {
             name: "someScript".to_string(),
-            path: PathBuf::from("/home/user/.sk/kit/scripts/someScript.ts"),
+            path: PathBuf::from("/home/user/.scriptkit/scripts/someScript.ts"),
             extension: "ts".to_string(),
             icon: None,
             description: Some("Does something".to_string()),
@@ -2257,7 +2257,7 @@ fn test_search_quality_metrics() {
         },
         Script {
             name: "saveData".to_string(),
-            path: PathBuf::from("/home/user/.sk/kit/scripts/saveData.ts"),
+            path: PathBuf::from("/home/user/.scriptkit/scripts/saveData.ts"),
             extension: "ts".to_string(),
             icon: None,
             description: Some("Saves data to file".to_string()),
@@ -3374,7 +3374,7 @@ fn test_fuzzy_search_scripts_by_file_extension() {
     let scripts = wrap_scripts(vec![
         Script {
             name: "My Script".to_string(),
-            path: PathBuf::from("/home/user/.sk/kit/scripts/my-script.ts"),
+            path: PathBuf::from("/home/user/.scriptkit/scripts/my-script.ts"),
             extension: "ts".to_string(),
             icon: None,
             description: None,
@@ -3384,7 +3384,7 @@ fn test_fuzzy_search_scripts_by_file_extension() {
         },
         Script {
             name: "Other Script".to_string(),
-            path: PathBuf::from("/home/user/.sk/kit/scripts/other.js"),
+            path: PathBuf::from("/home/user/.scriptkit/scripts/other.js"),
             extension: "js".to_string(),
             icon: None,
             description: None,
@@ -3623,7 +3623,7 @@ fn test_fuzzy_search_scriptlets_display_file_path() {
         shortcut: None,
         expand: None,
         group: None,
-        file_path: Some("/home/user/.sk/kit/scriptlets/urls.md#test-slug".to_string()),
+        file_path: Some("/home/user/.scriptkit/scriptlets/urls.md#test-slug".to_string()),
         command: Some("test-slug".to_string()),
         alias: None,
     }]);

@@ -247,7 +247,7 @@ enum FocusedInput {
 
 ### Implementation
 
-Text sizing is configurable through `~/.sk/kit/config.ts`:
+Text sizing is configurable through `~/.scriptkit/config.ts`:
 
 ```rust
 // From src/config.rs (conceptual)

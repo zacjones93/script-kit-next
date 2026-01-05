@@ -35,7 +35,7 @@ What's changed:
 - No bundled utilities (file helpers, clipboard wrappers, etc.)
 - No `kit` global with hundreds of helpers
 - Scripts must explicitly import dependencies via Bun
-- Configuration is TypeScript-based (`~/.sk/kit/config.ts`)
+- Configuration is TypeScript-based (`~/.scriptkit/config.ts`)
 
 ## Quick Start
 
@@ -59,7 +59,7 @@ What's changed:
 
 2. **Create the kit directory**
    ```bash
-   mkdir -p ~/.sk/kit/scripts
+   mkdir -p ~/.scriptkit/scripts
    ```
 
 3. **Build and run**
@@ -75,7 +75,7 @@ What's changed:
 
 4. **Configure your hotkey** (optional)
    
-   Create `~/.sk/kit/config.ts`:
+   Create `~/.scriptkit/config.ts`:
    ```typescript
    export default {
      hotkey: {
@@ -87,7 +87,7 @@ What's changed:
 
 ### Your First Script
 
-Create `~/.sk/kit/scripts/hello.ts`:
+Create `~/.scriptkit/scripts/hello.ts`:
 
 ```typescript
 metadata = {
@@ -149,7 +149,7 @@ const files = await drop("Drop files here");
 Since utilities aren't bundled, install what you need:
 
 ```bash
-cd ~/.sk/kit
+cd ~/.scriptkit
 bun add zod lodash-es date-fns
 ```
 
@@ -194,7 +194,7 @@ metadata = {
 
 ## Configuration
 
-### `~/.sk/kit/config.ts`
+### `~/.scriptkit/config.ts`
 
 ```typescript
 export default {
@@ -222,7 +222,7 @@ export default {
 };
 ```
 
-### `~/.sk/kit/theme.json`
+### `~/.scriptkit/theme.json`
 
 Customize the look and feel:
 
@@ -266,7 +266,7 @@ script-kit-gpui/
 ├── tests/
 │   ├── smoke/             # End-to-end tests
 │   └── sdk/               # SDK method tests
-└── ~/.sk/kit/               # User's scripts and config
+└── ~/.scriptkit/               # User's scripts and config
     ├── scripts/           # Your scripts live here
     ├── config.ts          # Configuration
     └── theme.json         # Theme customization

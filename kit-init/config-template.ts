@@ -5,7 +5,7 @@ import type { Config } from "@scriptkit/sdk";
  * ========================
  *
  * This file controls Script Kit's behavior, appearance, and built-in features.
- * It's loaded on startup from ~/.sk/kit/config.ts.
+ * It's loaded on startup from ~/.scriptkit/config.ts.
  *
  * HOW TO CUSTOMIZE:
  * 1. Uncomment the options you want to change
@@ -145,7 +145,7 @@ export default {
   //   // ─────────────────────────────────────────────────────────────────────
   //   // USER SCRIPTS (by filename without .ts extension)
   //   // ─────────────────────────────────────────────────────────────────────
-  //   // Scripts are in ~/.sk/kit/scripts/
+  //   // Scripts are in ~/.scriptkit/scripts/
   //
   //   // Add shortcut to a frequently-used script
   //   // "script/my-workflow": {

@@ -2,7 +2,7 @@
 //!
 //! Provides:
 //! - SSE streaming for real-time event delivery to clients
-//! - Audit logging for tool calls to ~/.sk/kit/logs/mcp-audit.jsonl
+//! - Audit logging for tool calls to ~/.scriptkit/logs/mcp-audit.jsonl
 //!
 //! Event format: `event: {type}\ndata: {json}\n\n`
 
@@ -140,7 +140,7 @@ impl AuditLogEntry {
     }
 }
 
-/// Audit logger that writes to ~/.sk/kit/logs/mcp-audit.jsonl
+/// Audit logger that writes to ~/.scriptkit/logs/mcp-audit.jsonl
 pub struct AuditLogger {
     log_path: PathBuf,
 }
@@ -149,17 +149,17 @@ impl AuditLogger {
     /// Create a new audit logger
     ///
     /// # Arguments
-    /// * `kit_path` - Path to ~/.sk/kit directory
+    /// * `kit_path` - Path to ~/.scriptkit directory
     pub fn new(kit_path: PathBuf) -> Self {
         let log_path = kit_path.join("logs").join("mcp-audit.jsonl");
         Self { log_path }
     }
 
-    /// Create audit logger with default ~/.sk/kit path
+    /// Create audit logger with default ~/.scriptkit path
     pub fn with_defaults() -> Result<Self> {
         let kit_path = dirs::home_dir()
             .context("Failed to get home directory")?
-            .join(".sk/kit");
+            .join(".scriptkit");
         Ok(Self::new(kit_path))
     }
 

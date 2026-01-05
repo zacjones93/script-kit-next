@@ -1,7 +1,7 @@
 //! Configuration module - Application settings and user preferences
 //!
 //! This module provides functionality for:
-//! - Loading configuration from ~/.sk/kit/config.ts
+//! - Loading configuration from ~/.scriptkit/config.ts
 //! - Default values for all settings
 //! - Type definitions for config structures
 //!

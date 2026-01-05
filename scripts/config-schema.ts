@@ -48,9 +48,9 @@
  * 3. SCRIPT - User scripts (by filename without extension)
  *    Format: `script/{script-name}`
  *    Examples:
- *      - "script/my-custom-script"    → ~/.sk/kit/scripts/my-custom-script.ts
- *      - "script/daily-standup"       → ~/.sk/kit/scripts/daily-standup.ts
- *      - "script/git-commit-helper"   → ~/.sk/kit/scripts/git-commit-helper.ts
+ *      - "script/my-custom-script"    → ~/.scriptkit/scripts/my-custom-script.ts
+ *      - "script/daily-standup"       → ~/.scriptkit/scripts/daily-standup.ts
+ *      - "script/git-commit-helper"   → ~/.scriptkit/scripts/git-commit-helper.ts
  *
  * 4. SCRIPTLET - Inline scriptlets (by UUID)
  *    Format: `scriptlet/{uuid}`
@@ -228,7 +228,7 @@
  * │                           CONFIGURATION FILE                               │
  * └───────────────────────────────────────────────────────────────────────────┘
  *
- * LOCATION: ~/.sk/kit/config.ts
+ * LOCATION: ~/.scriptkit/config.ts
  *
  * PURPOSE: Controls Script Kit's behavior, appearance, and built-in features.
  * The config file is a TypeScript module that exports a default Config object.
@@ -553,7 +553,7 @@
  * ```
  *
  * USE CASE: Users with visual impairments, large monitors
- * NOTE: Theme colors are controlled separately in ~/.sk/kit/theme.json
+ * NOTE: Theme colors are controlled separately in ~/.scriptkit/theme.json
  *       High contrast themes should be configured there, not here.
  *
  * ═══════════════════════════════════════════════════════════════════════════
@@ -664,9 +664,9 @@
  * - UI scale should be 0.5-2.0 for reasonable display
  *
  * RELATED FILES:
- * - ~/.sk/kit/theme.json - Color themes and visual appearance
- * - ~/.sk/kit/scripts/   - User scripts
- * - ~/.sk/kit/sdk/       - SDK runtime files
+ * - ~/.scriptkit/theme.json - Color themes and visual appearance
+ * - ~/.scriptkit/scripts/   - User scripts
+ * - ~/.scriptkit/sdk/       - SDK runtime files
  */
 
 // Re-export base types from kit-sdk.ts
@@ -738,11 +738,11 @@ export type AppCommandId = `app/${string}`;
  * Format: `script/{script-name}`
  * 
  * The script name is the filename without the .ts extension.
- * Scripts are located in ~/.sk/kit/scripts/
+ * Scripts are located in ~/.scriptkit/scripts/
  * 
- * @example "script/my-custom-script" → ~/.sk/kit/scripts/my-custom-script.ts
- * @example "script/daily-standup" → ~/.sk/kit/scripts/daily-standup.ts
- * @example "script/git-commit-helper" → ~/.sk/kit/scripts/git-commit-helper.ts
+ * @example "script/my-custom-script" → ~/.scriptkit/scripts/my-custom-script.ts
+ * @example "script/daily-standup" → ~/.scriptkit/scripts/daily-standup.ts
+ * @example "script/git-commit-helper" → ~/.scriptkit/scripts/git-commit-helper.ts
  */
 export type ScriptCommandId = `script/${string}`;
 

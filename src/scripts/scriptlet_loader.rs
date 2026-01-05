@@ -1,7 +1,7 @@
 //! Scriptlet loading and parsing
 //!
 //! This module provides functions for loading scriptlets from markdown files
-//! in the ~/.sk/kit/*/scriptlets/ directories.
+//! in the ~/.scriptkit/*/scriptlets/ directories.
 
 use std::cmp::Ordering;
 use std::fs;
@@ -134,7 +134,7 @@ pub(crate) fn parse_scriptlet_section(
     })
 }
 
-/// Reads scriptlets from all *.md files in ~/.sk/kit/*/scriptlets/
+/// Reads scriptlets from all *.md files in ~/.scriptkit/*/scriptlets/
 /// Returns a sorted list of Arc-wrapped Scriptlet structs parsed from markdown
 /// Returns empty vec if directory doesn't exist or is inaccessible
 ///
@@ -233,7 +233,7 @@ pub fn read_scriptlets() -> Vec<Arc<Scriptlet>> {
 /// Load scriptlets from markdown files using the comprehensive parser
 ///
 /// Globs:
-/// - ~/.sk/kit/*/scriptlets/*.md (all kits)
+/// - ~/.scriptkit/*/scriptlets/*.md (all kits)
 ///
 /// Uses `crate::scriptlets::parse_markdown_as_scriptlets` for parsing.
 /// Returns Arc-wrapped scriptlets sorted by group then by name.
@@ -336,7 +336,7 @@ pub fn load_scriptlets() -> Vec<Arc<Scriptlet>> {
 }
 
 /// Extract kit name from a kit path
-/// e.g., ~/.sk/kit/my-kit/scriptlets/file.md -> Some("my-kit")
+/// e.g., ~/.scriptkit/my-kit/scriptlets/file.md -> Some("my-kit")
 pub(crate) fn extract_kit_from_path(path: &Path, kit_root: &Path) -> Option<String> {
     let kit_prefix = format!("{}/", kit_root.to_string_lossy());
     let path_str = path.to_string_lossy().to_string();

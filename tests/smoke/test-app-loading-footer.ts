@@ -54,5 +54,5 @@ try {
 
 console.error('[SMOKE] App loading footer test complete');
 console.error('[SMOKE] Note: Loading footer appears on cold start before apps are cached');
-console.error('[SMOKE] Run with fresh ~/.sk/kit/db/apps.sqlite deleted to see footer');
+console.error('[SMOKE] Run with fresh ~/.scriptkit/db/apps.sqlite deleted to see footer');
 process.exit(0);

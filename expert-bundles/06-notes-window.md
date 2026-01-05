@@ -327,8 +327,8 @@ static NOTES_DB: OnceLock<Arc<Mutex<Connection>>> = OnceLock::new();
 /// Get the path to the notes database
 fn get_notes_db_path() -> PathBuf {
     let kit_dir = dirs::home_dir()
-        .map(|h| h.join(".sk/kit"))
-        .unwrap_or_else(|| PathBuf::from(".sk/kit"));
+        .map(|h| h.join(".scriptkit"))
+        .unwrap_or_else(|| PathBuf::from(".scriptkit"));
 
     kit_dir.join("db").join("notes.sqlite")
 }
@@ -2558,7 +2558,7 @@ pub fn open_notes_window(cx: &mut App) -> Result<()> {
     configure_notes_as_floating_panel();
 
     // Theme hot-reload watcher for Notes window
-    // Spawns a background task that watches ~/.sk/kit/theme.json for changes
+    // Spawns a background task that watches ~/.scriptkit/theme.json for changes
     if let Some(notes_app) = notes_app_holder.lock().unwrap().clone() {
         let notes_app_for_theme = notes_app.clone();
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {

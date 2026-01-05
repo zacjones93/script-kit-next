@@ -4,7 +4,7 @@
 //!
 //! ## Features
 //! - Scans standard macOS application directories
-//! - Caches apps and icons in SQLite for instant startup (~/.sk/kit/db/apps.sqlite)
+//! - Caches apps and icons in SQLite for instant startup (~/.scriptkit/db/apps.sqlite)
 //! - Extracts bundle identifiers from Info.plist when available
 //! - Extracts app icons using NSWorkspace for display
 //! - Launches applications via `open -a`
@@ -117,9 +117,9 @@ const APP_DIRECTORIES: &[&str] = &[
 // SQLite Database Functions
 // ============================================================================
 
-/// Get the apps database path (~/.sk/kit/db/apps.sqlite)
+/// Get the apps database path (~/.scriptkit/db/apps.sqlite)
 fn get_apps_db_path() -> PathBuf {
-    let kit = PathBuf::from(shellexpand::tilde("~/.sk/kit").as_ref());
+    let kit = PathBuf::from(shellexpand::tilde("~/.scriptkit").as_ref());
     kit.join("db").join("apps.sqlite")
 }
 
@@ -401,9 +401,9 @@ pub fn get_apps_db_stats() -> (usize, u64) {
 // Legacy filesystem cache (kept for backward compat during migration)
 // ============================================================================
 
-/// Get the icon cache directory path (~/.sk/kit/cache/app-icons/)
+/// Get the icon cache directory path (~/.scriptkit/cache/app-icons/)
 fn get_icon_cache_dir() -> Option<PathBuf> {
-    let kit = PathBuf::from(shellexpand::tilde("~/.sk/kit").as_ref());
+    let kit = PathBuf::from(shellexpand::tilde("~/.scriptkit").as_ref());
     Some(kit.join("cache").join("app-icons"))
 }
 
@@ -1151,8 +1151,8 @@ mod tests {
             dir
         );
         assert!(
-            dir.to_string_lossy().contains(".sk/kit"),
-            "Cache dir should be under .sk/kit: {:?}",
+            dir.to_string_lossy().contains(".scriptkit"),
+            "Cache dir should be under .scriptkit: {:?}",
             dir
         );
     }
@@ -1275,8 +1275,8 @@ mod tests {
             db_path
         );
         assert!(
-            db_path.to_string_lossy().contains(".sk/kit"),
-            "DB path should be under .sk/kit: {:?}",
+            db_path.to_string_lossy().contains(".scriptkit"),
+            "DB path should be under .scriptkit: {:?}",
             db_path
         );
     }

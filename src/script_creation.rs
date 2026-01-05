@@ -27,11 +27,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::{info, instrument, warn};
 
-/// Scripts directory under ~/.sk/kit/
-const SCRIPTS_DIR: &str = "~/.sk/kit/scripts";
+/// Scripts directory under ~/.scriptkit/
+const SCRIPTS_DIR: &str = "~/.scriptkit/scripts";
 
-/// Scriptlets directory under ~/.sk/kit/
-const SCRIPTLETS_DIR: &str = "~/.sk/kit/scriptlets";
+/// Scriptlets directory under ~/.scriptkit/
+const SCRIPTLETS_DIR: &str = "~/.scriptkit/scriptlets";
 
 /// Sanitize a script name for use as a filename.
 ///
@@ -139,7 +139,7 @@ await div(`<h1>{title}</h1>`);
     )
 }
 
-/// Create a new script file in ~/.sk/kit/scripts/
+/// Create a new script file in ~/.scriptkit/scripts/
 ///
 /// # Arguments
 ///
@@ -194,7 +194,7 @@ pub fn create_new_script(name: &str) -> Result<PathBuf> {
     Ok(script_path)
 }
 
-/// Create a new scriptlet file in ~/.sk/kit/scriptlets/
+/// Create a new scriptlet file in ~/.scriptkit/scriptlets/
 ///
 /// # Arguments
 ///

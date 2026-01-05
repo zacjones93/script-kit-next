@@ -2780,12 +2780,12 @@ We manage child processes with:
 ### 2. SDK Preload Architecture
 Scripts are run with:
 ```bash
-bun run --preload ~/.sk/kit/sdk/kit-sdk.ts <script>
+bun run --preload ~/.scriptkit/sdk/kit-sdk.ts <script>
 ```
 
 The SDK is:
 - Embedded in the binary via `include_str!`
-- Extracted to `~/.sk/kit/sdk/` on startup
+- Extracted to `~/.scriptkit/sdk/` on startup
 - Provides globals like `arg()`, `div()`, `editor()`
 
 **Questions:**

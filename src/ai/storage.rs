@@ -15,11 +15,11 @@ use super::model::{Chat, ChatId, Message, MessageRole};
 /// Global database connection for AI chats
 static AI_DB: OnceLock<Arc<Mutex<Connection>>> = OnceLock::new();
 
-/// Get the path to the AI chats database (~/.sk/kit/db/ai-chats.sqlite)
+/// Get the path to the AI chats database (~/.scriptkit/db/ai-chats.sqlite)
 fn get_ai_db_path() -> PathBuf {
     let kit_dir = dirs::home_dir()
-        .map(|h| h.join(".sk/kit"))
-        .unwrap_or_else(|| PathBuf::from(".sk/kit"));
+        .map(|h| h.join(".scriptkit"))
+        .unwrap_or_else(|| PathBuf::from(".scriptkit"));
 
     kit_dir.join("db").join("ai-chats.sqlite")
 }
@@ -1244,7 +1244,7 @@ mod tests {
     fn test_db_path() {
         let path = get_ai_db_path();
         assert!(path.to_string_lossy().contains("ai-chats.sqlite"));
-        assert!(path.to_string_lossy().contains(".sk/kit/db"));
+        assert!(path.to_string_lossy().contains(".scriptkit/db"));
     }
 
     #[test]

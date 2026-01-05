@@ -4,8 +4,8 @@
 #![allow(dead_code)] // Some methods reserved for future use
 //!
 //! This module provides:
-//! - PID file at ~/.sk/kit/script-kit.pid for main app
-//! - Active child PIDs file at ~/.sk/kit/active-bun-pids.json
+//! - PID file at ~/.scriptkit/script-kit.pid for main app
+//! - Active child PIDs file at ~/.scriptkit/active-bun-pids.json
 //! - Thread-safe process registration/unregistration
 //! - Orphan detection on startup
 //! - Bulk kill for graceful shutdown
@@ -51,8 +51,8 @@ impl ProcessManager {
     /// Create a new ProcessManager with default paths
     pub fn new() -> Self {
         let kit_dir = dirs::home_dir()
-            .map(|h| h.join(".sk/kit"))
-            .unwrap_or_else(|| PathBuf::from("/tmp/.sk/kit"));
+            .map(|h| h.join(".scriptkit"))
+            .unwrap_or_else(|| PathBuf::from("/tmp/.scriptkit"));
 
         Self {
             active_processes: RwLock::new(HashMap::new()),
@@ -576,12 +576,12 @@ mod tests {
     fn test_default_paths() {
         let manager = ProcessManager::new();
 
-        // Should use ~/.sk/kit/ paths
+        // Should use ~/.scriptkit/ paths
         let home = dirs::home_dir().unwrap();
-        assert_eq!(manager.main_pid_path, home.join(".sk/kit/script-kit.pid"));
+        assert_eq!(manager.main_pid_path, home.join(".scriptkit/script-kit.pid"));
         assert_eq!(
             manager.active_pids_path,
-            home.join(".sk/kit/active-bun-pids.json")
+            home.join(".scriptkit/active-bun-pids.json")
         );
     }
 }

@@ -3,9 +3,9 @@
 //! Provides an HTTP server for MCP (Model Context Protocol) integration.
 //! Features:
 //! - HTTP server on localhost:43210
-//! - Bearer token authentication from ~/.sk/kit/agent-token
+//! - Bearer token authentication from ~/.scriptkit/agent-token
 //! - Health endpoint at GET /health
-//! - Discovery file at ~/.sk/kit/server.json
+//! - Discovery file at ~/.scriptkit/server.json
 
 // Allow dead code - ServerHandle methods provide full lifecycle API for future use
 #![allow(dead_code)]
@@ -45,7 +45,7 @@ impl Default for ServerCapabilities {
     }
 }
 
-/// Discovery file structure written to ~/.sk/kit/server.json
+/// Discovery file structure written to ~/.scriptkit/server.json
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DiscoveryInfo {
     pub url: String,
@@ -70,7 +70,7 @@ impl McpServer {
     ///
     /// # Arguments
     /// * `port` - Port to listen on (default: 43210)
-    /// * `kit_path` - Path to ~/.sk/kit directory
+    /// * `kit_path` - Path to ~/.scriptkit directory
     pub fn new(port: u16, kit_path: PathBuf) -> Result<Self> {
         let token = Self::load_or_create_token(&kit_path)?;
 
@@ -86,7 +86,7 @@ impl McpServer {
     pub fn with_defaults() -> Result<Self> {
         let kit_path = dirs::home_dir()
             .context("Failed to get home directory")?
-            .join(".sk/kit");
+            .join(".scriptkit");
 
         let port = std::env::var("MCP_PORT")
             .ok()
@@ -139,7 +139,7 @@ impl McpServer {
         self.running.load(Ordering::SeqCst)
     }
 
-    /// Write discovery file to ~/.sk/kit/server.json
+    /// Write discovery file to ~/.scriptkit/server.json
     fn write_discovery_file(&self) -> Result<()> {
         let discovery = DiscoveryInfo {
             url: self.url(),

@@ -1,14 +1,14 @@
 // Build script for script-kit-gpui
 //
 // This script tells Cargo to rebuild when key files change.
-// SDK deployment to ~/.sk/kit is now handled at runtime by setup::ensure_kit_setup()
+// SDK deployment to ~/.scriptkit is now handled at runtime by setup::ensure_kit_setup()
 // rather than at build time, ensuring the SDK is always in sync with the running binary.
 
 fn main() {
     // Trigger rebuild when SDK source changes (it's embedded via include_str!)
     println!("cargo:rerun-if-changed=scripts/kit-sdk.ts");
 
-    // Trigger rebuild when kit-init files change (embedded and shipped to ~/.sk/kit/)
+    // Trigger rebuild when kit-init files change (embedded and shipped to ~/.scriptkit/)
     println!("cargo:rerun-if-changed=kit-init/config-template.ts");
     println!("cargo:rerun-if-changed=kit-init/theme.example.json");
     println!("cargo:rerun-if-changed=kit-init/GUIDE.md");

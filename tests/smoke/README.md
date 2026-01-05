@@ -58,17 +58,17 @@ cargo build
 ./target/debug/script-kit-gpui tests/smoke/hello-world-args.ts
 ```
 
-### Option 2: Copy to ~/.sk/kit/scripts/ (Production-like)
+### Option 2: Copy to ~/.scriptkit/scripts/ (Production-like)
 
 For testing in a production-like environment:
 
 ```bash
 # Create scripts directory if needed
-mkdir -p ~/.sk/kit/scripts
+mkdir -p ~/.scriptkit/scripts
 
 # Copy SDK to sdk location (or let the app extract it on startup)
-mkdir -p ~/.sk/kit/sdk
-cp scripts/kit-sdk.ts ~/.sk/kit/sdk/kit-sdk.ts
+mkdir -p ~/.scriptkit/sdk
+cp scripts/kit-sdk.ts ~/.scriptkit/sdk/kit-sdk.ts
 
 # Copy smoke tests (update import paths first!)
 # Note: You'll need to change the import from:
@@ -95,9 +95,9 @@ When running `hello-world.ts`, you should see:
 ```
 [EXEC] execute_script_interactive: tests/smoke/hello-world.ts
 [EXEC] Looking for SDK...
-[EXEC]   Checking: /Users/<you>/.sk/kit/sdk/kit-sdk.ts
+[EXEC]   Checking: /Users/<you>/.scriptkit/sdk/kit-sdk.ts
 [EXEC]   Checking dev path: /path/to/script-kit-gpui/scripts/kit-sdk.ts
-[EXEC]   FOUND SDK (kenv): /Users/<you>/.sk/kit/sdk/kit-sdk.ts
+[EXEC]   FOUND SDK (kenv): /Users/<you>/.scriptkit/sdk/kit-sdk.ts
 [EXEC] Trying: bun run --preload /path/to/sdk tests/smoke/hello-world.ts
 [EXEC] SUCCESS: bun with preload
 [EXEC] Process spawned with PID: 12345
@@ -122,7 +122,7 @@ The scripts also log to stderr for debugging:
 **Symptom:** Executor logs show SDK search failing
 **Solution:** 
 1. Ensure `scripts/kit-sdk.ts` exists in project root
-2. Or let the app extract it automatically to `~/.sk/kit/sdk/kit-sdk.ts` on startup
+2. Or let the app extract it automatically to `~/.scriptkit/sdk/kit-sdk.ts` on startup
 
 ### Issue: "Failed to spawn 'bun'"
 
@@ -382,7 +382,7 @@ Add scheduling metadata to the top of your script:
 
 ### How It Works
 
-1. **Discovery**: When Script Kit starts, it scans `~/.sk/kit/scripts/` for scripts with `// Cron:` or `// Schedule:` metadata
+1. **Discovery**: When Script Kit starts, it scans `~/.scriptkit/scripts/` for scripts with `// Cron:` or `// Schedule:` metadata
 2. **Scheduling**: The scheduler calculates the next execution time for each scheduled script
 3. **Execution**: When a script is due, it runs automatically (even if the main window is hidden)
 4. **File Watching**: Changes to scripts are detected and schedules are updated automatically
@@ -397,7 +397,7 @@ Add scheduling metadata to the top of your script:
 | `test-schedule-natural.ts` | `every minute` | Tests natural language scheduling |
 
 Both test scripts:
-- Log execution to `~/.sk/kit/logs/scheduler-test.log` or `schedule-natural-test.log`
+- Log execution to `~/.scriptkit/logs/scheduler-test.log` or `schedule-natural-test.log`
 - Display a confirmation div that auto-closes after 3 seconds
 - Can be used to verify the scheduler is working
 
@@ -405,8 +405,8 @@ Both test scripts:
 
 1. **Copy test scripts to kenv:**
    ```bash
-   cp tests/smoke/test-scheduler.ts ~/.sk/kit/scripts/
-   cp tests/smoke/test-schedule-natural.ts ~/.sk/kit/scripts/
+   cp tests/smoke/test-scheduler.ts ~/.scriptkit/scripts/
+   cp tests/smoke/test-schedule-natural.ts ~/.scriptkit/scripts/
    ```
 
 2. **Start Script Kit:**
@@ -418,8 +418,8 @@ Both test scripts:
 
 4. **Check logs:**
    ```bash
-   tail -f ~/.sk/kit/logs/scheduler-test.log
-   tail -f ~/.sk/kit/logs/schedule-natural-test.log
+   tail -f ~/.scriptkit/logs/scheduler-test.log
+   tail -f ~/.scriptkit/logs/schedule-natural-test.log
    ```
 
 #### Expected Log Output
@@ -438,7 +438,7 @@ Check the app logs for scheduler activity:
 SCRIPT_KIT_AI_LOG=1 ./target/debug/script-kit-gpui 2>&1 | grep -i schedul
 
 # Full JSONL logs
-tail -f ~/.sk/kit/logs/script-kit-gpui.jsonl | grep -i schedul
+tail -f ~/.scriptkit/logs/script-kit-gpui.jsonl | grep -i schedul
 ```
 
 ### Best Practices

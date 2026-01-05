@@ -133,7 +133,7 @@ fn clipboard_monitor_loop(stop_flag: Arc<Mutex<bool>>) -> Result<()> {
 
 **Security Implication:** 
 - Background thread monitors clipboard continuously
-- Stores up to 1000 entries in SQLite database at `~/.sk/kit/clipboard-history.db`
+- Stores up to 1000 entries in SQLite database at `~/.scriptkit/clipboard-history.db`
 - Images are base64-encoded and stored
 
 ### Finding T2: Clipboard History Privacy
@@ -156,7 +156,7 @@ The application runs with full user privileges and is not contained by App Sandb
 
 1. **No sandbox entitlement** - No `com.apple.security.app-sandbox` key
 2. **Direct file system access:**
-   - Writes to `~/.sk/kit/` directory
+   - Writes to `~/.scriptkit/` directory
    - Scans `/Applications`, `/System/Applications`, `~/Applications`
    - Creates temp files in system temp directory
 3. **Network access:**
@@ -170,11 +170,11 @@ The application runs with full user privileges and is not contained by App Sandb
 
 | Path | Access | Purpose |
 |------|--------|---------|
-| `~/.sk/kit/` | R/W | User data, scripts, config |
-| `~/.sk/kit/clipboard-history.db` | R/W | Clipboard database |
-| `~/.sk/kit/sdk/` | R/W | SDK files |
-| `~/.sk/kit/logs/` | R/W | Application logs |
-| `~/.sk/kit/cache/app-icons/` | R/W | Cached app icons |
+| `~/.scriptkit/` | R/W | User data, scripts, config |
+| `~/.scriptkit/clipboard-history.db` | R/W | Clipboard database |
+| `~/.scriptkit/sdk/` | R/W | SDK files |
+| `~/.scriptkit/logs/` | R/W | Application logs |
+| `~/.scriptkit/cache/app-icons/` | R/W | Cached app icons |
 | `/Applications/` | R | App scanning |
 | `/System/Applications/` | R | System app scanning |
 | `~/Applications/` | R | User app scanning |
@@ -431,7 +431,7 @@ All IPC is via:
 ## Appendix B: File System Footprint
 
 ```
-~/.sk/kit/
+~/.scriptkit/
 ├── clipboard-history.db    # SQLite - clipboard data
 ├── config.ts               # User configuration
 ├── logs/
@@ -451,6 +451,6 @@ All IPC is via:
 | Script Execution | User-controlled scripts | Process groups, no elevation |
 | Clipboard | Continuous monitoring | User-initiated feature |
 | Accessibility | Cross-app text/window | TCC permission required |
-| File System | ~/.sk/kit/ writes | User data only |
+| File System | ~/.scriptkit/ writes | User data only |
 | Network | Script-dependent | No app-level restrictions |
 | IPC | stdin/stdout pipes | Typed protocol, no network |

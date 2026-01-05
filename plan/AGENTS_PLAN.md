@@ -1,12 +1,12 @@
 # Agents System Plan
 
-> Integrate mdflow as runnable markdown agents in `~/.sk/kit/main/agents/*.md`
+> Integrate mdflow as runnable markdown agents in `~/.scriptkit/main/agents/*.md`
 
 ## Overview
 
 This plan covers integrating [mdflow](https://github.com/johnlindquist/mdflow) as first-class agents in Script Kit, following the same patterns established for scripts and scriptlets:
 
-1. **File watching**: Monitor `~/.sk/kit/*/agents/` directories for changes
+1. **File watching**: Monitor `~/.scriptkit/*/agents/` directories for changes
 2. **Parsing**: Extract agent metadata from YAML frontmatter and filename patterns
 3. **Main menu integration**: Display agents alongside scripts/scriptlets in unified search
 4. **Execution**: Run agents via `mdflow` CLI with proper stdin/stdout handling
@@ -31,7 +31,7 @@ This plan covers integrating [mdflow](https://github.com/johnlindquist/mdflow) a
 
 | Feature | Scripts | Scriptlets | Agents (Planned) |
 |---------|---------|------------|------------------|
-| **Location** | `~/.sk/kit/*/scripts/*.ts` | `~/.sk/kit/*/scriptlets/*.md` | `~/.sk/kit/*/agents/*.md` |
+| **Location** | `~/.scriptkit/*/scripts/*.ts` | `~/.scriptkit/*/scriptlets/*.md` | `~/.scriptkit/*/agents/*.md` |
 | **Struct** | `Script` | `Scriptlet` | `Agent` |
 | **Match type** | `ScriptMatch` | `ScriptletMatch` | `AgentMatch` |
 | **Search result** | `SearchResult::Script` | `SearchResult::Scriptlet` | `SearchResult::Agent` |
@@ -366,7 +366,7 @@ use crate::setup::get_kit_path;
 
 /// Load agents from all kits
 /// 
-/// Globs: ~/.sk/kit/*/agents/*.md
+/// Globs: ~/.scriptkit/*/agents/*.md
 /// 
 /// Returns Arc-wrapped agents sorted by name.
 pub fn load_agents() -> Vec<Arc<Agent>> {
@@ -483,7 +483,7 @@ fn is_agent_file(path: &Path) -> bool {
 }
 
 // In ScriptWatcher::watch_loop(), add:
-// 1. Watch ~/.sk/kit/*/agents/ directories
+// 1. Watch ~/.scriptkit/*/agents/ directories
 // 2. Filter for .md files in agents/ subdirs
 // 3. Emit AgentReloadEvent for changes
 ```
@@ -1004,7 +1004,7 @@ export const metadata = {
 console.error('[SMOKE] Testing agent integration...');
 
 // Create a test agent file
-const agentPath = join(process.env.HOME!, '.sk/kit/main/agents/test.claude.md');
+const agentPath = join(process.env.HOME!, '.scriptkit/main/agents/test.claude.md');
 await writeFile(agentPath, `---
 model: sonnet
 description: Test agent for smoke testing
@@ -1067,7 +1067,7 @@ process.exit(0);
 
 ## Success Criteria
 
-- [ ] Agents in `~/.sk/kit/*/agents/*.md` appear in main menu
+- [ ] Agents in `~/.scriptkit/*/agents/*.md` appear in main menu
 - [ ] Fuzzy search works across agent name, description, backend
 - [ ] File watcher detects new/modified/deleted agents
 - [ ] Executing an agent spawns mdflow with correct arguments

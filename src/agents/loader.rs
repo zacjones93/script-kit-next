@@ -1,7 +1,7 @@
 //! Agent file loading
 //!
 //! This module handles loading agent files from the filesystem:
-//! - Glob `~/.sk/kit/*/agents/*.md` directories
+//! - Glob `~/.scriptkit/*/agents/*.md` directories
 //! - Parse each file using the parser module
 //! - Return Arc-wrapped agents for cheap cloning
 
@@ -20,7 +20,7 @@ use crate::setup::get_kit_path;
 
 /// Load agents from all kits
 ///
-/// Globs: `~/.sk/kit/*/agents/*.md`
+/// Globs: `~/.scriptkit/*/agents/*.md`
 ///
 /// Returns Arc-wrapped agents sorted by name.
 ///
@@ -98,8 +98,8 @@ pub fn load_agents_from_path(kit_path: &Path) -> Vec<Arc<Agent>> {
 
 /// Extract kit name from path
 ///
-/// Given a path like `/Users/x/.sk/kit/main/agents/task.claude.md`
-/// and kit root `/Users/x/.sk/kit`, returns `Some("main")`.
+/// Given a path like `/Users/x/.scriptkit/main/agents/task.claude.md`
+/// and kit root `/Users/x/.scriptkit`, returns `Some("main")`.
 fn extract_kit_from_path(path: &Path, kit_root: &Path) -> Option<String> {
     // Get the relative path from kit root
     let relative = path.strip_prefix(kit_root).ok()?;
@@ -295,8 +295,8 @@ Generate code for:
 
     #[test]
     fn test_extract_kit_from_path() {
-        let kit_root = Path::new("/Users/x/.sk/kit");
-        let agent_path = Path::new("/Users/x/.sk/kit/main/agents/task.claude.md");
+        let kit_root = Path::new("/Users/x/.scriptkit");
+        let agent_path = Path::new("/Users/x/.scriptkit/main/agents/task.claude.md");
 
         let kit = extract_kit_from_path(agent_path, kit_root);
         assert_eq!(kit, Some("main".to_string()));
@@ -304,8 +304,8 @@ Generate code for:
 
     #[test]
     fn test_extract_kit_from_nested_path() {
-        let kit_root = Path::new("/Users/x/.sk/kit");
-        let agent_path = Path::new("/Users/x/.sk/kit/my-custom-kit/agents/task.claude.md");
+        let kit_root = Path::new("/Users/x/.scriptkit");
+        let agent_path = Path::new("/Users/x/.scriptkit/my-custom-kit/agents/task.claude.md");
 
         let kit = extract_kit_from_path(agent_path, kit_root);
         assert_eq!(kit, Some("my-custom-kit".to_string()));

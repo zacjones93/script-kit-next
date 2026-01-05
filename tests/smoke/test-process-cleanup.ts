@@ -1,14 +1,14 @@
 // Name: Process Cleanup Smoke Test
-// Description: Verify that the main app PID file is created at ~/.sk/kit/script-kit.pid
+// Description: Verify that the main app PID file is created at ~/.scriptkit/script-kit.pid
 
 /**
  * SMOKE TEST: test-process-cleanup.ts
  *
  * This test verifies that the process management system creates the PID file
- * at ~/.sk/kit/script-kit.pid when the app runs.
+ * at ~/.scriptkit/script-kit.pid when the app runs.
  *
  * What this tests:
- * - PID file exists at ~/.sk/kit/script-kit.pid
+ * - PID file exists at ~/.scriptkit/script-kit.pid
  * - PID file contains a valid numeric PID
  * - The PID corresponds to a running process
  *

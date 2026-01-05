@@ -35,12 +35,12 @@ impl ScriptListApp {
         ));
         logging::log(
             "APP",
-            &format!("Loaded {} scripts from ~/.sk/kit/scripts", scripts.len()),
+            &format!("Loaded {} scripts from ~/.scriptkit/scripts", scripts.len()),
         );
         logging::log(
             "APP",
             &format!(
-                "Loaded {} scriptlets from ~/.sk/kit/scriptlets/scriptlets.md",
+                "Loaded {} scriptlets from ~/.scriptkit/scriptlets/scriptlets.md",
                 scriptlets.len()
             ),
         );

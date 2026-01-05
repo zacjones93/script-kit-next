@@ -20,7 +20,7 @@ fn test_is_javascript() {
 #[test]
 fn test_is_typescript_with_path() {
     assert!(is_typescript(&PathBuf::from(
-        "/home/user/.sk/kit/scripts/script.ts"
+        "/home/user/.scriptkit/scripts/script.ts"
     )));
     assert!(is_typescript(&PathBuf::from("/usr/local/bin/script.ts")));
 }
@@ -28,7 +28,7 @@ fn test_is_typescript_with_path() {
 #[test]
 fn test_is_javascript_with_path() {
     assert!(is_javascript(&PathBuf::from(
-        "/home/user/.sk/kit/scripts/script.js"
+        "/home/user/.scriptkit/scripts/script.js"
     )));
     assert!(is_javascript(&PathBuf::from("/usr/local/bin/script.js")));
 }

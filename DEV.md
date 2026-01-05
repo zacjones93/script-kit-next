@@ -55,9 +55,9 @@ The app automatically watches `~/.kit/theme.json` for changes:
 - The UI refreshes in real-time without restarting the app
 - See the "Theme Configuration" section below for details
 
-### 3. **Script List Changes** (via ~/.sk/kit/scripts)
+### 3. **Script List Changes** (via ~/.scriptkit/scripts)
 The app automatically detects new or modified scripts:
-- Add a new script to `~/.sk/kit/scripts/`
+- Add a new script to `~/.scriptkit/scripts/`
 - Remove or rename an existing script
 - The app refreshes the script list without restarting
 - Changes appear in the UI immediately
@@ -180,7 +180,7 @@ If your configured hotkey isn't working:
    - Helpful for debugging configuration issues
 
 2. **Test scripts incrementally**
-   - Create test scripts in `~/.sk/kit/scripts/`
+   - Create test scripts in `~/.scriptkit/scripts/`
    - Run them through the UI to verify behavior
    - Check logs for execution details
 
@@ -274,7 +274,7 @@ The app now supports Script Kit's v1 API prompts via bidirectional JSONL:
 
 1. Create a script using `arg()` or `div()`:
    ```typescript
-   // ~/.sk/kit/scripts/my-test.ts
+   // ~/.scriptkit/scripts/my-test.ts
    const choice = await arg('Pick one', [
      { name: 'Option A', value: 'a' },
      { name: 'Option B', value: 'b' },
@@ -520,7 +520,7 @@ Benchmark output includes:
 
 1. ✅ Install `cargo-watch`: `cargo install cargo-watch`
 2. ✅ Start dev server: `./dev.sh`
-3. ✅ Create a test script in `~/.sk/kit/scripts/`
+3. ✅ Create a test script in `~/.scriptkit/scripts/`
 4. ✅ Configure hotkey in `~/.kit/config.json`
 5. ✅ Use `Cmd+L` to view logs while developing
 6. ✅ (NEW!) Customize focus-aware theme in `~/.kit/theme.json`

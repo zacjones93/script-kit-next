@@ -157,7 +157,7 @@ pub const VALID_CATEGORIES: &[&str] = &[
 | `src/scriptlets.rs` | `src/extensions.rs` |
 | `src/scriptlet_metadata.rs` | `src/extension_metadata.rs` |
 | `src/scriptlet_cache.rs` | `src/extension_cache.rs` |
-| `~/.sk/kit/snippets/` | `~/.sk/kit/extensions/` |
+| `~/.scriptkit/snippets/` | `~/.scriptkit/extensions/` |
 
 ### Struct/Type Renames
 
@@ -225,7 +225,7 @@ categories:
 - [ ] Update all imports
 
 ### Priority: Medium
-- [ ] Add `~/.sk/kit/extensions/` path support
+- [ ] Add `~/.scriptkit/extensions/` path support
 - [ ] Create example extensions
 - [ ] Migration from `snippets/` → `extensions/`
 

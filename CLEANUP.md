@@ -315,13 +315,13 @@ Add these patterns to prevent future accumulation:
 |-----------|------|--------|
 | `.test-screenshots/` | 32 MB | Auto-delete PNGs older than 7 days |
 | `.mocks/` | 54 MB | Review visual baselines quarterly |
-| `~/.sk/kit/logs/` | Variable | Rotate logs older than 30 days |
+| `~/.scriptkit/logs/` | Variable | Rotate logs older than 30 days |
 
 **Suggested cron/script**:
 ```bash
 # Add to development workflow or CI
 find .test-screenshots -name "*.png" -mtime +7 -delete
-find ~/.sk/kit/logs -name "*.jsonl" -mtime +30 -delete
+find ~/.scriptkit/logs -name "*.jsonl" -mtime +30 -delete
 ```
 
 ### 6.3 Directory Deduplication

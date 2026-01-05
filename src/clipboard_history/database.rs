@@ -26,13 +26,13 @@ pub fn compute_content_hash(content: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-/// Get the database path (~/.sk/kit/db/clipboard-history.sqlite)
+/// Get the database path (~/.scriptkit/db/clipboard-history.sqlite)
 pub fn get_db_path() -> Result<PathBuf> {
-    let kit_dir = PathBuf::from(shellexpand::tilde("~/.sk/kit").as_ref());
+    let kit_dir = PathBuf::from(shellexpand::tilde("~/.scriptkit").as_ref());
     let db_dir = kit_dir.join("db");
 
     if !db_dir.exists() {
-        std::fs::create_dir_all(&db_dir).context("Failed to create ~/.sk/kit/db directory")?;
+        std::fs::create_dir_all(&db_dir).context("Failed to create ~/.scriptkit/db directory")?;
     }
 
     Ok(db_dir.join("clipboard-history.sqlite"))
@@ -743,11 +743,11 @@ mod tests {
     #[test]
     fn test_db_path_format() {
         let expected_filename = "clipboard-history.sqlite";
-        let kit_dir = PathBuf::from(shellexpand::tilde("~/.sk/kit").as_ref());
+        let kit_dir = PathBuf::from(shellexpand::tilde("~/.scriptkit").as_ref());
         let expected_path = kit_dir.join("db").join(expected_filename);
 
         assert!(expected_path.to_string_lossy().contains(expected_filename));
-        assert!(expected_path.to_string_lossy().contains(".sk/kit/db"));
+        assert!(expected_path.to_string_lossy().contains(".scriptkit/db"));
     }
 
     #[test]

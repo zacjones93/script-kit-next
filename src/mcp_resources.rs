@@ -137,7 +137,7 @@ pub fn get_resource_definitions() -> Vec<McpResource> {
         McpResource {
             uri: "scripts://".to_string(),
             name: "Scripts".to_string(),
-            description: Some("List of all available scripts in ~/.sk/kit/scripts/".to_string()),
+            description: Some("List of all available scripts in ~/.scriptkit/scripts/".to_string()),
             mime_type: "application/json".to_string(),
         },
         McpResource {

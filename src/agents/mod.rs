@@ -1,7 +1,7 @@
 //! Agents module - mdflow agent integration
 //!
 //! This module provides functionality for:
-//! - Loading agents from `~/.sk/kit/*/agents/*.md`
+//! - Loading agents from `~/.scriptkit/*/agents/*.md`
 //! - Parsing agent metadata from YAML frontmatter
 //! - Executing agents via the mdflow CLI
 //! - Fuzzy search across agents

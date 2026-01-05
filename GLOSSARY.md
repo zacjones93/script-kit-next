@@ -154,7 +154,7 @@ uuid()                   // Generate UUID
 wait(ms)                 // Delay execution
 run(script)              // Run another script
 home()                   // Home directory path
-skPath(...)            // ~/.sk/kit path helper
+skPath(...)            // ~/.scriptkit path helper
 kitPath(...)             // Kit installation path
 tmpPath(...)             // Temp directory path
 ```
@@ -318,6 +318,6 @@ Access via `DesignVariant` enum in `src/designs/`.
 | List item | `src/list_item.rs` |
 | SDK source | `scripts/kit-sdk.ts` |
 | Test scripts | `tests/smoke/`, `tests/sdk/` |
-| User config | `~/.sk/kit/config.ts` |
-| User theme | `~/.sk/kit/theme.json` |
-| Logs | `~/.sk/kit/logs/script-kit-gpui.jsonl` |
+| User config | `~/.scriptkit/config.ts` |
+| User theme | `~/.scriptkit/theme.json` |
+| Logs | `~/.scriptkit/logs/script-kit-gpui.jsonl` |

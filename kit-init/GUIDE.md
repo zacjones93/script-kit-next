@@ -38,10 +38,10 @@ Script Kit is a powerful automation tool that lets you create scripts to automat
 
 1. **Create the scripts directory** (if it doesn't exist):
    ```bash
-   mkdir -p ~/.sk/kit/main/scripts
+   mkdir -p ~/.scriptkit/main/scripts
    ```
 
-2. **Create your first script** at `~/.sk/kit/main/scripts/hello.ts`:
+2. **Create your first script** at `~/.scriptkit/main/scripts/hello.ts`:
    ```typescript
    export const metadata = {
      name: "Hello World",
@@ -68,16 +68,16 @@ The global hotkey opens the Script Kit launcher from anywhere:
 | Windows  | `Ctrl+;`       |
 | Linux    | `Ctrl+;`       |
 
-You can customize this in `~/.sk/kit/config.ts` (see [Configuration](#configuration-configts)).
+You can customize this in `~/.scriptkit/config.ts` (see [Configuration](#configuration-configts)).
 
 ---
 
 ## Directory Structure
 
-Script Kit stores all its data in `~/.sk/kit/`. Here's the layout:
+Script Kit stores all its data in `~/.scriptkit/`. Here's the layout:
 
 ```
-~/.sk/kit/
+~/.scriptkit/
 ├── main/                    # Default kit (your scripts)
 │   ├── scripts/             # Your script files (.ts, .js)
 │   └── scriptlets/          # Markdown-based mini-scripts
@@ -109,10 +109,10 @@ Script Kit stores all its data in `~/.sk/kit/`. Here's the layout:
 
 ### Creating a Script File
 
-Create a `.ts` file in `~/.sk/kit/main/scripts/`:
+Create a `.ts` file in `~/.scriptkit/main/scripts/`:
 
 ```typescript
-// ~/.sk/kit/main/scripts/my-script.ts
+// ~/.scriptkit/main/scripts/my-script.ts
 
 export const metadata = {
   name: "My Script",
@@ -458,7 +458,7 @@ Scriptlets are markdown-based mini-scripts that execute shell commands. They're 
 
 ### Creating a Scriptlet
 
-Create a `.md` file in `~/.sk/kit/main/scriptlets/`:
+Create a `.md` file in `~/.scriptkit/main/scriptlets/`:
 
 ```markdown
 <!-- 
@@ -531,7 +531,7 @@ tags: utility, shell
 
 ## Configuration (config.ts)
 
-Create `~/.sk/kit/config.ts` to customize Script Kit:
+Create `~/.scriptkit/config.ts` to customize Script Kit:
 
 ```typescript
 import type { Config } from "@scriptkit/sdk";
@@ -624,7 +624,7 @@ Common key codes:
 
 ## Themes (theme.json)
 
-Customize the look and feel with `~/.sk/kit/theme.json`:
+Customize the look and feel with `~/.scriptkit/theme.json`:
 
 ```json
 {
@@ -822,7 +822,7 @@ Set one of these environment variables:
 
 2. **Environment file**:
    ```bash
-   # ~/.sk/kit/.env
+   # ~/.scriptkit/.env
    SCRIPT_KIT_ANTHROPIC_API_KEY=sk-ant-...
    ```
 
@@ -842,7 +842,7 @@ Set one of these environment variables:
 ### Configuring the Hotkey
 
 ```typescript
-// ~/.sk/kit/config.ts
+// ~/.scriptkit/config.ts
 aiHotkey: {
   modifiers: ["meta", "shift"],
   key: "Space"
@@ -877,7 +877,7 @@ A floating notes window with Markdown support for quick note-taking.
 ### Configuring the Hotkey
 
 ```typescript
-// ~/.sk/kit/config.ts
+// ~/.scriptkit/config.ts
 notesHotkey: {
   modifiers: ["meta", "shift"],
   key: "KeyN"
@@ -886,7 +886,7 @@ notesHotkey: {
 
 ### Storage
 
-Notes are stored in SQLite at `~/.sk/kit/db/notes.sqlite`.
+Notes are stored in SQLite at `~/.scriptkit/db/notes.sqlite`.
 
 ---
 
@@ -934,7 +934,7 @@ await notify(`New download: ${changedFile}`);
 Beyond the default `main/` kit, you can add additional kits:
 
 ```
-~/.sk/kit/
+~/.scriptkit/
 ├── main/              # Default kit
 │   └── scripts/
 ├── work/              # Work scripts
@@ -1070,7 +1070,7 @@ export SK_PATH=~/Projects/my-app/.kit
 | Function | Description |
 |----------|-------------|
 | `home(...segments)` | Path relative to ~ |
-| `skPath(...segments)` | Path relative to ~/.sk/kit |
+| `skPath(...segments)` | Path relative to ~/.scriptkit |
 | `kitPath(...segments)` | Alias for skPath |
 | `tmpPath(...segments)` | Path in temp directory |
 

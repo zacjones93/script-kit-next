@@ -87,7 +87,7 @@ All tests passed!
 
 ### Creating a New MCP Tool
 
-1. Create a script in `~/.sk/kit/scripts/`:
+1. Create a script in `~/.scriptkit/scripts/`:
 
 ```typescript
 import "@scriptkit/sdk"
@@ -116,7 +116,7 @@ output({ result: `${param1} x ${param2}` })
 ### Testing Your Tool
 
 ```bash
-TOKEN=$(cat ~/.sk/kit/agent-token)
+TOKEN=$(cat ~/.scriptkit/agent-token)
 
 # List tools (verify your tool appears)
 curl -s -X POST "http://localhost:43210/rpc" \

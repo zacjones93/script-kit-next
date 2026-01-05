@@ -1,14 +1,14 @@
 # kit-init
 
-Files in this directory are embedded into the Script Kit binary and copied to `~/.sk/kit/` during first-run setup.
+Files in this directory are embedded into the Script Kit binary and copied to `~/.scriptkit/` during first-run setup.
 
 ## Files
 
 | File | Destination | Purpose |
 |------|-------------|---------|
-| `GUIDE.md` | `~/.sk/kit/GUIDE.md` | Comprehensive user tutorial |
-| `config-template.ts` | `~/.sk/kit/config.ts` | Default configuration |
-| `theme.example.json` | `~/.sk/kit/theme.json` | Default theme |
+| `GUIDE.md` | `~/.scriptkit/GUIDE.md` | Comprehensive user tutorial |
+| `config-template.ts` | `~/.scriptkit/config.ts` | Default configuration |
+| `theme.example.json` | `~/.scriptkit/theme.json` | Default theme |
 
 ## Behavior
 

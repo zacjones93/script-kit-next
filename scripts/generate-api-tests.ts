@@ -54,7 +54,7 @@ interface ParsedDemo {
 // Configuration
 // =============================================================================
 
-const KENV_SCRIPTS = path.join(process.env.HOME || "", ".sk/kit/scripts");
+const KENV_SCRIPTS = path.join(process.env.HOME || "", ".scriptkit/scripts");
 const OUTPUT_DIR = path.join(process.cwd(), "tests/autonomous");
 const MANIFEST_FILE = path.join(OUTPUT_DIR, "api-manifest.json");
 
@@ -893,8 +893,8 @@ await runTest('home-with-subpath', async () => {
 
 await runTest('skPath-basic', async () => {
   const result = skPath();
-  if (!result.includes('.sk/kit')) {
-    throw new Error(\`Expected .sk/kit in path, got: \${result}\`);
+  if (!result.includes('.scriptkit')) {
+    throw new Error(\`Expected .scriptkit in path, got: \${result}\`);
   }
 });
 
