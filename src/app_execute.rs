@@ -238,13 +238,6 @@ impl ScriptListApp {
                         SystemActionType::Volume100 => system_actions::set_volume(100),
                         SystemActionType::VolumeMute => system_actions::volume_mute(),
 
-                        // Brightness controls (preset levels)
-                        SystemActionType::Brightness0 => system_actions::set_brightness(0),
-                        SystemActionType::Brightness25 => system_actions::set_brightness(25),
-                        SystemActionType::Brightness50 => system_actions::set_brightness(50),
-                        SystemActionType::Brightness75 => system_actions::set_brightness(75),
-                        SystemActionType::Brightness100 => system_actions::set_brightness(100),
-
                         // Dev/test actions
                         #[cfg(debug_assertions)]
                         SystemActionType::TestConfirmation => {

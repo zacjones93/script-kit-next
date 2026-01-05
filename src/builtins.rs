@@ -49,13 +49,6 @@ pub enum SystemActionType {
     Volume100,
     VolumeMute,
 
-    // Brightness controls (preset levels)
-    Brightness0,
-    Brightness25,
-    Brightness50,
-    Brightness75,
-    Brightness100,
-
     // Dev/test actions (only available in debug builds)
     #[cfg(debug_assertions)]
     TestConfirmation,
@@ -550,92 +543,6 @@ pub fn get_builtin_entries(config: &BuiltInConfig) -> Vec<BuiltInEntry> {
         vec!["mute", "unmute", "volume", "sound", "audio", "toggle"],
         BuiltInFeature::SystemAction(SystemActionType::VolumeMute),
         "🔇",
-    ));
-
-    // Brightness controls (preset levels)
-    entries.push(BuiltInEntry::new_with_icon(
-        "builtin-brightness-0",
-        "Brightness 0%",
-        "Set display brightness to 0% (dark)",
-        vec![
-            "brightness",
-            "0",
-            "percent",
-            "dark",
-            "off",
-            "display",
-            "screen",
-        ],
-        BuiltInFeature::SystemAction(SystemActionType::Brightness0),
-        "🌑",
-    ));
-
-    entries.push(BuiltInEntry::new_with_icon(
-        "builtin-brightness-25",
-        "Brightness 25%",
-        "Set display brightness to 25%",
-        vec![
-            "brightness",
-            "25",
-            "percent",
-            "dim",
-            "low",
-            "display",
-            "screen",
-        ],
-        BuiltInFeature::SystemAction(SystemActionType::Brightness25),
-        "🌘",
-    ));
-
-    entries.push(BuiltInEntry::new_with_icon(
-        "builtin-brightness-50",
-        "Brightness 50%",
-        "Set display brightness to 50%",
-        vec![
-            "brightness",
-            "50",
-            "percent",
-            "half",
-            "medium",
-            "display",
-            "screen",
-        ],
-        BuiltInFeature::SystemAction(SystemActionType::Brightness50),
-        "🌗",
-    ));
-
-    entries.push(BuiltInEntry::new_with_icon(
-        "builtin-brightness-75",
-        "Brightness 75%",
-        "Set display brightness to 75%",
-        vec![
-            "brightness",
-            "75",
-            "percent",
-            "bright",
-            "high",
-            "display",
-            "screen",
-        ],
-        BuiltInFeature::SystemAction(SystemActionType::Brightness75),
-        "🌖",
-    ));
-
-    entries.push(BuiltInEntry::new_with_icon(
-        "builtin-brightness-100",
-        "Brightness 100%",
-        "Set display brightness to 100% (max)",
-        vec![
-            "brightness",
-            "100",
-            "percent",
-            "max",
-            "full",
-            "display",
-            "screen",
-        ],
-        BuiltInFeature::SystemAction(SystemActionType::Brightness100),
-        "☀️",
     ));
 
     // App control
@@ -1325,10 +1232,6 @@ mod tests {
         assert!(entries.iter().any(|e| e.id == "builtin-volume-0"));
         assert!(entries.iter().any(|e| e.id == "builtin-volume-50"));
         assert!(entries.iter().any(|e| e.id == "builtin-volume-100"));
-        // Brightness presets
-        assert!(entries.iter().any(|e| e.id == "builtin-brightness-0"));
-        assert!(entries.iter().any(|e| e.id == "builtin-brightness-50"));
-        assert!(entries.iter().any(|e| e.id == "builtin-brightness-100"));
         assert!(entries.iter().any(|e| e.id == "builtin-system-preferences"));
     }
 
