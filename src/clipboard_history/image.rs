@@ -286,14 +286,70 @@ fn get_blob_dimensions(content: &str) -> Option<(u32, u32)> {
     Some((width, height))
 }
 
-/// Extract dimensions from PNG header without full decode
+/// Extract dimensions from PNG header using fast header-only parsing
+///
+/// PNG structure:
+/// - Bytes 0-7: Signature \x89PNG\r\n\x1a\n
+/// - Bytes 8-11: IHDR chunk length (always 13)
+/// - Bytes 12-15: "IHDR"
+/// - Bytes 16-19: Width (big-endian u32)
+/// - Bytes 20-23: Height (big-endian u32)
+///
+/// We only need to decode 24 PNG bytes = 32 base64 chars.
 fn get_png_dimensions(content: &str) -> Option<(u32, u32)> {
     let base64_data = content.strip_prefix("png:")?;
-    let png_bytes = BASE64.decode(base64_data).ok()?;
 
+    // Try fast header-only parsing first (only decode 32 base64 chars = 24 PNG bytes)
+    if let Some(dims) = get_png_dimensions_fast(base64_data) {
+        return Some(dims);
+    }
+
+    // Fallback: decode entire PNG and use image crate (handles edge cases)
+    let png_bytes = BASE64.decode(base64_data).ok()?;
     let cursor = std::io::Cursor::new(&png_bytes);
     let reader = image::ImageReader::with_format(cursor, image::ImageFormat::Png);
     let (width, height) = reader.into_dimensions().ok()?;
+
+    Some((width, height))
+}
+
+/// Fast PNG dimension extraction from base64 data (header only)
+///
+/// Decodes only the first 32 base64 characters (24 bytes) to read PNG header.
+/// Returns None if header is invalid, triggering fallback to full decode.
+fn get_png_dimensions_fast(base64_data: &str) -> Option<(u32, u32)> {
+    // Need at least 32 base64 chars to get 24 PNG bytes
+    if base64_data.len() < 32 {
+        return None;
+    }
+
+    // Decode only the first 32 base64 chars
+    let header_b64 = &base64_data[..32];
+    let header = BASE64.decode(header_b64).ok()?;
+
+    if header.len() < 24 {
+        return None;
+    }
+
+    // Verify PNG signature: \x89PNG\r\n\x1a\n
+    const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    if header[0..8] != PNG_SIGNATURE {
+        return None;
+    }
+
+    // Verify IHDR chunk type at bytes 12-15
+    if &header[12..16] != b"IHDR" {
+        return None;
+    }
+
+    // Extract width (bytes 16-19) and height (bytes 20-23) as big-endian u32
+    let width = u32::from_be_bytes([header[16], header[17], header[18], header[19]]);
+    let height = u32::from_be_bytes([header[20], header[21], header[22], header[23]]);
+
+    // Sanity check dimensions (reject obviously invalid values)
+    if width == 0 || height == 0 || width > 65535 || height > 65535 {
+        return None;
+    }
 
     Some((width, height))
 }
@@ -423,7 +479,7 @@ mod tests {
         // Create RGBA string with wrong byte count (too few bytes)
         let bad_data = format!(
             "rgba:2:2:{}",
-            BASE64.encode(&[0u8; 8]) // Should be 16 bytes for 2x2
+            BASE64.encode([0u8; 8]) // Should be 16 bytes for 2x2
         );
         let result = decode_base64_image(&bad_data);
         assert!(result.is_none(), "Should reject RGBA with wrong byte count");
@@ -431,7 +487,7 @@ mod tests {
         // Create RGBA string with too many bytes
         let bad_data = format!(
             "rgba:2:2:{}",
-            BASE64.encode(&[0u8; 32]) // Should be 16 bytes for 2x2
+            BASE64.encode([0u8; 32]) // Should be 16 bytes for 2x2
         );
         let result = decode_base64_image(&bad_data);
         assert!(result.is_none(), "Should reject RGBA with too many bytes");
@@ -445,12 +501,60 @@ mod tests {
             "rgba:{}:{}:{}",
             u32::MAX,
             u32::MAX,
-            BASE64.encode(&[0u8; 16])
+            BASE64.encode([0u8; 16])
         );
         let result = decode_base64_image(&bad_data);
         assert!(
             result.is_none(),
             "Should reject RGBA with overflow dimensions"
         );
+    }
+
+    #[test]
+    fn test_fast_png_dimensions_extraction() {
+        // Create a test PNG image
+        let original = arboard::ImageData {
+            width: 123,
+            height: 456,
+            bytes: vec![0u8; 123 * 456 * 4].into(),
+        };
+
+        let encoded = encode_image_as_png(&original).expect("Should encode as PNG");
+        let base64_data = encoded.strip_prefix("png:").expect("Should have png: prefix");
+
+        // Test fast extraction
+        let dims = get_png_dimensions_fast(base64_data);
+        assert_eq!(
+            dims,
+            Some((123, 456)),
+            "Fast extraction should get correct dimensions"
+        );
+
+        // Test through main API
+        let dims = get_image_dimensions(&encoded);
+        assert_eq!(
+            dims,
+            Some((123, 456)),
+            "Main API should get correct dimensions"
+        );
+    }
+
+    #[test]
+    fn test_fast_png_dimensions_rejects_invalid() {
+        // Too short
+        assert!(get_png_dimensions_fast("abc").is_none());
+
+        // Valid length but not PNG
+        let not_png = BASE64.encode([0u8; 24]);
+        assert!(get_png_dimensions_fast(&not_png).is_none());
+
+        // Valid PNG signature but wrong IHDR
+        let mut bad_header = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]; // PNG sig
+        bad_header.extend_from_slice(&[0, 0, 0, 13]); // chunk len
+        bad_header.extend_from_slice(b"XXXX"); // wrong chunk type
+        bad_header.extend_from_slice(&[0, 0, 0, 100]); // width
+        bad_header.extend_from_slice(&[0, 0, 0, 100]); // height
+        let bad_png = BASE64.encode(&bad_header);
+        assert!(get_png_dimensions_fast(&bad_png).is_none());
     }
 }
