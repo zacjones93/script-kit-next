@@ -136,6 +136,8 @@ pub(crate) fn fuzzy_match_with_indices(haystack: &str, pattern: &str) -> (bool, 
 /// Score a haystack against a nucleo pattern.
 /// Returns Some(score) if the pattern matches, None otherwise.
 /// Score range is typically 0-1000+ (higher = better match).
+///
+/// DEPRECATED: Prefer using NucleoCtx::score() to avoid per-call allocations.
 #[inline]
 pub(crate) fn nucleo_score(
     haystack: &str,
@@ -145,6 +147,53 @@ pub(crate) fn nucleo_score(
     let mut haystack_buf = Vec::new();
     let haystack_utf32 = Utf32Str::new(haystack, &mut haystack_buf);
     pattern.score(haystack_utf32, matcher)
+}
+
+/// Context for nucleo fuzzy matching that reuses allocations across calls.
+///
+/// This struct is designed for hot-path scoring where avoiding allocations
+/// is critical (e.g., searching thousands of scripts per keystroke).
+///
+/// Usage:
+/// ```ignore
+/// let mut ctx = NucleoCtx::new(query);
+/// for item in items {
+///     if let Some(score) = ctx.score(&item.name) {
+///         // matched with score
+///     }
+/// }
+/// ```
+pub(crate) struct NucleoCtx {
+    pattern: Pattern,
+    matcher: Matcher,
+    buf: Vec<char>,
+}
+
+impl NucleoCtx {
+    /// Create a new NucleoCtx for the given query string.
+    /// The query is parsed with case-insensitive matching and smart normalization.
+    pub fn new(query: &str) -> Self {
+        let pattern = Pattern::parse(
+            query,
+            nucleo_matcher::pattern::CaseMatching::Ignore,
+            nucleo_matcher::pattern::Normalization::Smart,
+        );
+        Self {
+            pattern,
+            matcher: Matcher::new(nucleo_matcher::Config::DEFAULT),
+            buf: Vec::with_capacity(64), // Pre-allocate for typical strings
+        }
+    }
+
+    /// Score a haystack string against this context's pattern.
+    /// Returns Some(score) if matched, None otherwise.
+    /// Reuses internal buffer to avoid allocations.
+    #[inline]
+    pub fn score(&mut self, haystack: &str) -> Option<u32> {
+        self.buf.clear();
+        let utf32 = Utf32Str::new(haystack, &mut self.buf);
+        self.pattern.score(utf32, &mut self.matcher)
+    }
 }
 
 /// Compute match indices for a search result on-demand (lazy evaluation)
@@ -331,13 +380,8 @@ pub fn fuzzy_search_scripts(scripts: &[Arc<Script>], query: &str) -> Vec<ScriptM
     let query_lower = query.to_lowercase();
     let mut matches = Vec::new();
 
-    // Create nucleo pattern and matcher once for all scripts
-    let pattern = Pattern::parse(
-        &query_lower,
-        nucleo_matcher::pattern::CaseMatching::Ignore,
-        nucleo_matcher::pattern::Normalization::Smart,
-    );
-    let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
+    // Create nucleo context once for all scripts - reuses buffer across calls
+    let mut nucleo = NucleoCtx::new(&query_lower);
 
     for script in scripts {
         let mut score = 0i32;
@@ -352,8 +396,8 @@ pub fn fuzzy_search_scripts(scripts: &[Arc<Script>], query: &str) -> Vec<ScriptM
             score += if pos == 0 { 100 } else { 75 };
         }
 
-        // Fuzzy character matching in name using nucleo
-        if let Some(nucleo_s) = nucleo_score(&script.name, &pattern, &mut matcher) {
+        // Fuzzy character matching in name using nucleo (reuses buffer)
+        if let Some(nucleo_s) = nucleo.score(&script.name) {
             // Scale nucleo score (0-1000+) to match existing weights (~50 for fuzzy match)
             score += 50 + (nucleo_s / 20) as i32;
         }
@@ -364,8 +408,8 @@ pub fn fuzzy_search_scripts(scripts: &[Arc<Script>], query: &str) -> Vec<ScriptM
             score += if pos == 0 { 60 } else { 45 };
         }
 
-        // Fuzzy character matching in filename using nucleo
-        if let Some(nucleo_s) = nucleo_score(&filename, &pattern, &mut matcher) {
+        // Fuzzy character matching in filename using nucleo (reuses buffer)
+        if let Some(nucleo_s) = nucleo.score(&filename) {
             // Scale nucleo score to match existing weights (~35 for filename fuzzy match)
             score += 35 + (nucleo_s / 30) as i32;
         }
@@ -429,13 +473,8 @@ pub fn fuzzy_search_scriptlets(scriptlets: &[Arc<Scriptlet>], query: &str) -> Ve
     let query_lower = query.to_lowercase();
     let mut matches = Vec::new();
 
-    // Create nucleo pattern and matcher once for all scriptlets
-    let pattern = Pattern::parse(
-        &query_lower,
-        nucleo_matcher::pattern::CaseMatching::Ignore,
-        nucleo_matcher::pattern::Normalization::Smart,
-    );
-    let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
+    // Create nucleo context once for all scriptlets - reuses buffer across calls
+    let mut nucleo = NucleoCtx::new(&query_lower);
 
     for scriptlet in scriptlets {
         let mut score = 0i32;
@@ -450,8 +489,8 @@ pub fn fuzzy_search_scriptlets(scriptlets: &[Arc<Scriptlet>], query: &str) -> Ve
             score += if pos == 0 { 100 } else { 75 };
         }
 
-        // Fuzzy character matching in name using nucleo
-        if let Some(nucleo_s) = nucleo_score(&scriptlet.name, &pattern, &mut matcher) {
+        // Fuzzy character matching in name using nucleo (reuses buffer)
+        if let Some(nucleo_s) = nucleo.score(&scriptlet.name) {
             // Scale nucleo score to match existing weights (~50 for fuzzy match)
             score += 50 + (nucleo_s / 20) as i32;
         }
@@ -463,8 +502,8 @@ pub fn fuzzy_search_scriptlets(scriptlets: &[Arc<Scriptlet>], query: &str) -> Ve
                 score += if pos == 0 { 60 } else { 45 };
             }
 
-            // Fuzzy character matching in file_path using nucleo
-            if let Some(nucleo_s) = nucleo_score(fp, &pattern, &mut matcher) {
+            // Fuzzy character matching in file_path using nucleo (reuses buffer)
+            if let Some(nucleo_s) = nucleo.score(fp) {
                 // Scale nucleo score to match existing weights (~35 for file_path fuzzy match)
                 score += 35 + (nucleo_s / 30) as i32;
             }
@@ -529,13 +568,8 @@ pub fn fuzzy_search_builtins(entries: &[BuiltInEntry], query: &str) -> Vec<Built
     let query_lower = query.to_lowercase();
     let mut matches = Vec::new();
 
-    // Create nucleo pattern and matcher once for all entries
-    let pattern = Pattern::parse(
-        &query_lower,
-        nucleo_matcher::pattern::CaseMatching::Ignore,
-        nucleo_matcher::pattern::Normalization::Smart,
-    );
-    let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
+    // Create nucleo context once for all entries - reuses buffer across calls
+    let mut nucleo = NucleoCtx::new(&query_lower);
 
     for entry in entries {
         let mut score = 0i32;
@@ -546,8 +580,8 @@ pub fn fuzzy_search_builtins(entries: &[BuiltInEntry], query: &str) -> Vec<Built
             score += if pos == 0 { 100 } else { 75 };
         }
 
-        // Fuzzy character matching in name using nucleo
-        if let Some(nucleo_s) = nucleo_score(&entry.name, &pattern, &mut matcher) {
+        // Fuzzy character matching in name using nucleo (reuses buffer)
+        if let Some(nucleo_s) = nucleo.score(&entry.name) {
             // Scale nucleo score to match existing weights (~50 for fuzzy match)
             score += 50 + (nucleo_s / 20) as i32;
         }
@@ -565,9 +599,9 @@ pub fn fuzzy_search_builtins(entries: &[BuiltInEntry], query: &str) -> Vec<Built
             }
         }
 
-        // Fuzzy match on keywords using nucleo
+        // Fuzzy match on keywords using nucleo (reuses buffer)
         for keyword in &entry.keywords {
-            if let Some(nucleo_s) = nucleo_score(keyword, &pattern, &mut matcher) {
+            if let Some(nucleo_s) = nucleo.score(keyword) {
                 // Scale nucleo score to match existing weights (~30 for keyword fuzzy match)
                 score += 30 + (nucleo_s / 30) as i32;
                 break; // Only count once
@@ -609,13 +643,8 @@ pub fn fuzzy_search_apps(apps: &[AppInfo], query: &str) -> Vec<AppMatch> {
     let query_lower = query.to_lowercase();
     let mut matches = Vec::new();
 
-    // Create nucleo pattern and matcher once for all apps
-    let pattern = Pattern::parse(
-        &query_lower,
-        nucleo_matcher::pattern::CaseMatching::Ignore,
-        nucleo_matcher::pattern::Normalization::Smart,
-    );
-    let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
+    // Create nucleo context once for all apps - reuses buffer across calls
+    let mut nucleo = NucleoCtx::new(&query_lower);
 
     for app in apps {
         let mut score = 0i32;
@@ -626,8 +655,8 @@ pub fn fuzzy_search_apps(apps: &[AppInfo], query: &str) -> Vec<AppMatch> {
             score += if pos == 0 { 100 } else { 75 };
         }
 
-        // Fuzzy character matching in name using nucleo
-        if let Some(nucleo_s) = nucleo_score(&app.name, &pattern, &mut matcher) {
+        // Fuzzy character matching in name using nucleo (reuses buffer)
+        if let Some(nucleo_s) = nucleo.score(&app.name) {
             // Scale nucleo score to match existing weights (~50 for fuzzy match)
             score += 50 + (nucleo_s / 20) as i32;
         }
@@ -693,13 +722,8 @@ pub fn fuzzy_search_windows(windows: &[WindowInfo], query: &str) -> Vec<WindowMa
     let query_lower = query.to_lowercase();
     let mut matches = Vec::new();
 
-    // Create nucleo pattern and matcher once for all windows
-    let pattern = Pattern::parse(
-        &query_lower,
-        nucleo_matcher::pattern::CaseMatching::Ignore,
-        nucleo_matcher::pattern::Normalization::Smart,
-    );
-    let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
+    // Create nucleo context once for all windows - reuses buffer across calls
+    let mut nucleo = NucleoCtx::new(&query_lower);
 
     for window in windows {
         let mut score = 0i32;
@@ -716,14 +740,14 @@ pub fn fuzzy_search_windows(windows: &[WindowInfo], query: &str) -> Vec<WindowMa
             score += if pos == 0 { 90 } else { 65 };
         }
 
-        // Fuzzy character matching in app name using nucleo
-        if let Some(nucleo_s) = nucleo_score(&window.app, &pattern, &mut matcher) {
+        // Fuzzy character matching in app name using nucleo (reuses buffer)
+        if let Some(nucleo_s) = nucleo.score(&window.app) {
             // Scale nucleo score to match existing weights (~50 for app name fuzzy match)
             score += 50 + (nucleo_s / 20) as i32;
         }
 
-        // Fuzzy character matching in window title using nucleo
-        if let Some(nucleo_s) = nucleo_score(&window.title, &pattern, &mut matcher) {
+        // Fuzzy character matching in window title using nucleo (reuses buffer)
+        if let Some(nucleo_s) = nucleo.score(&window.title) {
             // Scale nucleo score to match existing weights (~40 for title fuzzy match)
             score += 40 + (nucleo_s / 25) as i32;
         }
