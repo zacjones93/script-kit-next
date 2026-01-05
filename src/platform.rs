@@ -579,7 +579,7 @@ pub fn configure_window_vibrancy_material() {
             logging::log(
                 "PANEL",
                 &format!(
-                    "Configured {} NSVisualEffectView(s): VibrantDark + ULTRA_DARK + emphasized",
+                    "Configured {} NSVisualEffectView(s): VibrantDark + HUD_WINDOW + emphasized",
                     count
                 ),
             );
@@ -593,8 +593,11 @@ unsafe fn configure_visual_effect_views_recursive(view: id, count: &mut usize) {
     // Check if this view is an NSVisualEffectView
     let is_vev: bool = msg_send![view, isKindOfClass: class!(NSVisualEffectView)];
     if is_vev {
-        // ULTRA_DARK (9) - undocumented darkest material
-        let _: () = msg_send![view, setMaterial: ns_visual_effect_material::ULTRA_DARK];
+        // HUD_WINDOW (13) - Dark, high contrast material (expert recommended)
+        // Note: The actual material tint is hidden by GPUI (CAChameleonLayer hidden),
+        // so we provide our own tint via gpui_integration.rs at 70-85% opacity.
+        // The material still affects the blur quality and edge blending.
+        let _: () = msg_send![view, setMaterial: ns_visual_effect_material::HUD_WINDOW];
         // Always active (not dependent on window focus)
         let _: () = msg_send![view, setState: 1isize];
         // BehindWindow blending
