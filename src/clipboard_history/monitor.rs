@@ -14,6 +14,7 @@ use uuid::Uuid;
 use super::cache::{
     cache_image, get_cached_entries, get_cached_image, init_cache_timestamp, refresh_entry_cache,
 };
+use super::change_detection::ClipboardChangeDetector;
 use super::config::{get_max_text_content_len, get_retention_days, is_text_over_limit};
 use super::database::{
     add_entry, get_connection, get_entry_content, prune_old_entries, run_incremental_vacuum,
@@ -119,14 +120,34 @@ pub fn stop_clipboard_monitoring() {
 }
 
 /// Background loop that monitors clipboard changes
+///
+/// Uses macOS NSPasteboard changeCount for efficient polling when available.
+/// This is dramatically cheaper than reading clipboard payloads every 500ms,
+/// especially for large content (images can be 100MB+).
+///
+/// The change count approach also fixes a correctness bug: with content-based
+/// detection, copying the same text twice in a row doesn't update the timestamp.
+/// With change count detection, we detect all clipboard changes regardless of content.
 fn clipboard_monitor_loop(stop_flag: Arc<AtomicBool>) -> Result<()> {
     let mut clipboard = Clipboard::new().context("Failed to create clipboard instance")?;
-    let mut last_text: Option<String> = None;
+    let mut change_detector = ClipboardChangeDetector::new();
+
+    // Content-based tracking for deduplication after OS-level change detection
+    // These are updated AFTER we read payload to avoid re-processing same content
+    let mut last_text_hash: Option<u64> = None;
     let mut last_image_hash: Option<u64> = None;
+
     let poll_interval = Duration::from_millis(POLL_INTERVAL_MS);
 
+    // Reduced poll interval when using change count (cheap operation)
+    let fast_poll_interval = Duration::from_millis(50);
+
+    // Check if we have efficient change detection available
+    let has_change_detection = change_detector.has_changed().is_some();
+
     info!(
-        poll_interval_ms = POLL_INTERVAL_MS,
+        poll_interval_ms = if has_change_detection { 50 } else { POLL_INTERVAL_MS },
+        has_change_detection = has_change_detection,
         "Clipboard monitor started"
     );
 
@@ -139,97 +160,162 @@ fn clipboard_monitor_loop(stop_flag: Arc<AtomicBool>) -> Result<()> {
 
         let start = Instant::now();
 
-        // Check for text changes
-        if let Ok(text) = clipboard.get_text() {
-            if !text.is_empty() {
-                let is_new = match &last_text {
-                    Some(last) => last != &text,
-                    None => true,
-                };
+        // Check if clipboard changed using efficient OS-level detection when available
+        let should_check_payload = change_detector.has_changed().unwrap_or(true);
 
-                if is_new {
-                    debug!(text_len = text.len(), "New text detected in clipboard");
-                    if is_text_over_limit(&text) {
-                        let correlation_id = Uuid::new_v4().to_string();
-                        warn!(
-                            correlation_id = %correlation_id,
-                            text_len = text.len(),
-                            max_len = get_max_text_content_len(),
-                            "Skipping oversized clipboard text entry"
-                        );
-                        // Still update last_text for oversized entries (intentionally skipped)
-                        last_text = Some(text);
-                    } else {
-                        match add_entry(&text, ContentType::Text) {
-                            Ok(entry_id) => {
-                                debug!(entry_id = %entry_id, "Added text entry to history");
-                                // ONLY update last_text on SUCCESS to avoid losing entries on DB errors
-                                last_text = Some(text);
-                            }
-                            Err(e) => {
-                                // DON'T update last_text on failure - we'll retry on next poll
-                                warn!(error = %e, "Failed to add text entry to history (will retry)");
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Check for image changes
-        if let Ok(image_data) = clipboard.get_image() {
-            let hash = compute_image_hash(&image_data);
-
-            let is_new = match last_image_hash {
-                Some(last) => last != hash,
-                None => true,
-            };
-
-            if is_new {
-                debug!(
-                    width = image_data.width,
-                    height = image_data.height,
-                    "New image detected in clipboard"
-                );
-
-                // Encode image as compressed PNG (base64)
-                match encode_image_as_png(&image_data) {
-                    Ok(base64_content) => {
-                        match add_entry(&base64_content, ContentType::Image) {
-                            Ok(entry_id) => {
-                                // Pre-decode the image immediately so it's ready for display
-                                if let Some(render_image) = decode_to_render_image(&base64_content)
-                                {
-                                    cache_image(&entry_id, render_image);
-                                    debug!(entry_id = %entry_id, "Pre-cached new image during monitoring");
-                                }
-                                // ONLY update last_image_hash on SUCCESS
-                                last_image_hash = Some(hash);
-                            }
-                            Err(e) => {
-                                // DON'T update last_image_hash on failure - we'll retry on next poll
-                                warn!(error = %e, "Failed to add image entry to history (will retry)");
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        // Encoding failed (likely corrupt image data), skip but update hash
-                        // to avoid repeated attempts on the same bad image
-                        warn!(error = %e, "Failed to encode image as PNG, skipping");
-                        last_image_hash = Some(hash);
-                    }
-                }
-            }
+        if should_check_payload {
+            // Clipboard changed (or fallback mode), now read the actual payload
+            capture_clipboard_content(
+                &mut clipboard,
+                &mut last_text_hash,
+                &mut last_image_hash,
+            );
         }
 
         // Sleep for remaining time in poll interval
+        // Use faster polling when we have cheap change detection
+        let target_interval = if has_change_detection {
+            fast_poll_interval
+        } else {
+            poll_interval
+        };
+
         let elapsed = start.elapsed();
-        if elapsed < poll_interval {
-            thread::sleep(poll_interval - elapsed);
+        if elapsed < target_interval {
+            thread::sleep(target_interval - elapsed);
         }
     }
 
     Ok(())
+}
+
+/// Capture current clipboard content and add to history if new.
+///
+/// Uses content hashing for deduplication after OS-level change detection.
+/// This is called only when the OS reports a clipboard change, making it
+/// much more efficient than reading payloads on every poll.
+fn capture_clipboard_content(
+    clipboard: &mut Clipboard,
+    last_text_hash: &mut Option<u64>,
+    last_image_hash: &mut Option<u64>,
+) {
+    // Check for text changes
+    if let Ok(text) = clipboard.get_text() {
+        if !text.is_empty() {
+            let text_hash = compute_text_hash(&text);
+
+            // Check if content actually changed (handles same content copied twice)
+            let is_new_content = last_text_hash.is_none_or(|last| last != text_hash);
+
+            if is_new_content {
+                debug!(text_len = text.len(), "New text detected in clipboard");
+
+                if is_text_over_limit(&text) {
+                    let correlation_id = Uuid::new_v4().to_string();
+                    warn!(
+                        correlation_id = %correlation_id,
+                        text_len = text.len(),
+                        max_len = get_max_text_content_len(),
+                        "Skipping oversized clipboard text entry"
+                    );
+                    // Update hash even for oversized entries (intentionally skipped)
+                    *last_text_hash = Some(text_hash);
+                } else {
+                    match add_entry(&text, ContentType::Text) {
+                        Ok(entry_id) => {
+                            debug!(entry_id = %entry_id, "Added text entry to history");
+                            *last_text_hash = Some(text_hash);
+                        }
+                        Err(e) => {
+                            // DON'T update hash on failure - we'll retry on next change
+                            warn!(error = %e, "Failed to add text entry to history (will retry)");
+                        }
+                    }
+                }
+            } else {
+                // Same content, but OS detected a change - this means user copied same text again
+                // Update the timestamp to bubble this entry to the top
+                debug!(text_len = text.len(), "Same text copied again, updating timestamp");
+                match add_entry(&text, ContentType::Text) {
+                    Ok(entry_id) => {
+                        debug!(entry_id = %entry_id, "Updated timestamp for existing text entry");
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to update text entry timestamp");
+                    }
+                }
+            }
+            return; // Text takes priority, don't check image
+        }
+    }
+
+    // Check for image changes (only if no text was found)
+    if let Ok(image_data) = clipboard.get_image() {
+        let hash = compute_image_hash(&image_data);
+
+        let is_new_content = last_image_hash.is_none_or(|last| last != hash);
+
+        if is_new_content {
+            debug!(
+                width = image_data.width,
+                height = image_data.height,
+                "New image detected in clipboard"
+            );
+
+            // Encode image as compressed PNG (base64)
+            match encode_image_as_png(&image_data) {
+                Ok(base64_content) => {
+                    match add_entry(&base64_content, ContentType::Image) {
+                        Ok(entry_id) => {
+                            // Pre-decode the image immediately so it's ready for display
+                            if let Some(render_image) = decode_to_render_image(&base64_content) {
+                                cache_image(&entry_id, render_image);
+                                debug!(entry_id = %entry_id, "Pre-cached new image during monitoring");
+                            }
+                            *last_image_hash = Some(hash);
+                        }
+                        Err(e) => {
+                            // DON'T update hash on failure - we'll retry on next change
+                            warn!(error = %e, "Failed to add image entry to history (will retry)");
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Encoding failed (likely corrupt image data), skip but update hash
+                    // to avoid repeated attempts on the same bad image
+                    warn!(error = %e, "Failed to encode image as PNG, skipping");
+                    *last_image_hash = Some(hash);
+                }
+            }
+        } else {
+            // Same image, but OS detected a change - update timestamp
+            debug!(
+                width = image_data.width,
+                height = image_data.height,
+                "Same image copied again, updating timestamp"
+            );
+            if let Ok(base64_content) = encode_image_as_png(&image_data) {
+                match add_entry(&base64_content, ContentType::Image) {
+                    Ok(entry_id) => {
+                        debug!(entry_id = %entry_id, "Updated timestamp for existing image entry");
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to update image entry timestamp");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Compute a simple hash of text content for change detection.
+fn compute_text_hash(text: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Background loop that periodically prunes old entries

@@ -21,6 +21,7 @@
 //! - `clipboard`: System clipboard operations
 
 mod cache;
+mod change_detection;
 mod clipboard;
 mod config;
 mod database;
