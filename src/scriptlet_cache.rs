@@ -170,9 +170,28 @@ impl ScriptletCache {
         }
     }
 
-    /// Get the cached scriptlets for a file
+    /// Get the cached scriptlets for a file (clones the Vec)
+    ///
+    /// Note: Prefer `get_scriptlets_ref()` to avoid cloning when possible.
     pub fn get_scriptlets(&self, path: impl AsRef<Path>) -> Option<Vec<CachedScriptlet>> {
         self.files.get(path.as_ref()).map(|f| f.scriptlets.clone())
+    }
+
+    /// Get the cached scriptlets as a slice reference (zero-copy).
+    ///
+    /// This is the preferred API when you don't need ownership, as it avoids
+    /// cloning the Vec and all the Strings inside each CachedScriptlet.
+    ///
+    /// # Panics (debug only)
+    /// Panics if path is not absolute (helps catch path identity bugs early).
+    pub fn get_scriptlets_ref(&self, path: impl AsRef<Path>) -> Option<&[CachedScriptlet]> {
+        let path = path.as_ref();
+        debug_assert!(
+            path.is_absolute(),
+            "ScriptletCache expects absolute paths, got: {}",
+            path.display()
+        );
+        self.files.get(path).map(|f| f.scriptlets.as_slice())
     }
 
     /// Get the cached file entry
@@ -228,8 +247,17 @@ impl ScriptletCache {
     /// This is more robust than mtime-only because it catches:
     /// - Edits within the same timestamp quantum
     /// - Files replaced with `cp -p` or sync tools preserving timestamps
+    ///
+    /// # Panics (debug only)
+    /// Panics if path is not absolute (helps catch path identity bugs early).
     pub fn is_stale_fingerprint(&self, path: impl AsRef<Path>, current: FileFingerprint) -> bool {
-        match self.files.get(path.as_ref()) {
+        let path = path.as_ref();
+        debug_assert!(
+            path.is_absolute(),
+            "ScriptletCache expects absolute paths, got: {}",
+            path.display()
+        );
+        match self.files.get(path) {
             Some(cached) => match cached.fingerprint {
                 Some(fp) => fp != current,
                 // Fallback to mtime-only comparison if no fingerprint stored
@@ -259,12 +287,20 @@ impl ScriptletCache {
     /// 1. Computes diff before replacing old scriptlets (no need to clone first)
     /// 2. Returns the diff so callers can correctly unregister/register
     /// 3. Ensures callers can't "forget" to handle changes
+    ///
+    /// # Panics (debug only)
+    /// Panics if path is not absolute (helps catch path identity bugs early).
     pub fn upsert_file(
         &mut self,
         path: PathBuf,
         fingerprint: FileFingerprint,
         scriptlets: Vec<CachedScriptlet>,
     ) -> ScriptletDiff {
+        debug_assert!(
+            path.is_absolute(),
+            "ScriptletCache expects absolute paths, got: {}",
+            path.display()
+        );
         match self.files.entry(path.clone()) {
             Entry::Vacant(v) => {
                 // New file - all scriptlets are "added"
@@ -1636,5 +1672,87 @@ mod tests {
 
         // Cache should be empty
         assert!(cache.is_empty());
+    }
+
+    // -------------------------------------------------------------------------
+    // Zero-copy API tests (TDD)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_get_scriptlets_ref_returns_slice() {
+        let mut cache = ScriptletCache::new();
+        let path = PathBuf::from("/path/to/file.md");
+        let fp = FileFingerprint {
+            mtime: test_mtime(1000),
+            size: 1024,
+        };
+
+        let scriptlets = vec![
+            CachedScriptlet::new("A", None, None, None, "/path/to/file.md#a"),
+            CachedScriptlet::new("B", None, None, None, "/path/to/file.md#b"),
+        ];
+        cache.upsert_file(path.clone(), fp, scriptlets);
+
+        // Zero-copy API should return a reference to the slice
+        let slice = cache.get_scriptlets_ref(&path);
+        assert!(slice.is_some());
+        let slice = slice.unwrap();
+        assert_eq!(slice.len(), 2);
+        assert_eq!(slice[0].name, "A");
+        assert_eq!(slice[1].name, "B");
+    }
+
+    #[test]
+    fn test_get_scriptlets_ref_returns_none_for_missing() {
+        let cache = ScriptletCache::new();
+        let path = PathBuf::from("/nonexistent.md");
+
+        let slice = cache.get_scriptlets_ref(&path);
+        assert!(slice.is_none());
+    }
+
+    // -------------------------------------------------------------------------
+    // Path normalization tests (TDD)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "ScriptletCache expects absolute paths")]
+    fn test_update_file_rejects_relative_path_in_debug() {
+        let mut cache = ScriptletCache::new();
+        let relative_path = PathBuf::from("relative/path/file.md");
+        let fp = FileFingerprint {
+            mtime: test_mtime(1000),
+            size: 1024,
+        };
+
+        // Should panic in debug mode when given a relative path
+        cache.upsert_file(relative_path, fp, vec![]);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "ScriptletCache expects absolute paths")]
+    fn test_is_stale_rejects_relative_path_in_debug() {
+        let cache = ScriptletCache::new();
+        let relative_path = PathBuf::from("relative/path/file.md");
+        let fp = FileFingerprint {
+            mtime: test_mtime(1000),
+            size: 1024,
+        };
+
+        // Should panic in debug mode when given a relative path
+        let _ = cache.is_stale_fingerprint(&relative_path, fp);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "ScriptletCache expects absolute paths")]
+    fn test_get_scriptlets_ref_rejects_relative_path_in_debug() {
+        let cache = ScriptletCache::new();
+        let relative_path = PathBuf::from("relative/path/file.md");
+
+        // Should panic in debug mode when given a relative path
+        let _ = cache.get_scriptlets_ref(&relative_path);
     }
 }
