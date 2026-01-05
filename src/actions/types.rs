@@ -19,13 +19,43 @@ pub struct ScriptInfo {
     #[allow(dead_code)]
     /// Full path to the script file
     pub path: String,
+    /// Whether this is a real script file (true) or a built-in command (false)
+    /// Built-in commands (like Clipboard History, App Launcher) have limited actions
+    pub is_script: bool,
 }
 
 impl ScriptInfo {
+    /// Create a ScriptInfo for a real script file
     pub fn new(name: impl Into<String>, path: impl Into<String>) -> Self {
         ScriptInfo {
             name: name.into(),
             path: path.into(),
+            is_script: true,
+        }
+    }
+
+    /// Create a ScriptInfo for a built-in command (not a real script)
+    /// Built-ins have limited actions (no edit, view logs, reveal in finder, copy path, configure shortcut)
+    #[allow(dead_code)]
+    pub fn builtin(name: impl Into<String>) -> Self {
+        ScriptInfo {
+            name: name.into(),
+            path: String::new(),
+            is_script: false,
+        }
+    }
+
+    /// Create a ScriptInfo with explicit is_script flag
+    #[allow(dead_code)]
+    pub fn with_is_script(
+        name: impl Into<String>,
+        path: impl Into<String>,
+        is_script: bool,
+    ) -> Self {
+        ScriptInfo {
+            name: name.into(),
+            path: path.into(),
+            is_script,
         }
     }
 }
@@ -92,6 +122,24 @@ mod tests {
         let script = ScriptInfo::new("test-script", "/path/to/test-script.ts");
         assert_eq!(script.name, "test-script");
         assert_eq!(script.path, "/path/to/test-script.ts");
+        assert!(script.is_script);
+    }
+
+    #[test]
+    fn test_script_info_builtin() {
+        let builtin = ScriptInfo::builtin("Clipboard History");
+        assert_eq!(builtin.name, "Clipboard History");
+        assert_eq!(builtin.path, "");
+        assert!(!builtin.is_script);
+    }
+
+    #[test]
+    fn test_script_info_with_is_script() {
+        let script = ScriptInfo::with_is_script("my-script", "/path/to/script.ts", true);
+        assert!(script.is_script);
+
+        let builtin = ScriptInfo::with_is_script("App Launcher", "", false);
+        assert!(!builtin.is_script);
     }
 
     #[test]

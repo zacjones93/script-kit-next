@@ -168,6 +168,10 @@ impl Scrollbar {
     }
 
     /// Calculate thumb position as a ratio of scroll_offset/(total-visible)
+    ///
+    /// Uses a tolerance-based approach to ensure the thumb reaches the bottom
+    /// even when visible_items is slightly underestimated. When scroll_offset
+    /// is within 2 items of the estimated maximum, we snap to 1.0.
     fn thumb_position_ratio(&self) -> f32 {
         if self.total_items <= self.visible_items {
             return 0.0;
@@ -176,6 +180,14 @@ impl Scrollbar {
         if max_offset == 0 {
             return 0.0;
         }
+
+        // Snap to 1.0 if we're within 2 items of the estimated max
+        // This handles cases where visible_items estimate is slightly off
+        let tolerance = 2;
+        if self.scroll_offset + tolerance >= max_offset {
+            return 1.0;
+        }
+
         (self.scroll_offset as f32 / max_offset as f32).clamp(0.0, 1.0)
     }
 }

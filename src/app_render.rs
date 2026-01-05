@@ -62,11 +62,15 @@ impl ScriptListApp {
         let border_radius = visual.radius_md;
         let font_family = typography.font_family;
 
+        // Get opacity for vibrancy support
+        let opacity = self.theme.get_opacity();
+        let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_main, opacity.main);
+
         // Preview panel container with left border separator
         let mut panel = div()
             .w_full()
             .h_full()
-            .bg(rgb(bg_main))
+            .bg(rgba(bg_with_alpha))
             .border_l_1()
             .border_color(rgba((ui_border << 8) | 0x80))
             .p(px(spacing.padding_lg))
@@ -490,9 +494,7 @@ impl ScriptListApp {
                             builtins::BuiltInFeature::UtilityCommand(_) => {
                                 "Quick Utility".to_string()
                             }
-                            builtins::BuiltInFeature::SettingsCommand(_) => {
-                                "Settings".to_string()
-                            }
+                            builtins::BuiltInFeature::SettingsCommand(_) => "Settings".to_string(),
                         };
                         panel = panel.child(
                             div()

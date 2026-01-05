@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use gpui::{
-    div, hsla, point, prelude::*, px, size, App, BoxShadow, Context, Entity, FocusHandle,
+    div, hsla, point, prelude::*, px, rgba, size, App, BoxShadow, Context, Entity, FocusHandle,
     Focusable, IntoElement, KeyDownEvent, ParentElement, Render, Styled, Subscription, Window,
     WindowBounds, WindowOptions,
 };
@@ -1202,8 +1202,8 @@ impl NotesApp {
             .h(px(36.)) // Standardized titlebar height (matches AI window)
             .px_3()
             .relative() // For absolute positioning of icons
-            // No background - blends with window
-            .bg(cx.theme().background)
+            // Vibrancy-aware background - semi-transparent for blur effect
+            .bg(gpui::transparent_black()) // TEST
             // Only show titlebar elements when window is hovered
             .on_hover(cx.listener(|this, hovered, _, cx| {
                 if this.force_hovered {
@@ -1328,8 +1328,8 @@ impl NotesApp {
             .relative()
             .h(px(24.))
             .px_3()
-            // No border, same background as window
-            .bg(cx.theme().background)
+            // Vibrancy-aware background for footer
+            .bg(gpui::transparent_black()) // TEST
             // Hide when window not hovered
             .when(!window_hovered, |d| d.opacity(0.))
             .child(
@@ -1359,7 +1359,7 @@ impl NotesApp {
             .flex()
             .flex_col()
             .h_full()
-            .bg(cx.theme().background) // Unified background
+            .bg(gpui::transparent_black()) // TEST // Vibrancy-aware background
             .child(titlebar)
             // Toolbar hidden by default - only show when pinned
             .when(!is_trash && has_selection && show_toolbar, |d| {
@@ -1369,7 +1369,7 @@ impl NotesApp {
                 div()
                     .flex_1()
                     .p_3()
-                    .bg(cx.theme().background) // Same background - no visible input box
+                    .bg(gpui::transparent_black()) // TEST // Vibrancy-aware background
                     // Use a styled input that blends with background
                     .child(
                         Input::new(&self.editor_state).h_full().appearance(false), // No input styling - blends with background
@@ -1452,7 +1452,7 @@ impl NotesApp {
                     div()
                         .w(px(500.))
                         .max_h(px(400.))
-                        .bg(cx.theme().background)
+                        .bg(gpui::transparent_black()) // TEST
                         .border_1()
                         .border_color(cx.theme().border)
                         .rounded_lg()
@@ -1481,6 +1481,48 @@ impl NotesApp {
     /// Get cached box shadows (computed once at construction)
     fn create_box_shadows(&self) -> Vec<BoxShadow> {
         self.cached_box_shadows.clone()
+    }
+
+    // =====================================================
+    // Vibrancy Helper Functions
+    // =====================================================
+    // These use the same approach as the main window (render_script_list.rs)
+    // to ensure vibrancy works correctly by using rgba() with hex colors
+    // directly from the Script Kit theme.
+
+    /// Convert hex color to rgba with opacity
+    /// Format: input hex is 0xRRGGBB, output is 0xRRGGBBAA for gpui::rgba()
+    fn hex_to_rgba_with_opacity(hex: u32, opacity: f32) -> u32 {
+        let alpha = (opacity.clamp(0.0, 1.0) * 255.0) as u32;
+        (hex << 8) | alpha
+    }
+
+    /// Get background color with vibrancy opacity applied
+    ///
+    /// When vibrancy is enabled, backgrounds need to be semi-transparent
+    /// to show the blur effect behind them. This helper returns the
+    /// theme background color with the appropriate opacity from config.
+    fn get_vibrancy_background(_cx: &Context<Self>) -> gpui::Rgba {
+        let sk_theme = crate::theme::load_theme();
+        let opacity = sk_theme.get_opacity();
+        let bg_hex = sk_theme.colors.background.main;
+        rgba(Self::hex_to_rgba_with_opacity(bg_hex, opacity.main))
+    }
+
+    /// Get title bar background with vibrancy opacity
+    fn get_vibrancy_title_bar_background(_cx: &Context<Self>) -> gpui::Rgba {
+        let sk_theme = crate::theme::load_theme();
+        let opacity = sk_theme.get_opacity();
+        let bg_hex = sk_theme.colors.background.title_bar;
+        rgba(Self::hex_to_rgba_with_opacity(bg_hex, opacity.title_bar))
+    }
+
+    /// Get sidebar/panel background with vibrancy opacity
+    fn get_vibrancy_sidebar_background() -> gpui::Rgba {
+        let sk_theme = crate::theme::load_theme();
+        let opacity = sk_theme.get_opacity();
+        let bg_hex = sk_theme.colors.background.title_bar;
+        rgba(Self::hex_to_rgba_with_opacity(bg_hex, opacity.title_bar))
     }
 
     /// Compute box shadows from theme configuration (called once at construction)
@@ -1593,7 +1635,7 @@ impl Render for NotesApp {
             .flex_col()
             .size_full()
             .relative()
-            .bg(cx.theme().background)
+            .bg(gpui::transparent_black()) // TEST: completely transparent
             .shadow(box_shadows)
             .text_color(cx.theme().foreground)
             .track_focus(&self.focus_handle)
@@ -1737,12 +1779,12 @@ impl Render for NotesApp {
     }
 }
 
-/// Initialize gpui-component theme and sync with Script Kit theme
+/// Sync Script Kit theme with gpui-component theme
+/// NOTE: Do NOT call gpui_component::init here - it's already called in main.rs
+/// and calling it again resets the theme to system defaults (opaque backgrounds),
+/// which breaks vibrancy.
 fn ensure_theme_initialized(cx: &mut App) {
-    // First, initialize gpui-component (this sets up the default theme)
-    gpui_component::init(cx);
-
-    // Use the shared theme sync function from the theme module
+    // Just sync our theme colors - gpui_component is already initialized in main.rs
     crate::theme::sync_gpui_component_theme(cx);
 
     info!("Notes window theme synchronized with Script Kit");

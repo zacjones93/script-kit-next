@@ -24,8 +24,9 @@
 
 use crate::designs::icon_variations::IconName;
 use gpui::{
-    div, point, prelude::*, px, svg, uniform_list, App, BoxShadow, Context, FocusHandle, Focusable,
-    Hsla, MouseButton, Render, ScrollStrategy, SharedString, UniformListScrollHandle, Window,
+    div, point, prelude::*, px, rgba, svg, uniform_list, App, BoxShadow, Context, FocusHandle,
+    Focusable, Hsla, MouseButton, Render, ScrollStrategy, SharedString, UniformListScrollHandle,
+    Window,
 };
 use gpui_component::theme::{ActiveTheme, Theme};
 use std::sync::Arc;
@@ -449,6 +450,32 @@ impl NotesActionsPanel {
         }
     }
 
+    // =====================================================
+    // Vibrancy Helper Functions
+    // =====================================================
+
+    /// Convert hex color to rgba with opacity
+    fn hex_to_rgba_with_opacity(hex: u32, opacity: f32) -> u32 {
+        let alpha = (opacity.clamp(0.0, 1.0) * 255.0) as u32;
+        (hex << 8) | alpha
+    }
+
+    /// Get background color with vibrancy opacity applied
+    fn get_vibrancy_background() -> gpui::Rgba {
+        let sk_theme = crate::theme::load_theme();
+        let opacity = sk_theme.get_opacity();
+        let bg_hex = sk_theme.colors.background.main;
+        rgba(Self::hex_to_rgba_with_opacity(bg_hex, opacity.main))
+    }
+
+    /// Get search box background with vibrancy opacity
+    fn get_vibrancy_search_background() -> gpui::Rgba {
+        let sk_theme = crate::theme::load_theme();
+        let opacity = sk_theme.get_opacity();
+        let bg_hex = sk_theme.colors.background.search_box;
+        rgba(Self::hex_to_rgba_with_opacity(bg_hex, opacity.search_box))
+    }
+
     /// Create box shadow for the overlay
     fn create_shadow() -> Vec<BoxShadow> {
         vec![
@@ -488,8 +515,9 @@ impl Render for NotesActionsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
-        // Colors from gpui-component theme
-        let bg_color = theme.background;
+        // Vibrancy-aware colors using Script Kit theme hex values
+        let bg_color = Self::get_vibrancy_background();
+        let search_bg_color = Self::get_vibrancy_search_background();
         let border_color = theme.border;
         let text_primary = theme.foreground;
         let text_muted = theme.muted_foreground;
@@ -508,7 +536,7 @@ impl Render for NotesActionsPanel {
             .h(px(PANEL_SEARCH_HEIGHT))
             .px(px(12.0))
             .py(px(8.0))
-            .bg(theme.secondary)
+            .bg(search_bg_color) // Vibrancy-aware search area
             .border_b_1()
             .border_color(border_color)
             .flex()
@@ -520,7 +548,7 @@ impl Render for NotesActionsPanel {
                     .flex_1()
                     .h(px(28.0))
                     .px(px(8.0))
-                    .bg(theme.input)
+                    .bg(search_bg_color) // Vibrancy-aware input
                     .rounded(px(4.0))
                     .border_1()
                     .border_color(if self.search_text.is_empty() {

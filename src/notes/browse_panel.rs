@@ -12,7 +12,7 @@
 //! - Filter notes as user types in search
 
 use gpui::{
-    div, prelude::*, px, rgb, App, Context, Entity, FocusHandle, Focusable, IntoElement,
+    div, prelude::*, px, rgb, rgba, App, Context, Entity, FocusHandle, Focusable, IntoElement,
     KeyDownEvent, MouseButton, ParentElement, Render, Styled, Subscription, Window,
 };
 use gpui_component::{
@@ -367,6 +367,24 @@ impl BrowsePanel {
             })
     }
 
+    // =====================================================
+    // Vibrancy Helper Functions
+    // =====================================================
+
+    /// Convert hex color to rgba with opacity
+    fn hex_to_rgba_with_opacity(hex: u32, opacity: f32) -> u32 {
+        let alpha = (opacity.clamp(0.0, 1.0) * 255.0) as u32;
+        (hex << 8) | alpha
+    }
+
+    /// Get background color with vibrancy opacity applied
+    fn get_vibrancy_background(_cx: &Context<Self>) -> gpui::Rgba {
+        let sk_theme = crate::theme::load_theme();
+        let opacity = sk_theme.get_opacity();
+        let bg_hex = sk_theme.colors.background.main;
+        rgba(Self::hex_to_rgba_with_opacity(bg_hex, opacity.main))
+    }
+
     /// Render the notes list
     fn render_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         if self.notes.is_empty() {
@@ -421,7 +439,7 @@ impl Render for BrowsePanel {
                     .id("browse-panel")
                     .w(px(500.))
                     .max_h(px(400.))
-                    .bg(cx.theme().background)
+                    .bg(Self::get_vibrancy_background(cx)) // Vibrancy-aware background
                     .border_1()
                     .border_color(cx.theme().border)
                     .rounded_lg()

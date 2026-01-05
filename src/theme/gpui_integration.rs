@@ -3,7 +3,7 @@
 //! These functions sync Script Kit's theme with gpui-component's ThemeColor system.
 //! Used by both main.rs and notes/window.rs for consistent theming.
 
-use gpui::{rgb, App, Hsla};
+use gpui::{hsla, rgb, App, Hsla};
 use gpui_component::theme::{Theme as GpuiTheme, ThemeColor, ThemeMode};
 use tracing::{debug, info as tracing_info};
 
@@ -27,33 +27,46 @@ pub fn hex_to_hsla(hex: u32) -> Hsla {
 /// so that text and icons are readable regardless of the vibrancy setting.
 pub fn map_scriptkit_to_gpui_theme(sk_theme: &Theme) -> ThemeColor {
     let colors = &sk_theme.colors;
-    // NOTE: opacity is NOT used here - it's only for window background vibrancy
+    let opacity = sk_theme.get_opacity();
+    let vibrancy_enabled = sk_theme.is_vibrancy_enabled();
 
     // Get default dark theme as base and override with Script Kit colors
     let mut theme_color = *ThemeColor::dark();
 
-    // Main background and foreground
-    theme_color.background = hex_to_hsla(colors.background.main);
+    // Helper to apply opacity to a color when vibrancy is enabled
+    let with_vibrancy = |hex: u32, alpha: f32| -> Hsla {
+        if vibrancy_enabled {
+            let base = hex_to_hsla(hex);
+            hsla(base.h, base.s, base.l, alpha)
+        } else {
+            hex_to_hsla(hex)
+        }
+    };
+
+    // Main background - MUST be transparent for vibrancy to work!
+    // The gpui-component Root wrapper applies this background, so if it's opaque,
+    // it will block the NSVisualEffectView blur from showing through.
+    theme_color.background = with_vibrancy(colors.background.main, opacity.main);
     theme_color.foreground = hex_to_hsla(colors.text.primary);
 
-    // Accent colors (Script Kit yellow/gold)
+    // Accent colors (Script Kit yellow/gold) - keep opaque for visibility
     theme_color.accent = hex_to_hsla(colors.accent.selected);
     theme_color.accent_foreground = hex_to_hsla(colors.text.primary);
 
-    // Border
+    // Border - keep opaque
     theme_color.border = hex_to_hsla(colors.ui.border);
-    theme_color.input = hex_to_hsla(colors.ui.border);
+    theme_color.input = with_vibrancy(colors.ui.border, opacity.search_box);
 
-    // List/sidebar colors
-    theme_color.list = hex_to_hsla(colors.background.main);
-    theme_color.list_active = hex_to_hsla(colors.accent.selected_subtle);
+    // List/sidebar colors - make transparent for vibrancy
+    theme_color.list = with_vibrancy(colors.background.main, opacity.main);
+    theme_color.list_active = hex_to_hsla(colors.accent.selected_subtle); // Keep selection visible
     theme_color.list_active_border = hex_to_hsla(colors.accent.selected);
-    theme_color.list_hover = hex_to_hsla(colors.accent.selected_subtle);
-    theme_color.list_even = hex_to_hsla(colors.background.main);
-    theme_color.list_head = hex_to_hsla(colors.background.title_bar);
+    theme_color.list_hover = hex_to_hsla(colors.accent.selected_subtle); // Keep hover visible
+    theme_color.list_even = with_vibrancy(colors.background.main, opacity.main);
+    theme_color.list_head = with_vibrancy(colors.background.title_bar, opacity.title_bar);
 
-    // Sidebar (use slightly lighter background)
-    theme_color.sidebar = hex_to_hsla(colors.background.title_bar);
+    // Sidebar - make transparent for vibrancy
+    theme_color.sidebar = with_vibrancy(colors.background.title_bar, opacity.title_bar);
     theme_color.sidebar_foreground = hex_to_hsla(colors.text.primary);
     theme_color.sidebar_border = hex_to_hsla(colors.ui.border);
     theme_color.sidebar_accent = hex_to_hsla(colors.accent.selected_subtle);
@@ -61,28 +74,28 @@ pub fn map_scriptkit_to_gpui_theme(sk_theme: &Theme) -> ThemeColor {
     theme_color.sidebar_primary = hex_to_hsla(colors.accent.selected);
     theme_color.sidebar_primary_foreground = hex_to_hsla(colors.text.primary);
 
-    // Primary (accent-colored buttons)
+    // Primary (accent-colored buttons) - keep opaque for visibility
     theme_color.primary = hex_to_hsla(colors.accent.selected);
     theme_color.primary_foreground = hex_to_hsla(colors.background.main);
     theme_color.primary_hover = hex_to_hsla(colors.accent.selected);
     theme_color.primary_active = hex_to_hsla(colors.accent.selected);
 
-    // Secondary (muted buttons)
-    theme_color.secondary = hex_to_hsla(colors.background.search_box);
+    // Secondary (muted buttons) - make transparent
+    theme_color.secondary = with_vibrancy(colors.background.search_box, opacity.search_box);
     theme_color.secondary_foreground = hex_to_hsla(colors.text.primary);
-    theme_color.secondary_hover = hex_to_hsla(colors.background.title_bar);
-    theme_color.secondary_active = hex_to_hsla(colors.background.title_bar);
+    theme_color.secondary_hover = with_vibrancy(colors.background.title_bar, opacity.title_bar);
+    theme_color.secondary_active = with_vibrancy(colors.background.title_bar, opacity.title_bar);
 
-    // Muted (disabled states, subtle elements)
-    theme_color.muted = hex_to_hsla(colors.background.search_box);
+    // Muted (disabled states, subtle elements) - make transparent
+    theme_color.muted = with_vibrancy(colors.background.search_box, opacity.search_box);
     theme_color.muted_foreground = hex_to_hsla(colors.text.muted);
 
-    // Title bar
-    theme_color.title_bar = hex_to_hsla(colors.background.title_bar);
+    // Title bar - make transparent for vibrancy
+    theme_color.title_bar = with_vibrancy(colors.background.title_bar, opacity.title_bar);
     theme_color.title_bar_border = hex_to_hsla(colors.ui.border);
 
-    // Popover
-    theme_color.popover = hex_to_hsla(colors.background.main);
+    // Popover - make transparent for vibrancy
+    theme_color.popover = with_vibrancy(colors.background.main, opacity.main);
     theme_color.popover_foreground = hex_to_hsla(colors.text.primary);
 
     // Status colors

@@ -13,9 +13,9 @@
 use anyhow::Result;
 use chrono::{Datelike, NaiveDate, Utc};
 use gpui::{
-    div, hsla, point, prelude::*, px, size, svg, App, BoxShadow, Context, Entity, FocusHandle,
-    Focusable, IntoElement, KeyDownEvent, ParentElement, Render, ScrollHandle, SharedString,
-    Styled, Subscription, Window, WindowBounds, WindowOptions,
+    div, hsla, point, prelude::*, px, rgba, size, svg, App, BoxShadow, Context, Entity,
+    FocusHandle, Focusable, IntoElement, KeyDownEvent, ParentElement, Render, ScrollHandle,
+    SharedString, Styled, Subscription, Window, WindowBounds, WindowOptions,
 };
 
 // Import local IconName for SVG icons (has external_path() method)
@@ -1113,7 +1113,7 @@ impl AiApp {
                 .flex_col()
                 .w(px(48.))
                 .h_full()
-                .bg(cx.theme().sidebar)
+                .bg(gpui::transparent_black()) // TEST: completely transparent
                 .border_r_1()
                 .border_color(cx.theme().sidebar_border)
                 .items_center()
@@ -1153,7 +1153,7 @@ impl AiApp {
             .flex_col()
             .w(px(240.))
             .h_full()
-            .bg(cx.theme().sidebar)
+            .bg(gpui::transparent_black()) // TEST: completely transparent
             .border_r_1()
             .border_color(cx.theme().sidebar_border)
             // Top row - sidebar toggle aligned with traffic lights (right side of that row)
@@ -1514,7 +1514,7 @@ impl AiApp {
             .justify_between()
             .h(px(36.))
             .px_3()
-            .bg(cx.theme().title_bar)
+            .bg(gpui::transparent_black()) // TEST: completely transparent
             .border_b_1()
             .border_color(cx.theme().border)
             .child(
@@ -1562,7 +1562,7 @@ impl AiApp {
             .flex()
             .flex_col()
             .w_full()
-            .bg(cx.theme().title_bar)
+            .bg(gpui::transparent_black()) // TEST: completely transparent
             .px_3()
             .pt_3()
             .pb_2() // Reduced bottom padding
@@ -1749,6 +1749,47 @@ impl AiApp {
     pub fn update_theme(&mut self, _cx: &mut Context<Self>) {
         self.cached_box_shadows = Self::compute_box_shadows();
     }
+
+    // =====================================================
+    // Vibrancy Helper Functions
+    // =====================================================
+    // These use the same approach as the main window (render_script_list.rs)
+    // to ensure vibrancy works correctly by using rgba() with hex colors
+    // directly from the Script Kit theme.
+
+    /// Convert hex color to rgba with opacity
+    /// Format: input hex is 0xRRGGBB, output is 0xRRGGBBAA for gpui::rgba()
+    fn hex_to_rgba_with_opacity(hex: u32, opacity: f32) -> u32 {
+        let alpha = (opacity.clamp(0.0, 1.0) * 255.0) as u32;
+        (hex << 8) | alpha
+    }
+
+    /// Get main background color with vibrancy opacity
+    /// Uses Script Kit theme hex colors directly (like main window)
+    fn get_vibrancy_background() -> gpui::Rgba {
+        let sk_theme = crate::theme::load_theme();
+        let opacity = sk_theme.get_opacity();
+        let bg_hex = sk_theme.colors.background.main;
+        rgba(Self::hex_to_rgba_with_opacity(bg_hex, opacity.main))
+    }
+
+    /// Get sidebar background color with vibrancy opacity
+    fn get_vibrancy_sidebar_background() -> gpui::Rgba {
+        let sk_theme = crate::theme::load_theme();
+        let opacity = sk_theme.get_opacity();
+        // Use title_bar background for sidebar (slightly different visual hierarchy)
+        let bg_hex = sk_theme.colors.background.title_bar;
+        // Sidebar uses title_bar opacity (0.65) for slightly more opaque
+        rgba(Self::hex_to_rgba_with_opacity(bg_hex, opacity.title_bar))
+    }
+
+    /// Get title bar background color with vibrancy opacity
+    fn get_vibrancy_title_bar_background() -> gpui::Rgba {
+        let sk_theme = crate::theme::load_theme();
+        let opacity = sk_theme.get_opacity();
+        let bg_hex = sk_theme.colors.background.main;
+        rgba(Self::hex_to_rgba_with_opacity(bg_hex, opacity.title_bar))
+    }
 }
 
 impl Focusable for AiApp {
@@ -1811,7 +1852,7 @@ impl Render for AiApp {
             .flex()
             .flex_row()
             .size_full()
-            .bg(cx.theme().background)
+            .bg(gpui::transparent_black()) // TEST: completely transparent to verify vibrancy works
             .shadow(box_shadows)
             .text_color(cx.theme().foreground)
             .track_focus(&self.focus_handle)
@@ -1831,6 +1872,10 @@ impl Render for AiApp {
                         "\\" | "backslash" => this.toggle_sidebar(cx),
                         // Cmd+B also toggles sidebar (common convention)
                         "b" => this.toggle_sidebar(cx),
+                        // Cmd+W closes the AI window (standard macOS pattern)
+                        "w" => {
+                            window.remove_window();
+                        }
                         _ => {}
                     }
                 }

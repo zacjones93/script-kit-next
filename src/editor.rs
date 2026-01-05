@@ -379,17 +379,30 @@ impl EditorPrompt {
         &self.language
     }
 
-    /// Set the content
+    /// Set the content and position cursor at end (below last content line)
+    ///
+    /// If content exists and doesn't end with a newline, appends one so the cursor
+    /// starts on a fresh line below the existing content.
     #[allow(dead_code)]
     pub fn set_content(&mut self, content: String, window: &mut Window, cx: &mut Context<Self>) {
+        // Ensure content ends with newline so cursor is on line below content
+        let content_with_newline = if !content.is_empty() && !content.ends_with('\n') {
+            format!("{}\n", content)
+        } else {
+            content
+        };
+
         if let Some(ref editor_state) = self.editor_state {
+            let content_len = content_with_newline.len();
             editor_state.update(cx, |state, cx| {
-                state.set_value(content, window, cx);
+                state.set_value(content_with_newline, window, cx);
+                // Move cursor to end (set selection to end..end = no selection, cursor at end)
+                state.set_selection(content_len, content_len, window, cx);
             });
         } else {
             // Update pending content if not yet initialized
             if let Some(ref mut pending) = self.pending_init {
-                pending.content = content;
+                pending.content = content_with_newline;
             }
         }
     }

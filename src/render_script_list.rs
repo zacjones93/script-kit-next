@@ -34,7 +34,9 @@ impl ScriptListApp {
         // Handle edge cases - keep selected_index in valid bounds
         // Use coerce_selection which tries down first, then up, handles all edge cases
         if item_count > 0 {
-            if let Some(valid_idx) = list_item::coerce_selection(&grouped_items, self.selected_index) {
+            if let Some(valid_idx) =
+                list_item::coerce_selection(&grouped_items, self.selected_index)
+            {
                 self.selected_index = valid_idx;
             } else {
                 // No selectable items (list is all headers) - set to 0 as fallback
@@ -133,8 +135,11 @@ impl ScriptListApp {
             let total_content_height = (header_count as f32 * SECTION_HEADER_HEIGHT)
                 + (item_count_regular as f32 * LIST_ITEM_HEIGHT);
 
-            // Typical visible container height
-            let estimated_container_height = 400.0_f32;
+            // Estimated visible container height
+            // Window is 500px, header is ~60px, remaining ~440px for list area
+            // Use a slightly higher estimate to ensure scrollbar thumb reaches bottom
+            // (underestimating visible items causes thumb to not reach bottom)
+            let estimated_container_height = 440.0_f32;
 
             // Calculate visible items as a ratio of container to total content
             // This gives a more accurate thumb size for the scrollbar
@@ -628,7 +633,7 @@ impl ScriptListApp {
         } else {
             design_colors.background
         };
-        let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
+        let _bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
 
         // Create box shadows from theme
         let box_shadows = self.create_box_shadows();
@@ -657,7 +662,7 @@ impl ScriptListApp {
         let mut main_div = div()
             .flex()
             .flex_col()
-            .bg(rgba(bg_with_alpha))
+            .bg(gpui::transparent_black()) // TEST: completely transparent
             .shadow(box_shadows)
             .w_full()
             .h_full()
