@@ -1,0 +1,26 @@
+#!/bin/bash
+# Pre-commit hook for Script Kit GPUI
+# Ensures code is formatted before commit to prevent CI failures
+#
+# This runs BEFORE the commit is created, catching issues early.
+# Skip with: git commit --no-verify
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+# Check formatting - must pass
+echo -e "${YELLOW}[pre-commit] cargo fmt --check${NC}"
+if ! cargo fmt --check >/dev/null 2>&1; then
+    echo -e "${RED}❌ Formatting check failed!${NC}"
+    echo ""
+    echo "Run 'cargo fmt' to fix, then stage and retry."
+    echo ""
+    # Show which files need formatting (first 20 lines)
+    cargo fmt --check 2>&1 | head -20 || true
+    exit 1
+fi
+echo -e "${GREEN}✓ Formatting OK${NC}"
