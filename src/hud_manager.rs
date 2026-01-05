@@ -1187,4 +1187,205 @@ mod tests {
         assert_eq!(view.colors.text_primary, 0xeeeeee);
         assert_eq!(view.colors.accent, 0x00ff00);
     }
+
+    // =============================================================================
+    // HUD Manager State Tests
+    // =============================================================================
+
+    #[test]
+    fn test_hud_manager_state_queue_operations() {
+        // Test that pending queue works correctly
+        let mut state = HudManagerState::new();
+
+        // Queue should start empty
+        assert!(state.pending_queue.is_empty());
+
+        // Add items to queue
+        state.pending_queue.push_back(HudNotification {
+            text: "First".to_string(),
+            duration_ms: 2000,
+            created_at: Instant::now(),
+            action_label: None,
+            action: None,
+        });
+
+        state.pending_queue.push_back(HudNotification {
+            text: "Second".to_string(),
+            duration_ms: 2000,
+            created_at: Instant::now(),
+            action_label: None,
+            action: None,
+        });
+
+        assert_eq!(state.pending_queue.len(), 2);
+
+        // Pop front should return first item
+        let first = state.pending_queue.pop_front().unwrap();
+        assert_eq!(first.text, "First");
+
+        // Queue should still have one item
+        assert_eq!(state.pending_queue.len(), 1);
+
+        let second = state.pending_queue.pop_front().unwrap();
+        assert_eq!(second.text, "Second");
+
+        // Queue should be empty now
+        assert!(state.pending_queue.is_empty());
+    }
+
+    #[test]
+    fn test_hud_notification_partial_has_action() {
+        // Test edge cases for has_action()
+
+        // Only action_label set (should NOT have action)
+        let notif_label_only = HudNotification {
+            text: "Test".to_string(),
+            duration_ms: 2000,
+            created_at: Instant::now(),
+            action_label: Some("Click".to_string()),
+            action: None,
+        };
+        assert!(
+            !notif_label_only.has_action(),
+            "Should not have action with only label"
+        );
+
+        // Only action set (should NOT have action)
+        let notif_action_only = HudNotification {
+            text: "Test".to_string(),
+            duration_ms: 2000,
+            created_at: Instant::now(),
+            action_label: None,
+            action: Some(HudAction::OpenUrl("https://example.com".to_string())),
+        };
+        assert!(
+            !notif_action_only.has_action(),
+            "Should not have action with only action (no label)"
+        );
+    }
+
+    #[test]
+    fn test_hud_constants() {
+        // Verify constants are sensible values using const blocks (clippy-compliant)
+
+        // Default duration should be reasonable (1-10 seconds)
+        const _: () = assert!(DEFAULT_HUD_DURATION_MS >= 1000 && DEFAULT_HUD_DURATION_MS <= 10000);
+
+        // Stack gap should be positive and reasonable
+        // Note: f32 comparisons in const context require workaround
+        assert!(
+            (HUD_STACK_GAP as i32) > 0 && (HUD_STACK_GAP as i32) < 100,
+            "Stack gap should be positive and reasonable"
+        );
+
+        // Max simultaneous HUDs should be at least 1
+        const _: () = assert!(MAX_SIMULTANEOUS_HUDS >= 1);
+
+        // HUD dimensions should be positive
+        assert!((HUD_WIDTH as i32) > 0, "HUD width should be positive");
+        assert!((HUD_HEIGHT as i32) > 0, "HUD height should be positive");
+    }
+
+    #[test]
+    fn test_hud_action_variants_debug() {
+        // Test Debug impl for HudAction variants
+        let open_file = HudAction::OpenFile(std::path::PathBuf::from("/test/path.txt"));
+        let debug_str = format!("{:?}", open_file);
+        assert!(
+            debug_str.contains("OpenFile"),
+            "Debug should contain variant name"
+        );
+
+        let open_url = HudAction::OpenUrl("https://test.com".to_string());
+        let debug_str = format!("{:?}", open_url);
+        assert!(
+            debug_str.contains("OpenUrl"),
+            "Debug should contain variant name"
+        );
+
+        let run_cmd = HudAction::RunCommand("ls -la".to_string());
+        let debug_str = format!("{:?}", run_cmd);
+        assert!(
+            debug_str.contains("RunCommand"),
+            "Debug should contain variant name"
+        );
+    }
+
+    #[test]
+    fn test_hud_action_clone() {
+        // Test Clone impl for HudAction
+        let original = HudAction::OpenUrl("https://clone-test.com".to_string());
+        let cloned = original.clone();
+
+        match (original, cloned) {
+            (HudAction::OpenUrl(orig_url), HudAction::OpenUrl(clone_url)) => {
+                assert_eq!(orig_url, clone_url, "Cloned URL should match original");
+            }
+            _ => panic!("Clone should preserve variant type"),
+        }
+    }
+
+    #[test]
+    fn test_hud_notification_clone() {
+        // Test Clone impl for HudNotification
+        let original = HudNotification {
+            text: "Clone test".to_string(),
+            duration_ms: 3000,
+            created_at: Instant::now(),
+            action_label: Some("Test".to_string()),
+            action: Some(HudAction::OpenUrl("https://example.com".to_string())),
+        };
+
+        let cloned = original.clone();
+        assert_eq!(cloned.text, original.text);
+        assert_eq!(cloned.duration_ms, original.duration_ms);
+        assert_eq!(cloned.action_label, original.action_label);
+        assert!(
+            cloned.has_action(),
+            "Cloned notification should have action"
+        );
+    }
+
+    #[test]
+    fn test_hud_colors_copy_trait() {
+        // Test that HudColors implements Copy (important for closures)
+        let colors = HudColors::dark_default();
+
+        // This would fail to compile if HudColors wasn't Copy
+        let colors_copy = colors;
+        let another_copy = colors;
+
+        assert_eq!(colors_copy.background, another_copy.background);
+        assert_eq!(colors_copy.text_primary, another_copy.text_primary);
+    }
+
+    #[test]
+    fn test_color_manipulation_with_gray() {
+        // Test lighten/darken with mid-gray
+        let gray = 0x808080; // RGB(128, 128, 128)
+
+        let lightened = lighten_color(gray, 0.5);
+        // Each component: 128 + (255-128)*0.5 = 128 + 63.5 = 191.5 -> 191 = 0xbf
+        assert_eq!(lightened, 0xbfbfbf);
+
+        let darkened = darken_color(gray, 0.5);
+        // Each component: 128 * 0.5 = 64 = 0x40
+        assert_eq!(darkened, 0x404040);
+    }
+
+    #[test]
+    fn test_color_manipulation_preserves_channels() {
+        // Test that color manipulation works independently per channel
+        let color = 0xff8000; // RGB(255, 128, 0) - orange
+
+        let darkened = darken_color(color, 0.5);
+        // R: 255*0.5=127, G: 128*0.5=64, B: 0*0.5=0
+        let r = (darkened >> 16) & 0xff;
+        let g = (darkened >> 8) & 0xff;
+        let b = darkened & 0xff;
+
+        assert_eq!(r, 127, "Red channel should be halved");
+        assert_eq!(g, 64, "Green channel should be halved");
+        assert_eq!(b, 0, "Blue channel should stay at 0");
+    }
 }
