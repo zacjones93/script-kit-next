@@ -32,6 +32,7 @@ use tracing::{debug, info, instrument, warn};
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
     fn CFRelease(cf: *const c_void);
+    fn CFRetain(cf: *const c_void) -> *const c_void;
 }
 
 // ============================================================================
@@ -244,6 +245,18 @@ fn cf_release(cf: CFTypeRef) {
     }
 }
 
+/// Retain a CoreFoundation object (increment reference count)
+/// Returns the same pointer for convenience
+fn cf_retain(cf: CFTypeRef) -> CFTypeRef {
+    if !cf.is_null() {
+        unsafe {
+            CFRetain(cf)
+        }
+    } else {
+        cf
+    }
+}
+
 /// Get an attribute value from an AXUIElement
 fn get_ax_attribute(element: AXUIElementRef, attribute: &str) -> Result<CFTypeRef> {
     let attr_str = create_cf_string(attribute);
@@ -429,6 +442,10 @@ fn get_cached_window(id: u32) -> Option<AXUIElementRef> {
 
 fn clear_window_cache() {
     if let Ok(mut cache) = get_cache().lock() {
+        // Release all retained window refs before clearing
+        for &window_ptr in cache.values() {
+            cf_release(window_ptr as CFTypeRef);
+        }
         cache.clear();
     }
 }
@@ -533,6 +550,8 @@ pub fn list_windows() -> Result<Vec<WindowInfo>> {
                 let window_count = CFArrayGetCount(windows_value as CFArrayRef);
 
                 for j in 0..window_count {
+                    // CFArrayGetValueAtIndex returns a borrowed reference - we must retain
+                    // if we want to keep it beyond the array's lifetime
                     let ax_window = CFArrayGetValueAtIndex(windows_value as CFArrayRef, j);
 
                     // Get window title
@@ -557,8 +576,11 @@ pub fn list_windows() -> Result<Vec<WindowInfo>> {
                     // Create a unique window ID: (pid << 16) | window_index
                     let window_id = ((pid as u32) << 16) | (j as u32);
 
-                    // Cache the window reference
-                    cache_window(window_id, ax_window as AXUIElementRef);
+                    // Retain the window ref before caching - CFArrayGetValueAtIndex returns
+                    // a borrowed reference, so we need to retain it to extend its lifetime
+                    // beyond when we release windows_value
+                    let retained_window = cf_retain(ax_window);
+                    cache_window(window_id, retained_window as AXUIElementRef);
 
                     windows.push(WindowInfo {
                         id: window_id,
@@ -566,14 +588,17 @@ pub fn list_windows() -> Result<Vec<WindowInfo>> {
                         title,
                         bounds: Bounds::new(x, y, width, height),
                         pid,
-                        ax_window: Some(ax_window as usize),
+                        ax_window: Some(retained_window as usize),
                     });
                 }
 
-                // Don't release windows_value here - the AXUIElement owns it
+                // Release windows_value - AXUIElementCopyAttributeValue returns an owned
+                // CF object that we must release (the "Copy" in the name means we own it)
+                cf_release(windows_value);
             }
 
-            // Don't release ax_app - we need it for the windows
+            // Release ax_app - AXUIElementCreateApplication returns an owned CF object
+            cf_release(ax_app);
         }
     }
 
