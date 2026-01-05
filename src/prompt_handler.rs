@@ -714,11 +714,12 @@ impl ScriptListApp {
                         -1,
                         None,
                     ),
+                    // P0 FIX: View state only - data comes from self.cached_clipboard_entries
                     AppView::ClipboardHistoryView {
-                        entries,
                         filter,
                         selected_index,
                     } => {
+                        let entries = &self.cached_clipboard_entries;
                         let filtered_count = if filter.is_empty() {
                             entries.len()
                         } else {
@@ -739,11 +740,12 @@ impl ScriptListApp {
                             None,
                         )
                     }
+                    // P0 FIX: View state only - data comes from self.apps
                     AppView::AppLauncherView {
-                        apps,
                         filter,
                         selected_index,
                     } => {
+                        let apps = &self.apps;
                         let filtered_count = if filter.is_empty() {
                             apps.len()
                         } else {
@@ -763,11 +765,12 @@ impl ScriptListApp {
                             None,
                         )
                     }
+                    // P0 FIX: View state only - data comes from self.cached_windows
                     AppView::WindowSwitcherView {
-                        windows,
                         filter,
                         selected_index,
                     } => {
+                        let windows = &self.cached_windows;
                         let filtered_count = if filter.is_empty() {
                             windows.len()
                         } else {

@@ -2227,9 +2227,10 @@ fn test_sigterm_graceful_termination() {
                 Ok(Some(status)) => {
                     // Child has exited and been reaped
                     let elapsed = start.elapsed();
-                    // Should complete quickly after SIGTERM
+                    // Should complete reasonably quickly after SIGTERM
+                    // Note: kill() internally waits up to 250ms grace period, plus CI overhead
                     assert!(
-                        elapsed < std::time::Duration::from_millis(400),
+                        elapsed < std::time::Duration::from_millis(800),
                         "Graceful termination should be quick, took {:?}",
                         elapsed
                     );

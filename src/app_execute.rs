@@ -29,16 +29,18 @@ impl ScriptListApp {
         match &entry.feature {
             builtins::BuiltInFeature::ClipboardHistory => {
                 logging::log("EXEC", "Opening Clipboard History");
-                // Use cached entries for faster loading
-                let entries = clipboard_history::get_cached_entries(100);
+                // P0 FIX: Store data in self, view holds only state
+                self.cached_clipboard_entries = clipboard_history::get_cached_entries(100);
                 logging::log(
                     "EXEC",
-                    &format!("Loaded {} clipboard entries (cached)", entries.len()),
+                    &format!(
+                        "Loaded {} clipboard entries (cached)",
+                        self.cached_clipboard_entries.len()
+                    ),
                 );
                 // Initial selected_index should be 0 (first entry)
                 // Note: clipboard history uses a flat list without section headers
                 self.current_view = AppView::ClipboardHistoryView {
-                    entries,
                     filter: String::new(),
                     selected_index: 0,
                 };
@@ -48,10 +50,11 @@ impl ScriptListApp {
             }
             builtins::BuiltInFeature::AppLauncher => {
                 logging::log("EXEC", "Opening App Launcher");
-                let apps = app_launcher::scan_applications().clone();
-                logging::log("EXEC", &format!("Loaded {} applications", apps.len()));
+                // P0 FIX: Use self.apps which is already cached
+                // Refresh apps list when opening launcher
+                self.apps = app_launcher::scan_applications().clone();
+                logging::log("EXEC", &format!("Loaded {} applications", self.apps.len()));
                 self.current_view = AppView::AppLauncherView {
-                    apps,
                     filter: String::new(),
                     selected_index: 0,
                 };
@@ -83,12 +86,13 @@ impl ScriptListApp {
             }
             builtins::BuiltInFeature::WindowSwitcher => {
                 logging::log("EXEC", "Opening Window Switcher");
+                // P0 FIX: Store data in self, view holds only state
                 // Load windows when view is opened (windows change frequently)
                 match window_control::list_windows() {
                     Ok(windows) => {
                         logging::log("EXEC", &format!("Loaded {} windows", windows.len()));
+                        self.cached_windows = windows;
                         self.current_view = AppView::WindowSwitcherView {
-                            windows,
                             filter: String::new(),
                             selected_index: 0,
                         };

@@ -4,9 +4,9 @@
 
 impl ScriptListApp {
     /// Render clipboard history view
+    /// P0 FIX: Data comes from self.cached_clipboard_entries, view passes only state
     fn render_clipboard_history(
         &mut self,
-        entries: Vec<clipboard_history::ClipboardEntryMeta>,
         filter: String,
         selected_index: usize,
         cx: &mut Context<Self>,
@@ -24,10 +24,11 @@ impl ScriptListApp {
         let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
         let box_shadows = self.create_box_shadows();
 
+        // P0 FIX: Reference data from self instead of taking ownership
         // Use global image cache from clipboard_history module
         // Images are pre-decoded in the background monitor thread, so this is fast
         // Only decode if not already in the global cache (fallback with on-demand fetch)
-        for entry in &entries {
+        for entry in &self.cached_clipboard_entries {
             if entry.content_type == clipboard_history::ContentType::Image {
                 // Check global cache first, then local cache
                 if clipboard_history::get_cached_image(&entry.id).is_none()
@@ -58,10 +59,10 @@ impl ScriptListApp {
 
         // Filter entries based on current filter
         let filtered_entries: Vec<_> = if filter.is_empty() {
-            entries.iter().enumerate().collect()
+            self.cached_clipboard_entries.iter().enumerate().collect()
         } else {
             let filter_lower = filter.to_lowercase();
-            entries
+            self.cached_clipboard_entries
                 .iter()
                 .enumerate()
                 .filter(|(_, e)| e.text_preview.to_lowercase().contains(&filter_lower))
@@ -83,18 +84,19 @@ impl ScriptListApp {
                 let key_str = event.keystroke.key.to_lowercase();
                 logging::log("KEY", &format!("ClipboardHistory key: '{}'", key_str));
 
+                // P0 FIX: View state only - data comes from this.cached_clipboard_entries
                 if let AppView::ClipboardHistoryView {
-                    entries,
                     filter,
                     selected_index,
                 } = &mut this.current_view
                 {
                     // Apply filter to get current filtered list
+                    // P0 FIX: Reference cached_clipboard_entries from self
                     let filtered_entries: Vec<_> = if filter.is_empty() {
-                        entries.iter().enumerate().collect()
+                        this.cached_clipboard_entries.iter().enumerate().collect()
                     } else {
                         let filter_lower = filter.to_lowercase();
-                        entries
+                        this.cached_clipboard_entries
                             .iter()
                             .enumerate()
                             .filter(|(_, e)| e.text_preview.to_lowercase().contains(&filter_lower))
@@ -372,7 +374,7 @@ impl ScriptListApp {
                         div()
                             .text_sm()
                             .text_color(rgb(text_dimmed))
-                            .child(format!("{} entries", entries.len())),
+                            .child(format!("{} entries", self.cached_clipboard_entries.len())),
                     ),
             )
             // Divider
@@ -657,9 +659,9 @@ impl ScriptListApp {
     }
 
     /// Render app launcher view
+    /// P0 FIX: Data comes from self.apps, view passes only state
     fn render_app_launcher(
         &mut self,
-        apps: Vec<app_launcher::AppInfo>,
         filter: String,
         selected_index: usize,
         cx: &mut Context<Self>,
@@ -677,12 +679,13 @@ impl ScriptListApp {
         let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
         let box_shadows = self.create_box_shadows();
 
-        // Filter apps based on current filter
+        // P0 FIX: Filter apps from self.apps instead of taking ownership
         let filtered_apps: Vec<_> = if filter.is_empty() {
-            apps.iter().enumerate().collect()
+            self.apps.iter().enumerate().collect()
         } else {
             let filter_lower = filter.to_lowercase();
-            apps.iter()
+            self.apps
+                .iter()
                 .enumerate()
                 .filter(|(_, a)| a.name.to_lowercase().contains(&filter_lower))
                 .collect()
@@ -704,18 +707,20 @@ impl ScriptListApp {
                 let key_str = event.keystroke.key.to_lowercase();
                 logging::log("KEY", &format!("AppLauncher key: '{}'", key_str));
 
+                // P0 FIX: View state only - data comes from this.apps
                 if let AppView::AppLauncherView {
-                    apps,
                     filter,
                     selected_index,
                 } = &mut this.current_view
                 {
                     // Apply filter to get current filtered list
+                    // P0 FIX: Reference apps from self
                     let filtered_apps: Vec<_> = if filter.is_empty() {
-                        apps.iter().enumerate().collect()
+                        this.apps.iter().enumerate().collect()
                     } else {
                         let filter_lower = filter.to_lowercase();
-                        apps.iter()
+                        this.apps
+                            .iter()
                             .enumerate()
                             .filter(|(_, a)| a.name.to_lowercase().contains(&filter_lower))
                             .collect()
@@ -929,7 +934,7 @@ impl ScriptListApp {
                         div()
                             .text_sm()
                             .text_color(rgb(text_dimmed))
-                            .child(format!("{} apps", apps.len())),
+                            .child(format!("{} apps", self.apps.len())),
                     ),
             )
             // Divider
@@ -954,9 +959,9 @@ impl ScriptListApp {
     }
 
     /// Render window switcher view with 50/50 split layout
+    /// P0 FIX: Data comes from self.cached_windows, view passes only state
     fn render_window_switcher(
         &mut self,
-        windows: Vec<window_control::WindowInfo>,
         filter: String,
         selected_index: usize,
         cx: &mut Context<Self>,
@@ -974,12 +979,12 @@ impl ScriptListApp {
         let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
         let box_shadows = self.create_box_shadows();
 
-        // Filter windows based on current filter
+        // P0 FIX: Filter windows from self.cached_windows instead of taking ownership
         let filtered_windows: Vec<_> = if filter.is_empty() {
-            windows.iter().enumerate().collect()
+            self.cached_windows.iter().enumerate().collect()
         } else {
             let filter_lower = filter.to_lowercase();
-            windows
+            self.cached_windows
                 .iter()
                 .enumerate()
                 .filter(|(_, w)| {
@@ -1004,18 +1009,19 @@ impl ScriptListApp {
                 let key_str = event.keystroke.key.to_lowercase();
                 logging::log("KEY", &format!("WindowSwitcher key: '{}'", key_str));
 
+                // P0 FIX: View state only - data comes from this.cached_windows
                 if let AppView::WindowSwitcherView {
-                    windows,
                     filter,
                     selected_index,
                 } = &mut this.current_view
                 {
                     // Apply filter to get current filtered list
+                    // P0 FIX: Reference cached_windows from self
                     let filtered_windows: Vec<_> = if filter.is_empty() {
-                        windows.iter().enumerate().collect()
+                        this.cached_windows.iter().enumerate().collect()
                     } else {
                         let filter_lower = filter.to_lowercase();
-                        windows
+                        this.cached_windows
                             .iter()
                             .enumerate()
                             .filter(|(_, w)| {
@@ -1287,7 +1293,7 @@ impl ScriptListApp {
                         div()
                             .text_sm()
                             .text_color(rgb(text_dimmed))
-                            .child(format!("{} windows", windows.len())),
+                            .child(format!("{} windows", self.cached_windows.len())),
                     ),
             )
             // Divider
@@ -1510,19 +1516,20 @@ impl ScriptListApp {
                     .duration_ms(Some(2000)),
                 );
 
-                // Refresh window list after action
+                // P0 FIX: Refresh window list in self.cached_windows
                 if let AppView::WindowSwitcherView {
-                    windows,
                     selected_index,
                     ..
                 } = &mut self.current_view
                 {
                     match window_control::list_windows() {
                         Ok(new_windows) => {
-                            *windows = new_windows;
+                            self.cached_windows = new_windows;
                             // Adjust selected index if needed
-                            if *selected_index >= windows.len() && !windows.is_empty() {
-                                *selected_index = windows.len() - 1;
+                            if *selected_index >= self.cached_windows.len()
+                                && !self.cached_windows.is_empty()
+                            {
+                                *selected_index = self.cached_windows.len() - 1;
                             }
                         }
                         Err(e) => {

@@ -504,20 +504,20 @@ enum AppView {
         entity: Entity<TemplatePrompt>,
     },
     /// Showing clipboard history
+    /// P0 FIX: View state only - data comes from clipboard_history module cache
     ClipboardHistoryView {
-        entries: Vec<clipboard_history::ClipboardEntryMeta>,
         filter: String,
         selected_index: usize,
     },
     /// Showing app launcher
+    /// P0 FIX: View state only - data comes from ScriptListApp.apps or app_launcher module
     AppLauncherView {
-        apps: Vec<app_launcher::AppInfo>,
         filter: String,
         selected_index: usize,
     },
     /// Showing window switcher
+    /// P0 FIX: View state only - windows stored in ScriptListApp.cached_windows
     WindowSwitcherView {
-        windows: Vec<window_control::WindowInfo>,
         filter: String,
         selected_index: usize,
     },
@@ -690,8 +690,12 @@ struct ScriptListApp {
     /// H1 Optimization: Arc-wrapped scriptlets for cheap cloning during filter operations
     scriptlets: Vec<std::sync::Arc<scripts::Scriptlet>>,
     builtin_entries: Vec<builtins::BuiltInEntry>,
-    /// Cached list of installed applications for main search
+    /// Cached list of installed applications for main search and AppLauncherView
     apps: Vec<app_launcher::AppInfo>,
+    /// P0 FIX: Cached clipboard entries for ClipboardHistoryView (avoids cloning per frame)
+    cached_clipboard_entries: Vec<clipboard_history::ClipboardEntryMeta>,
+    /// P0 FIX: Cached windows for WindowSwitcherView (avoids cloning per frame)
+    cached_windows: Vec<window_control::WindowInfo>,
     selected_index: usize,
     /// Main menu filter text (mirrors gpui-component input state)
     filter_text: String,
@@ -1021,26 +1025,26 @@ impl Render for ScriptListApp {
             AppView::TemplatePrompt { entity, .. } => {
                 self.render_template_prompt(entity, cx).into_any_element()
             }
+            // P0 FIX: View state only - data comes from self.cached_clipboard_entries
             AppView::ClipboardHistoryView {
-                entries,
                 filter,
                 selected_index,
             } => self
-                .render_clipboard_history(entries, filter, selected_index, cx)
+                .render_clipboard_history(filter, selected_index, cx)
                 .into_any_element(),
+            // P0 FIX: View state only - data comes from self.apps
             AppView::AppLauncherView {
-                apps,
                 filter,
                 selected_index,
             } => self
-                .render_app_launcher(apps, filter, selected_index, cx)
+                .render_app_launcher(filter, selected_index, cx)
                 .into_any_element(),
+            // P0 FIX: View state only - data comes from self.cached_windows
             AppView::WindowSwitcherView {
-                windows,
                 filter,
                 selected_index,
             } => self
-                .render_window_switcher(windows, filter, selected_index, cx)
+                .render_window_switcher(filter, selected_index, cx)
                 .into_any_element(),
             AppView::DesignGalleryView {
                 filter,
@@ -2016,19 +2020,19 @@ fn main() {
                                         };
                                         view.update_window_size();
                                     }
+                                    // P0 FIX: Store data in self, view holds only state
                                     "clipboard" | "clipboard-history" | "clipboardhistory" => {
-                                        let entries = clipboard_history::get_cached_entries(100);
+                                        view.cached_clipboard_entries =
+                                            clipboard_history::get_cached_entries(100);
                                         view.current_view = AppView::ClipboardHistoryView {
-                                            entries,
                                             filter: String::new(),
                                             selected_index: 0,
                                         };
                                         view.update_window_size();
                                     }
+                                    // P0 FIX: Use existing self.apps, view holds only state
                                     "apps" | "app-launcher" | "applauncher" => {
-                                        let apps = view.apps.clone();
                                         view.current_view = AppView::AppLauncherView {
-                                            apps,
                                             filter: String::new(),
                                             selected_index: 0,
                                         };
