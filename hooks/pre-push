@@ -1,0 +1,75 @@
+#!/bin/bash
+# Pre-push hook for Script Kit GPUI
+# Runs verification checks before push to prevent CI failures
+#
+# Modes:
+#   Default (FAST): fmt --check + cargo check (~2s)
+#   Full:           fmt --check + check + clippy + test (~30s+)
+#
+# To run full checks: FULL_CHECK=1 git push
+# To skip entirely:   git push --no-verify
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+# Fast mode by default, set FULL_CHECK=1 for complete verification
+if [ -n "$FULL_CHECK" ]; then
+    echo -e "${CYAN}Running FULL pre-push verification...${NC}"
+
+    echo -e "\n${YELLOW}[1/4] cargo fmt --check${NC}"
+    if ! cargo fmt --check; then
+        echo -e "${RED}❌ Format failed! Run 'cargo fmt'${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓${NC}"
+
+    echo -e "${YELLOW}[2/4] cargo check${NC}"
+    if ! cargo check; then
+        echo -e "${RED}❌ Check failed!${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓${NC}"
+
+    echo -e "${YELLOW}[3/4] cargo clippy${NC}"
+    if ! cargo clippy --all-targets -- -D warnings; then
+        echo -e "${RED}❌ Clippy failed!${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓${NC}"
+
+    echo -e "${YELLOW}[4/4] cargo test${NC}"
+    if ! cargo test; then
+        echo -e "${RED}❌ Tests failed!${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓${NC}"
+
+    echo -e "\n${GREEN}✅ Full verification passed!${NC}"
+else
+    # FAST MODE - just fmt --check + check (~2 seconds)
+    echo -e "${CYAN}⚡ Fast pre-push (fmt --check + check)...${NC}"
+
+    # Check formatting (don't auto-format - that's too late after commit)
+    echo -e "${YELLOW}[1/2] cargo fmt --check${NC}"
+    if ! cargo fmt --check; then
+        echo -e "${RED}❌ Format check failed! Run 'cargo fmt' and commit before pushing.${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ format${NC}"
+
+    # Type check - must pass
+    echo -e "${YELLOW}[2/2] cargo check${NC}"
+    if ! cargo check 2>&1 | tee /tmp/cargo-check.out | tail -1 | grep -q "Finished"; then
+        echo -e "${RED}❌ Check failed!${NC}"
+        cat /tmp/cargo-check.out
+        exit 1
+    fi
+    echo -e "${GREEN}✓ check${NC}"
+
+    echo -e "${GREEN}✅ OK${NC} ${YELLOW}(FULL_CHECK=1 for clippy+tests)${NC}"
+fi
