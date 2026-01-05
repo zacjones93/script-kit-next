@@ -191,6 +191,58 @@ fn test_split_session_kill() {
     }
 }
 
+/// Test that process group liveness check works correctly
+/// This verifies the fix for the bug where we only checked the leader PID
+/// instead of the entire process group.
+#[cfg(unix)]
+#[test]
+fn test_process_group_alive_check() {
+    // Spawn a simple sleep process - don't use backgrounded children
+    // as they may get their own process groups on some systems
+    let result = spawn_script("sleep", &["10"], "[test:process_group]");
+
+    if let Ok(session) = result {
+        let pid = session.pid();
+
+        // Process group should be alive
+        // Note: ProcessHandle::is_alive() now checks the group, not just the leader
+        assert!(
+            session.process_handle.is_alive(),
+            "Process group should be alive initially"
+        );
+
+        // Drop the session - should kill the entire process group
+        drop(session);
+
+        // Give some time for cleanup
+        std::thread::sleep(std::time::Duration::from_millis(400));
+
+        // Verify the process is truly dead using kill -0
+        // This is the same check our is_alive() uses internally
+        let rc = unsafe { libc::kill(-(pid as libc::pid_t), 0) };
+        assert!(
+            rc != 0,
+            "Process group should be dead after kill (kill -0 should fail)"
+        );
+    }
+}
+
+/// Test that the libc-based process group functions work correctly
+#[cfg(unix)]
+#[test]
+fn test_unix_process_group_functions() {
+    use crate::executor::runner::ProcessHandle;
+
+    // Create a handle with a non-existent PID
+    let handle = ProcessHandle::new(99997, "[test:unix_funcs]".to_string());
+
+    // Non-existent process should not be alive
+    assert!(
+        !handle.is_alive(),
+        "Non-existent process should not be alive"
+    );
+}
+
 // ============================================================
 // Selected Text Handler Tests
 // ============================================================

@@ -1231,6 +1231,15 @@ fn write_string_if_missing(path: &Path, contents: &str, warnings: &mut Vec<Strin
     }
 }
 
+/// Write string to path if content changed, using atomic rename for safety
+///
+/// This function uses an atomic write pattern to prevent race conditions and
+/// partial writes:
+/// 1. Write to a temporary file in the same directory
+/// 2. Atomically rename temp file to target path
+///
+/// The rename is atomic on most filesystems, so readers will either see the
+/// old content or the new content, never a partial write.
 fn write_string_if_changed(path: &Path, contents: &str, warnings: &mut Vec<String>, label: &str) {
     if let Ok(existing) = fs::read_to_string(path) {
         if existing == contents {
@@ -1250,13 +1259,30 @@ fn write_string_if_changed(path: &Path, contents: &str, warnings: &mut Vec<Strin
         }
     }
 
-    if let Err(e) = fs::write(path, contents) {
+    // Atomic write: write to temp file then rename
+    // This prevents readers from seeing partial writes during concurrent access
+    let temp_path = path.with_extension("tmp");
+
+    if let Err(e) = fs::write(&temp_path, contents) {
         warnings.push(format!(
-            "Failed to write {} ({}): {}",
+            "Failed to write temp file for {} ({}): {}",
             label,
+            temp_path.display(),
+            e
+        ));
+        return;
+    }
+
+    // Atomic rename - this is atomic on most filesystems
+    if let Err(e) = fs::rename(&temp_path, path) {
+        warnings.push(format!(
+            "Failed to rename {} to {}: {}",
+            temp_path.display(),
             path.display(),
             e
         ));
+        // Clean up temp file on failure
+        let _ = fs::remove_file(&temp_path);
     } else {
         debug!(path = %path.display(), "Updated {}", label);
     }

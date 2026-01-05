@@ -210,116 +210,131 @@ fn setup_workspace_observer() {
         // Create a custom class to receive notifications
         let superclass = Class::get("NSObject").unwrap();
 
-        let mut decl = match ClassDecl::new("ScriptKitAppObserver", superclass) {
-            Some(d) => d,
-            None => {
-                // Class might already exist from previous call
-                logging::log("WARN", "AppObserver class already exists");
-                return;
-            }
-        };
+        // Try to get or create the observer class
+        // Fix: If the class already exists (e.g., from a previous call), fetch it
+        // instead of returning early. This ensures the observer is always registered.
+        let observer_class = if let Some(existing) = Class::get("ScriptKitAppObserver") {
+            logging::log("APP", "Using existing ScriptKitAppObserver class");
+            existing
+        } else {
+            // Class doesn't exist, create it
+            let mut decl = match ClassDecl::new("ScriptKitAppObserver", superclass) {
+                Some(d) => d,
+                None => {
+                    // This shouldn't happen if Class::get returned None, but handle it
+                    logging::log("ERROR", "Failed to create ScriptKitAppObserver class");
+                    return;
+                }
+            };
 
-        // Add the notification handler method
-        //
-        // SAFETY: This callback is invoked from Objective-C on a background thread
-        // (via NSRunLoop). We must:
-        // 1. Use autoreleasepool to drain autoreleased objects created by msg_send!
-        //    (e.g., NSStrings from stringWithUTF8String:). Without this, objects
-        //    accumulate and leak since there's no enclosing pool on this thread.
-        // 2. Use catch_unwind to prevent panics from unwinding across the FFI boundary,
-        //    which is undefined behavior.
-        extern "C" fn handle_app_activation(_this: &Object, _sel: Sel, notification: *mut Object) {
-            // Catch any panic to prevent UB from unwinding across FFI boundary
-            let _ = std::panic::catch_unwind(|| {
-                // Create an autorelease pool to drain autoreleased objects
-                // from msg_send! calls (e.g., NSStrings created in this callback)
-                objc::rc::autoreleasepool(|| unsafe { handle_app_activation_inner(notification) });
-            });
-        }
-
-        /// Inner implementation of handle_app_activation.
-        /// Separated to keep the extern "C" wrapper minimal and focused on FFI safety.
-        ///
-        /// # Safety
-        /// - Must be called within an autoreleasepool
-        /// - notification must be a valid Objective-C object pointer or null
-        unsafe fn handle_app_activation_inner(notification: *mut Object) {
-            if notification.is_null() {
-                return;
-            }
-
-            // Get userInfo dictionary
-            let user_info: *mut Object = msg_send![notification, userInfo];
-            if user_info.is_null() {
-                return;
+            // Add the notification handler method
+            //
+            // SAFETY: This callback is invoked from Objective-C on a background thread
+            // (via NSRunLoop). We must:
+            // 1. Use autoreleasepool to drain autoreleased objects created by msg_send!
+            //    (e.g., NSStrings from stringWithUTF8String:). Without this, objects
+            //    accumulate and leak since there's no enclosing pool on this thread.
+            // 2. Use catch_unwind to prevent panics from unwinding across the FFI boundary,
+            //    which is undefined behavior.
+            extern "C" fn handle_app_activation(
+                _this: &Object,
+                _sel: Sel,
+                notification: *mut Object,
+            ) {
+                // Catch any panic to prevent UB from unwinding across FFI boundary
+                let _ = std::panic::catch_unwind(|| {
+                    // Create an autorelease pool to drain autoreleased objects
+                    // from msg_send! calls (e.g., NSStrings created in this callback)
+                    objc::rc::autoreleasepool(|| unsafe {
+                        handle_app_activation_inner(notification)
+                    });
+                });
             }
 
-            // Get the NSRunningApplication from userInfo
-            let key = objc_nsstring("NSWorkspaceApplicationKey");
-            let app: *mut Object = msg_send![user_info, objectForKey: key];
-
-            if app.is_null() {
-                return;
-            }
-
-            let bundle_id = get_nsstring(msg_send![app, bundleIdentifier]);
-            let name = get_nsstring(msg_send![app, localizedName]);
-            let pid: i32 = msg_send![app, processIdentifier];
-
-            if let Some(bundle_id) = bundle_id {
-                // Skip Script Kit itself
-                if bundle_id == SCRIPT_KIT_BUNDLE_ID
-                    || bundle_id.contains("scriptkit")
-                    || bundle_id.contains("script-kit")
-                {
-                    logging::log("APP", "App activated: Script Kit (ignoring)");
+            /// Inner implementation of handle_app_activation.
+            /// Separated to keep the extern "C" wrapper minimal and focused on FFI safety.
+            ///
+            /// # Safety
+            /// - Must be called within an autoreleasepool
+            /// - notification must be a valid Objective-C object pointer or null
+            unsafe fn handle_app_activation_inner(notification: *mut Object) {
+                if notification.is_null() {
                     return;
                 }
 
-                let tracked = TrackedApp {
-                    pid,
-                    bundle_id: bundle_id.clone(),
-                    name: name.unwrap_or_else(|| bundle_id.clone()),
-                };
+                // Get userInfo dictionary
+                let user_info: *mut Object = msg_send![notification, userInfo];
+                if user_info.is_null() {
+                    return;
+                }
 
-                logging::log(
-                    "APP",
-                    &format!(
-                        "App activated: {} ({}) PID {}",
-                        tracked.name, tracked.bundle_id, tracked.pid
-                    ),
-                );
+                // Get the NSRunningApplication from userInfo
+                let key = objc_nsstring("NSWorkspaceApplicationKey");
+                let app: *mut Object = msg_send![user_info, objectForKey: key];
 
-                // Check if this is a different app than currently tracked
-                let should_update = {
-                    let state = TRACKER_STATE.read();
-                    state
-                        .last_real_app
-                        .as_ref()
-                        .map(|a| a.bundle_id != tracked.bundle_id)
-                        .unwrap_or(true)
-                };
+                if app.is_null() {
+                    return;
+                }
 
-                if should_update {
-                    // Update state
+                let bundle_id = get_nsstring(msg_send![app, bundleIdentifier]);
+                let name = get_nsstring(msg_send![app, localizedName]);
+                let pid: i32 = msg_send![app, processIdentifier];
+
+                if let Some(bundle_id) = bundle_id {
+                    // Skip Script Kit itself
+                    if bundle_id == SCRIPT_KIT_BUNDLE_ID
+                        || bundle_id.contains("scriptkit")
+                        || bundle_id.contains("script-kit")
                     {
-                        let mut state = TRACKER_STATE.write();
-                        state.last_real_app = Some(tracked.clone());
-                        state.cached_menu_items.clear(); // Clear old cache
+                        logging::log("APP", "App activated: Script Kit (ignoring)");
+                        return;
                     }
 
-                    // Fetch menu items in background
-                    fetch_menu_items_async(tracked.pid, tracked.bundle_id);
+                    let tracked = TrackedApp {
+                        pid,
+                        bundle_id: bundle_id.clone(),
+                        name: name.unwrap_or_else(|| bundle_id.clone()),
+                    };
+
+                    logging::log(
+                        "APP",
+                        &format!(
+                            "App activated: {} ({}) PID {}",
+                            tracked.name, tracked.bundle_id, tracked.pid
+                        ),
+                    );
+
+                    // Check if this is a different app than currently tracked
+                    let should_update = {
+                        let state = TRACKER_STATE.read();
+                        state
+                            .last_real_app
+                            .as_ref()
+                            .map(|a| a.bundle_id != tracked.bundle_id)
+                            .unwrap_or(true)
+                    };
+
+                    if should_update {
+                        // Update state
+                        {
+                            let mut state = TRACKER_STATE.write();
+                            state.last_real_app = Some(tracked.clone());
+                            state.cached_menu_items.clear(); // Clear old cache
+                        }
+
+                        // Fetch menu items in background
+                        fetch_menu_items_async(tracked.pid, tracked.bundle_id);
+                    }
                 }
             }
-        }
 
-        decl.add_method(
-            sel!(handleAppActivation:),
-            handle_app_activation as extern "C" fn(&Object, Sel, *mut Object),
-        );
+            decl.add_method(
+                sel!(handleAppActivation:),
+                handle_app_activation as extern "C" fn(&Object, Sel, *mut Object),
+            );
 
-        let observer_class = decl.register();
+            decl.register()
+        };
 
         // Create an instance of our observer
         let observer: *mut Object = msg_send![observer_class, alloc];

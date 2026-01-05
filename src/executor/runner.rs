@@ -18,8 +18,65 @@ use tracing::{debug, error, info, instrument};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
+// Unix-specific process control using libc for correctness and performance
+#[cfg(unix)]
+mod unix_process {
+    use libc::{c_int, pid_t, ESRCH};
+
+    /// Send a signal to a process group (negative PID targets the group)
+    ///
+    /// Returns Ok(()) if signal was sent successfully.
+    /// Returns Err with errno description on failure.
+    pub fn kill_process_group(pgid: u32, signal: c_int) -> Result<(), &'static str> {
+        // Safety: kill() is a simple syscall with no memory safety concerns
+        // Negative PID targets the process group
+        let rc = unsafe { libc::kill(-(pgid as pid_t), signal) };
+        if rc == 0 {
+            Ok(())
+        } else {
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            match errno {
+                libc::ESRCH => Err("No such process group"),
+                libc::EPERM => Err("Permission denied"),
+                libc::EINVAL => Err("Invalid signal"),
+                _ => Err("Unknown error"),
+            }
+        }
+    }
+
+    /// Check if a process group is still alive
+    ///
+    /// Uses signal 0 which doesn't actually send a signal but checks if the
+    /// process group exists. Returns true if any process in the group is alive.
+    ///
+    /// Note: EPERM (permission denied) also means the process exists but we
+    /// don't have permission to signal it - we still count this as "alive".
+    pub fn process_group_alive(pgid: u32) -> bool {
+        // Safety: kill() with signal 0 is safe - it only checks existence
+        let rc = unsafe { libc::kill(-(pgid as pid_t), 0) };
+        if rc == 0 {
+            true
+        } else {
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            // EPERM means process exists but we can't signal it - still alive
+            // ESRCH means no such process - dead
+            errno != ESRCH
+        }
+    }
+
+    /// SIGTERM signal number
+    pub const SIGTERM: c_int = libc::SIGTERM;
+    /// SIGKILL signal number
+    pub const SIGKILL: c_int = libc::SIGKILL;
+}
+
 /// Embedded SDK content (included at compile time)
 const EMBEDDED_SDK: &str = include_str!("../../scripts/kit-sdk.ts");
+
+/// OnceLock for single-flight SDK extraction
+/// Ensures SDK is extracted exactly once, preventing race conditions
+/// when multiple scripts start simultaneously
+static SDK_EXTRACTED: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
 
 /// Find an executable, checking common locations that GUI apps might miss
 pub fn find_executable(name: &str) -> Option<PathBuf> {
@@ -65,31 +122,47 @@ fn ensure_tsconfig_paths(_tsconfig_path: &PathBuf) {
 
 /// Get the SDK path - SDK extraction is now handled by setup::ensure_kit_setup() at startup
 /// This function just returns the expected path since setup has already done the work
+///
+/// ## Race Condition Prevention
+/// Uses OnceLock to ensure SDK is extracted exactly once, even when multiple scripts
+/// start simultaneously. The fallback extraction uses atomic write (temp + rename)
+/// to prevent partial reads.
 fn ensure_sdk_extracted() -> Option<PathBuf> {
-    // Target path: ~/.scriptkit/sdk/kit-sdk.ts
-    // This is extracted by setup::ensure_kit_setup() which runs at app startup
-    let sdk_path = dirs::home_dir()?.join(".scriptkit/sdk/kit-sdk.ts");
+    SDK_EXTRACTED
+        .get_or_init(|| {
+            // Target path: ~/.scriptkit/sdk/kit-sdk.ts
+            // This is extracted by setup::ensure_kit_setup() which runs at app startup
+            let home = dirs::home_dir()?;
+            let sdk_path = home.join(".scriptkit/sdk/kit-sdk.ts");
 
-    if sdk_path.exists() {
-        Some(sdk_path)
-    } else {
-        // Fallback: write embedded SDK if somehow missing
-        // This shouldn't happen in normal operation since setup runs first
-        logging::log(
-            "EXEC",
-            "SDK not found at expected path, extracting embedded SDK",
-        );
-        let kit_sdk = dirs::home_dir()?.join(".scriptkit/sdk");
-        if !kit_sdk.exists() {
-            std::fs::create_dir_all(&kit_sdk).ok()?;
-        }
-        std::fs::write(&sdk_path, EMBEDDED_SDK).ok()?;
-        logging::log(
-            "EXEC",
-            &format!("Extracted fallback SDK to {}", sdk_path.display()),
-        );
-        Some(sdk_path)
-    }
+            if sdk_path.exists() {
+                return Some(sdk_path);
+            }
+
+            // Fallback: write embedded SDK if somehow missing
+            // This shouldn't happen in normal operation since setup runs first
+            logging::log(
+                "EXEC",
+                "SDK not found at expected path, extracting embedded SDK",
+            );
+
+            let kit_sdk = home.join(".scriptkit/sdk");
+            if !kit_sdk.exists() {
+                std::fs::create_dir_all(&kit_sdk).ok()?;
+            }
+
+            // Atomic write: temp file then rename to prevent partial reads
+            let temp_path = sdk_path.with_extension("tmp");
+            std::fs::write(&temp_path, EMBEDDED_SDK).ok()?;
+            std::fs::rename(&temp_path, &sdk_path).ok()?;
+
+            logging::log(
+                "EXEC",
+                &format!("Extracted fallback SDK to {}", sdk_path.display()),
+            );
+            Some(sdk_path)
+        })
+        .clone()
 }
 
 /// Find the SDK path, checking standard locations
@@ -194,8 +267,12 @@ impl ProcessHandle {
     ///
     /// ## Escalation Protocol
     /// 1. Send SIGTERM to process group (graceful termination request)
-    /// 2. Wait up to TERM_GRACE_MS for process to exit
+    /// 2. Wait up to TERM_GRACE_MS for process group to exit
     /// 3. If still alive, send SIGKILL (forceful termination)
+    ///
+    /// ## Critical Fix
+    /// Uses libc::kill() to check process GROUP liveness (not just leader PID).
+    /// This prevents orphan child processes when the leader exits but children remain.
     ///
     /// This gives scripts a chance to clean up before being forcefully killed.
     pub fn kill(&mut self) {
@@ -215,110 +292,79 @@ impl ProcessHandle {
 
         #[cfg(unix)]
         {
-            // Kill the entire process group using negative PID
+            use unix_process::{kill_process_group, process_group_alive, SIGKILL, SIGTERM};
+
             // Since we spawned with process_group(0), the PGID equals the PID
-            let negative_pgid = format!("-{}", self.pid);
+            let pgid = self.pid;
 
             // Step 1: Send SIGTERM for graceful shutdown
             logging::log(
                 "EXEC",
                 &format!(
                     "Sending SIGTERM to process group PGID {} (graceful shutdown)",
-                    self.pid
+                    pgid
                 ),
             );
 
-            let term_result = Command::new("kill").args(["-15", &negative_pgid]).output();
-
-            match term_result {
-                Ok(output) => {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    if stderr.contains("No such process") {
-                        logging::log(
-                            "EXEC",
-                            &format!("Process group {} already exited", self.pid),
-                        );
-                        return;
-                    }
+            match kill_process_group(pgid, SIGTERM) {
+                Ok(()) => {
+                    logging::log("EXEC", &format!("SIGTERM sent to PGID {}", pgid));
+                }
+                Err("No such process group") => {
+                    logging::log("EXEC", &format!("Process group {} already exited", pgid));
+                    return;
                 }
                 Err(e) => {
                     logging::log(
                         "EXEC",
-                        &format!("Failed to send SIGTERM to PGID {}: {}", self.pid, e),
+                        &format!("Failed to send SIGTERM to PGID {}: {}", pgid, e),
                     );
                     // Continue to try SIGKILL anyway
                 }
             }
 
-            // Step 2: Wait for grace period, polling to see if process exits
+            // Step 2: Wait for grace period, polling process GROUP (not just leader)
             let start = std::time::Instant::now();
             let grace_duration = std::time::Duration::from_millis(TERM_GRACE_MS);
             let poll_interval = std::time::Duration::from_millis(POLL_INTERVAL_MS);
 
             while start.elapsed() < grace_duration {
-                // Check if process is still alive using kill -0
-                let alive_check = Command::new("kill")
-                    .args(["-0", &self.pid.to_string()])
-                    .output();
-
-                match alive_check {
-                    Ok(output) if !output.status.success() => {
-                        // Process no longer exists - terminated gracefully
-                        logging::log(
-                            "EXEC",
-                            &format!(
-                                "Process group {} terminated gracefully after SIGTERM",
-                                self.pid
-                            ),
-                        );
-                        return;
-                    }
-                    _ => {
-                        // Still alive, wait and try again
-                        std::thread::sleep(poll_interval);
-                    }
+                // CRITICAL: Check if process GROUP is alive, not just the leader PID
+                // This prevents orphan processes when the leader exits but children remain
+                if !process_group_alive(pgid) {
+                    logging::log(
+                        "EXEC",
+                        &format!("Process group {} terminated gracefully after SIGTERM", pgid),
+                    );
+                    return;
                 }
+                std::thread::sleep(poll_interval);
             }
 
-            // Step 3: Process didn't exit in time, escalate to SIGKILL
+            // Step 3: Process group didn't exit in time, escalate to SIGKILL
             logging::log(
                 "EXEC",
                 &format!(
                     "Process group {} did not exit after {}ms, escalating to SIGKILL",
-                    self.pid, TERM_GRACE_MS
+                    pgid, TERM_GRACE_MS
                 ),
             );
 
-            match Command::new("kill").args(["-9", &negative_pgid]).output() {
-                Ok(output) => {
-                    if output.status.success() {
-                        logging::log(
-                            "EXEC",
-                            &format!(
-                                "Successfully killed process group {} with SIGKILL",
-                                self.pid
-                            ),
-                        );
-                    } else {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        if stderr.contains("No such process") {
-                            logging::log(
-                                "EXEC",
-                                &format!("Process group {} exited just before SIGKILL", self.pid),
-                            );
-                        } else {
-                            logging::log(
-                                "EXEC",
-                                &format!("SIGKILL failed for PGID {}: {}", self.pid, stderr),
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
+            match kill_process_group(pgid, SIGKILL) {
+                Ok(()) => {
                     logging::log(
                         "EXEC",
-                        &format!("Failed to send SIGKILL to PGID {}: {}", self.pid, e),
+                        &format!("Successfully killed process group {} with SIGKILL", pgid),
                     );
+                }
+                Err("No such process group") => {
+                    logging::log(
+                        "EXEC",
+                        &format!("Process group {} exited just before SIGKILL", pgid),
+                    );
+                }
+                Err(e) => {
+                    logging::log("EXEC", &format!("SIGKILL failed for PGID {}: {}", pgid, e));
                 }
             }
         }
@@ -333,16 +379,14 @@ impl ProcessHandle {
         }
     }
 
-    /// Check if process is still running (Unix only)
+    /// Check if process group is still running (Unix only)
+    ///
+    /// Checks the entire process group, not just the leader PID.
+    /// This ensures we properly detect when all child processes have exited.
     #[cfg(unix)]
     #[allow(dead_code)]
     pub fn is_alive(&self) -> bool {
-        // Use kill -0 to check if process exists
-        Command::new("kill")
-            .args(["-0", &self.pid.to_string()])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        unix_process::process_group_alive(self.pid)
     }
 }
 
