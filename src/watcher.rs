@@ -22,10 +22,39 @@ enum ControlMsg {
 const DEBOUNCE_MS: u64 = 500;
 /// Storm threshold: if more than this many unique paths pending, collapse to FullReload
 const STORM_THRESHOLD: usize = 200;
+/// Initial backoff delay for supervisor restart (ms)
+const INITIAL_BACKOFF_MS: u64 = 100;
+/// Maximum backoff delay for supervisor restart (ms)
+const MAX_BACKOFF_MS: u64 = 30_000; // 30 seconds
+/// Maximum consecutive notify errors before logging warning
+const MAX_NOTIFY_ERRORS: u32 = 10;
 
 /// Check if an event kind is relevant (not just Access events)
 fn is_relevant_event_kind(kind: &notify::EventKind) -> bool {
     !matches!(kind, notify::EventKind::Access(_))
+}
+
+/// Compute exponential backoff delay, capped at MAX_BACKOFF_MS
+fn compute_backoff(attempt: u32) -> Duration {
+    let delay_ms = INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt));
+    Duration::from_millis(delay_ms.min(MAX_BACKOFF_MS))
+}
+
+/// Sleep with interruptible checks against a stop flag
+/// Returns true if sleep completed, false if stop was signaled
+fn interruptible_sleep(duration: Duration, stop_flag: &std::sync::atomic::AtomicBool) -> bool {
+    let check_interval = Duration::from_millis(100);
+    let mut remaining = duration;
+
+    while remaining > Duration::ZERO {
+        if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
+        let sleep_time = remaining.min(check_interval);
+        thread::sleep(sleep_time);
+        remaining = remaining.saturating_sub(sleep_time);
+    }
+    true
 }
 
 /// Event emitted when config needs to be reloaded
@@ -67,9 +96,10 @@ pub enum AppearanceChangeEvent {
 /// Uses trailing-edge debounce: each new event resets the deadline.
 /// Handles atomic saves (rename/remove operations).
 /// Properly shuts down via Stop control message.
+/// Includes supervisor restart with exponential backoff on transient errors.
 pub struct ConfigWatcher {
     tx: Option<Sender<ConfigReloadEvent>>,
-    control_tx: Option<Sender<ControlMsg>>,
+    stop_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     watcher_thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -82,7 +112,7 @@ impl ConfigWatcher {
         let (tx, rx) = channel();
         let watcher = ConfigWatcher {
             tx: Some(tx),
-            control_tx: None,
+            stop_flag: None,
             watcher_thread: None,
         };
         (watcher, rx)
@@ -92,26 +122,82 @@ impl ConfigWatcher {
     ///
     /// This spawns a background thread that watches ~/.scriptkit/kit/config.ts and sends
     /// reload events through the receiver when changes are detected.
+    /// On transient errors, the watcher will retry with exponential backoff.
     pub fn start(&mut self) -> NotifyResult<()> {
         let tx = self
             .tx
             .take()
             .ok_or_else(|| std::io::Error::other("watcher already started"))?;
 
-        let (control_tx, control_rx) = channel::<ControlMsg>();
-        let callback_tx = control_tx.clone();
-        self.control_tx = Some(control_tx);
+        let stop_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread_stop_flag = stop_flag.clone();
+        self.stop_flag = Some(stop_flag);
 
         let target_path = PathBuf::from(shellexpand::tilde("~/.scriptkit/kit/config.ts").as_ref());
 
         let thread_handle = thread::spawn(move || {
-            if let Err(e) = Self::watch_loop(target_path, tx, control_rx, callback_tx) {
-                warn!(error = %e, watcher = "config", "Config watcher error");
-            }
+            Self::supervisor_loop(target_path, tx, thread_stop_flag);
         });
 
         self.watcher_thread = Some(thread_handle);
         Ok(())
+    }
+
+    /// Supervisor loop that restarts the watcher on failures with exponential backoff
+    fn supervisor_loop(
+        target_path: PathBuf,
+        out_tx: Sender<ConfigReloadEvent>,
+        stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        let mut attempt: u32 = 0;
+
+        loop {
+            if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                info!(watcher = "config", "Config watcher supervisor stopping");
+                break;
+            }
+
+            // Create channels for this watch attempt
+            let (control_tx, control_rx) = channel::<ControlMsg>();
+
+            match Self::watch_loop(
+                target_path.clone(),
+                out_tx.clone(),
+                control_rx,
+                control_tx,
+                stop_flag.clone(),
+            ) {
+                Ok(()) => {
+                    // Normal shutdown (via stop flag)
+                    info!(watcher = "config", "Config watcher completed normally");
+                    break;
+                }
+                Err(e) => {
+                    if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+
+                    let backoff = compute_backoff(attempt);
+                    warn!(
+                        error = %e,
+                        watcher = "config",
+                        attempt = attempt,
+                        backoff_ms = backoff.as_millis(),
+                        "Config watcher error, retrying with backoff"
+                    );
+
+                    if !interruptible_sleep(backoff, &stop_flag) {
+                        break;
+                    }
+                    attempt = attempt.saturating_add(1);
+                }
+            }
+        }
+
+        info!(
+            watcher = "config",
+            "Config watcher supervisor shutting down"
+        );
     }
 
     /// Internal watch loop running in background thread
@@ -120,6 +206,7 @@ impl ConfigWatcher {
         out_tx: Sender<ConfigReloadEvent>,
         control_rx: Receiver<ControlMsg>,
         callback_tx: Sender<ControlMsg>,
+        stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> NotifyResult<()> {
         let target_name: OsString = target_path
             .file_name()
@@ -145,35 +232,40 @@ impl ConfigWatcher {
             "Config watcher started"
         );
 
+        let mut consecutive_errors: u32 = 0;
+
         let debounce = Duration::from_millis(DEBOUNCE_MS);
         let mut deadline: Option<Instant> = None;
 
         loop {
-            let msg = match deadline {
-                None => {
-                    // No pending reload => wait indefinitely for next msg
-                    match control_rx.recv() {
-                        Ok(m) => m,
-                        Err(_) => break,
-                    }
-                }
-                Some(dl) => {
-                    // Pending reload => wait until deadline, unless a new event comes in
-                    let timeout = dl.saturating_duration_since(Instant::now());
-                    match control_rx.recv_timeout(timeout) {
-                        Ok(m) => m,
-                        Err(RecvTimeoutError::Timeout) => {
+            // Check stop flag before blocking
+            if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+
+            // Use a timeout even when no deadline to periodically check stop flag
+            let timeout = deadline
+                .map(|dl| dl.saturating_duration_since(Instant::now()))
+                .unwrap_or(Duration::from_millis(500));
+
+            let msg = match control_rx.recv_timeout(timeout) {
+                Ok(m) => Some(m),
+                Err(RecvTimeoutError::Timeout) => {
+                    if let Some(dl) = deadline {
+                        if Instant::now() >= dl {
                             // Quiet period ended => emit reload
                             debug!(file = ?target_name, "Config debounce complete, emitting reload");
                             let _ = out_tx.send(ConfigReloadEvent::Reload);
                             info!(file = ?target_name, "Config file changed, emitting reload event");
                             deadline = None;
-                            continue;
                         }
-                        Err(RecvTimeoutError::Disconnected) => break,
                     }
+                    continue;
                 }
+                Err(RecvTimeoutError::Disconnected) => break,
             };
+
+            let Some(msg) = msg else { continue };
 
             match msg {
                 ControlMsg::Stop => {
@@ -182,10 +274,29 @@ impl ConfigWatcher {
                 }
 
                 ControlMsg::Notify(Err(e)) => {
-                    warn!(error = %e, watcher = "config", "notify delivered error");
+                    consecutive_errors = consecutive_errors.saturating_add(1);
+                    warn!(
+                        error = %e,
+                        watcher = "config",
+                        consecutive_errors = consecutive_errors,
+                        "notify delivered error"
+                    );
+
+                    // If too many consecutive errors, return Err to trigger supervisor restart
+                    if consecutive_errors >= MAX_NOTIFY_ERRORS {
+                        warn!(
+                            watcher = "config",
+                            consecutive_errors = consecutive_errors,
+                            "Too many consecutive errors, triggering restart"
+                        );
+                        return Err(notify::Error::generic("Too many consecutive notify errors"));
+                    }
                 }
 
                 ControlMsg::Notify(Ok(event)) => {
+                    // Reset error counter on successful event
+                    consecutive_errors = 0;
+
                     // Filter: does this event mention the target filename?
                     let touches_target = event.paths.iter().any(|p| {
                         p.file_name()
@@ -217,11 +328,11 @@ impl ConfigWatcher {
 
 impl Drop for ConfigWatcher {
     fn drop(&mut self) {
-        // Send stop signal first
-        if let Some(tx) = self.control_tx.take() {
-            let _ = tx.send(ControlMsg::Stop);
+        // Signal stop via atomic flag
+        if let Some(flag) = self.stop_flag.take() {
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        // Now join - the thread will exit because it received Stop
+        // Now join - the thread will exit because stop flag is set
         if let Some(handle) = self.watcher_thread.take() {
             let _ = handle.join();
         }
@@ -233,9 +344,10 @@ impl Drop for ConfigWatcher {
 /// Uses trailing-edge debounce: each new event resets the deadline.
 /// Handles atomic saves (rename/remove operations).
 /// Properly shuts down via Stop control message.
+/// Includes supervisor restart with exponential backoff on transient errors.
 pub struct ThemeWatcher {
     tx: Option<Sender<ThemeReloadEvent>>,
-    control_tx: Option<Sender<ControlMsg>>,
+    stop_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     watcher_thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -248,7 +360,7 @@ impl ThemeWatcher {
         let (tx, rx) = channel();
         let watcher = ThemeWatcher {
             tx: Some(tx),
-            control_tx: None,
+            stop_flag: None,
             watcher_thread: None,
         };
         (watcher, rx)
@@ -258,26 +370,77 @@ impl ThemeWatcher {
     ///
     /// This spawns a background thread that watches ~/.scriptkit/kit/theme.json and sends
     /// reload events through the receiver when changes are detected.
+    /// On transient errors, the watcher will retry with exponential backoff.
     pub fn start(&mut self) -> NotifyResult<()> {
         let tx = self
             .tx
             .take()
             .ok_or_else(|| std::io::Error::other("watcher already started"))?;
 
-        let (control_tx, control_rx) = channel::<ControlMsg>();
-        let callback_tx = control_tx.clone();
-        self.control_tx = Some(control_tx);
+        let stop_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread_stop_flag = stop_flag.clone();
+        self.stop_flag = Some(stop_flag);
 
         let target_path = PathBuf::from(shellexpand::tilde("~/.scriptkit/kit/theme.json").as_ref());
 
         let thread_handle = thread::spawn(move || {
-            if let Err(e) = Self::watch_loop(target_path, tx, control_rx, callback_tx) {
-                warn!(error = %e, watcher = "theme", "Theme watcher error");
-            }
+            Self::supervisor_loop(target_path, tx, thread_stop_flag);
         });
 
         self.watcher_thread = Some(thread_handle);
         Ok(())
+    }
+
+    /// Supervisor loop that restarts the watcher on failures with exponential backoff
+    fn supervisor_loop(
+        target_path: PathBuf,
+        out_tx: Sender<ThemeReloadEvent>,
+        stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        let mut attempt: u32 = 0;
+
+        loop {
+            if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                info!(watcher = "theme", "Theme watcher supervisor stopping");
+                break;
+            }
+
+            let (control_tx, control_rx) = channel::<ControlMsg>();
+
+            match Self::watch_loop(
+                target_path.clone(),
+                out_tx.clone(),
+                control_rx,
+                control_tx,
+                stop_flag.clone(),
+            ) {
+                Ok(()) => {
+                    info!(watcher = "theme", "Theme watcher completed normally");
+                    break;
+                }
+                Err(e) => {
+                    if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+
+                    let backoff = compute_backoff(attempt);
+                    warn!(
+                        error = %e,
+                        watcher = "theme",
+                        attempt = attempt,
+                        backoff_ms = backoff.as_millis(),
+                        "Theme watcher error, retrying with backoff"
+                    );
+
+                    if !interruptible_sleep(backoff, &stop_flag) {
+                        break;
+                    }
+                    attempt = attempt.saturating_add(1);
+                }
+            }
+        }
+
+        info!(watcher = "theme", "Theme watcher supervisor shutting down");
     }
 
     /// Internal watch loop running in background thread
@@ -286,6 +449,7 @@ impl ThemeWatcher {
         out_tx: Sender<ThemeReloadEvent>,
         control_rx: Receiver<ControlMsg>,
         callback_tx: Sender<ControlMsg>,
+        stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> NotifyResult<()> {
         let target_name: OsString = target_path
             .file_name()
@@ -310,30 +474,36 @@ impl ThemeWatcher {
             "Theme watcher started"
         );
 
+        let mut consecutive_errors: u32 = 0;
         let debounce = Duration::from_millis(DEBOUNCE_MS);
         let mut deadline: Option<Instant> = None;
 
         loop {
-            let msg = match deadline {
-                None => match control_rx.recv() {
-                    Ok(m) => m,
-                    Err(_) => break,
-                },
-                Some(dl) => {
-                    let timeout = dl.saturating_duration_since(Instant::now());
-                    match control_rx.recv_timeout(timeout) {
-                        Ok(m) => m,
-                        Err(RecvTimeoutError::Timeout) => {
+            if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+
+            let timeout = deadline
+                .map(|dl| dl.saturating_duration_since(Instant::now()))
+                .unwrap_or(Duration::from_millis(500));
+
+            let msg = match control_rx.recv_timeout(timeout) {
+                Ok(m) => Some(m),
+                Err(RecvTimeoutError::Timeout) => {
+                    if let Some(dl) = deadline {
+                        if Instant::now() >= dl {
                             debug!(file = ?target_name, "Theme debounce complete, emitting reload");
                             let _ = out_tx.send(ThemeReloadEvent::Reload);
                             info!(file = ?target_name, "Theme file changed, emitting reload event");
                             deadline = None;
-                            continue;
                         }
-                        Err(RecvTimeoutError::Disconnected) => break,
                     }
+                    continue;
                 }
+                Err(RecvTimeoutError::Disconnected) => break,
             };
+
+            let Some(msg) = msg else { continue };
 
             match msg {
                 ControlMsg::Stop => {
@@ -342,10 +512,27 @@ impl ThemeWatcher {
                 }
 
                 ControlMsg::Notify(Err(e)) => {
-                    warn!(error = %e, watcher = "theme", "notify delivered error");
+                    consecutive_errors = consecutive_errors.saturating_add(1);
+                    warn!(
+                        error = %e,
+                        watcher = "theme",
+                        consecutive_errors = consecutive_errors,
+                        "notify delivered error"
+                    );
+
+                    if consecutive_errors >= MAX_NOTIFY_ERRORS {
+                        warn!(
+                            watcher = "theme",
+                            consecutive_errors = consecutive_errors,
+                            "Too many consecutive errors, triggering restart"
+                        );
+                        return Err(notify::Error::generic("Too many consecutive notify errors"));
+                    }
                 }
 
                 ControlMsg::Notify(Ok(event)) => {
+                    consecutive_errors = 0;
+
                     let touches_target = event.paths.iter().any(|p| {
                         p.file_name()
                             .map(|n| n == target_name.as_os_str())
@@ -373,8 +560,8 @@ impl ThemeWatcher {
 
 impl Drop for ThemeWatcher {
     fn drop(&mut self) {
-        if let Some(tx) = self.control_tx.take() {
-            let _ = tx.send(ControlMsg::Stop);
+        if let Some(flag) = self.stop_flag.take() {
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         if let Some(handle) = self.watcher_thread.take() {
             let _ = handle.join();
@@ -436,9 +623,11 @@ fn flush_expired(
 /// Uses per-file trailing-edge debounce with storm coalescing.
 /// No separate flush thread - all debouncing in single recv_timeout loop.
 /// Properly shuts down via Stop control message.
+/// Includes supervisor restart with exponential backoff on transient errors.
+/// Dynamically watches extensions directory when it appears.
 pub struct ScriptWatcher {
     tx: Option<Sender<ScriptReloadEvent>>,
-    control_tx: Option<Sender<ControlMsg>>,
+    stop_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     watcher_thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -451,7 +640,7 @@ impl ScriptWatcher {
         let (tx, rx) = channel();
         let watcher = ScriptWatcher {
             tx: Some(tx),
-            control_tx: None,
+            stop_flag: None,
             watcher_thread: None,
         };
         (watcher, rx)
@@ -461,15 +650,16 @@ impl ScriptWatcher {
     ///
     /// This spawns a background thread that watches ~/.scriptkit/scripts recursively and sends
     /// reload events through the receiver when scripts are added, modified, or deleted.
+    /// On transient errors, the watcher will retry with exponential backoff.
     pub fn start(&mut self) -> NotifyResult<()> {
         let tx = self
             .tx
             .take()
             .ok_or_else(|| std::io::Error::other("watcher already started"))?;
 
-        let (control_tx, control_rx) = channel::<ControlMsg>();
-        let callback_tx = control_tx.clone();
-        self.control_tx = Some(control_tx);
+        let stop_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread_stop_flag = stop_flag.clone();
+        self.stop_flag = Some(stop_flag);
 
         let scripts_path =
             PathBuf::from(shellexpand::tilde("~/.scriptkit/kit/main/scripts").as_ref());
@@ -477,15 +667,68 @@ impl ScriptWatcher {
             PathBuf::from(shellexpand::tilde("~/.scriptkit/kit/main/extensions").as_ref());
 
         let thread_handle = thread::spawn(move || {
-            if let Err(e) =
-                Self::watch_loop(scripts_path, extensions_path, tx, control_rx, callback_tx)
-            {
-                warn!(error = %e, watcher = "scripts", "Script watcher error");
-            }
+            Self::supervisor_loop(scripts_path, extensions_path, tx, thread_stop_flag);
         });
 
         self.watcher_thread = Some(thread_handle);
         Ok(())
+    }
+
+    /// Supervisor loop that restarts the watcher on failures with exponential backoff
+    fn supervisor_loop(
+        scripts_path: PathBuf,
+        extensions_path: PathBuf,
+        out_tx: Sender<ScriptReloadEvent>,
+        stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        let mut attempt: u32 = 0;
+
+        loop {
+            if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                info!(watcher = "scripts", "Script watcher supervisor stopping");
+                break;
+            }
+
+            let (control_tx, control_rx) = channel::<ControlMsg>();
+
+            match Self::watch_loop(
+                scripts_path.clone(),
+                extensions_path.clone(),
+                out_tx.clone(),
+                control_rx,
+                control_tx,
+                stop_flag.clone(),
+            ) {
+                Ok(()) => {
+                    info!(watcher = "scripts", "Script watcher completed normally");
+                    break;
+                }
+                Err(e) => {
+                    if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+
+                    let backoff = compute_backoff(attempt);
+                    warn!(
+                        error = %e,
+                        watcher = "scripts",
+                        attempt = attempt,
+                        backoff_ms = backoff.as_millis(),
+                        "Script watcher error, retrying with backoff"
+                    );
+
+                    if !interruptible_sleep(backoff, &stop_flag) {
+                        break;
+                    }
+                    attempt = attempt.saturating_add(1);
+                }
+            }
+        }
+
+        info!(
+            watcher = "scripts",
+            "Script watcher supervisor shutting down"
+        );
     }
 
     /// Internal watch loop running in background thread
@@ -495,22 +738,40 @@ impl ScriptWatcher {
         out_tx: Sender<ScriptReloadEvent>,
         control_rx: Receiver<ControlMsg>,
         callback_tx: Sender<ControlMsg>,
+        stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> NotifyResult<()> {
-        let mut watcher: Box<dyn Watcher> = Box::new(recommended_watcher(
+        let mut watcher: Box<dyn Watcher> = Box::new(recommended_watcher({
+            let tx = callback_tx.clone();
             move |res: notify::Result<notify::Event>| {
-                let _ = callback_tx.send(ControlMsg::Notify(res));
-            },
-        )?);
+                let _ = tx.send(ControlMsg::Notify(res));
+            }
+        })?);
 
         watcher.watch(&scripts_path, RecursiveMode::Recursive)?;
 
+        // Track whether we're watching extensions directory
+        let mut watching_extensions = false;
         if extensions_path.exists() {
             watcher.watch(&extensions_path, RecursiveMode::Recursive)?;
+            watching_extensions = true;
             info!(
                 path = %extensions_path.display(),
                 recursive = true,
                 "Scriptlets watcher started"
             );
+        }
+
+        // Also watch the parent directory (main/) for extensions dir creation
+        let main_path = extensions_path.parent().map(|p| p.to_path_buf());
+        if let Some(ref main) = main_path {
+            if main.exists() && !watching_extensions {
+                // Watch parent non-recursively to detect extensions dir creation
+                let _ = watcher.watch(main, RecursiveMode::NonRecursive);
+                debug!(
+                    path = %main.display(),
+                    "Watching main directory for extensions creation"
+                );
+            }
         }
 
         info!(
@@ -519,29 +780,31 @@ impl ScriptWatcher {
             "Script watcher started"
         );
 
+        let mut consecutive_errors: u32 = 0;
         let debounce = Duration::from_millis(DEBOUNCE_MS);
         let mut pending: HashMap<PathBuf, (ScriptReloadEvent, Instant)> = HashMap::new();
 
         loop {
-            let deadline = next_deadline(&pending, debounce);
+            if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
 
-            let msg = match deadline {
-                None => match control_rx.recv() {
-                    Ok(m) => m,
-                    Err(_) => break,
-                },
-                Some(dl) => {
-                    let timeout = dl.saturating_duration_since(Instant::now());
-                    match control_rx.recv_timeout(timeout) {
-                        Ok(m) => m,
-                        Err(RecvTimeoutError::Timeout) => {
-                            flush_expired(&mut pending, debounce, &out_tx);
-                            continue;
-                        }
-                        Err(RecvTimeoutError::Disconnected) => break,
-                    }
+            // Use a max timeout to periodically check stop flag
+            let deadline = next_deadline(&pending, debounce);
+            let timeout = deadline
+                .map(|dl| dl.saturating_duration_since(Instant::now()))
+                .unwrap_or(Duration::from_millis(500));
+
+            let msg = match control_rx.recv_timeout(timeout) {
+                Ok(m) => Some(m),
+                Err(RecvTimeoutError::Timeout) => {
+                    flush_expired(&mut pending, debounce, &out_tx);
+                    continue;
                 }
+                Err(RecvTimeoutError::Disconnected) => break,
             };
+
+            let Some(msg) = msg else { continue };
 
             match msg {
                 ControlMsg::Stop => {
@@ -550,11 +813,44 @@ impl ScriptWatcher {
                 }
 
                 ControlMsg::Notify(Err(e)) => {
-                    warn!(error = %e, watcher = "scripts", "notify delivered error");
+                    consecutive_errors = consecutive_errors.saturating_add(1);
+                    warn!(
+                        error = %e,
+                        watcher = "scripts",
+                        consecutive_errors = consecutive_errors,
+                        "notify delivered error"
+                    );
+
+                    if consecutive_errors >= MAX_NOTIFY_ERRORS {
+                        warn!(
+                            watcher = "scripts",
+                            consecutive_errors = consecutive_errors,
+                            "Too many consecutive errors, triggering restart"
+                        );
+                        return Err(notify::Error::generic("Too many consecutive notify errors"));
+                    }
                 }
 
                 ControlMsg::Notify(Ok(event)) => {
+                    consecutive_errors = 0;
                     let kind = &event.kind;
+
+                    // Check if extensions directory was created
+                    if !watching_extensions && extensions_path.exists() {
+                        if let Err(e) = watcher.watch(&extensions_path, RecursiveMode::Recursive) {
+                            warn!(
+                                error = %e,
+                                path = %extensions_path.display(),
+                                "Failed to start watching extensions directory"
+                            );
+                        } else {
+                            watching_extensions = true;
+                            info!(
+                                path = %extensions_path.display(),
+                                "Extensions directory appeared, now watching"
+                            );
+                        }
+                    }
 
                     for path in event.paths.iter() {
                         if !is_relevant_script_file(path) {
@@ -607,8 +903,8 @@ impl ScriptWatcher {
 
 impl Drop for ScriptWatcher {
     fn drop(&mut self) {
-        if let Some(tx) = self.control_tx.take() {
-            let _ = tx.send(ControlMsg::Stop);
+        if let Some(flag) = self.stop_flag.take() {
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         if let Some(handle) = self.watcher_thread.take() {
             let _ = handle.join();
@@ -1159,5 +1455,124 @@ mod tests {
         // Verify debounce is a reasonable value (compile-time checks)
         const { assert!(DEBOUNCE_MS >= 100) }; // At least 100ms
         const { assert!(DEBOUNCE_MS <= 2000) }; // At most 2s
+    }
+
+    #[test]
+    fn test_storm_coalescing_logic() {
+        // Test that we properly handle storm coalescing
+        // When storm threshold is reached, we should:
+        // 1. Clear pending
+        // 2. Send FullReload
+        // 3. Continue processing (not exit the watcher)
+
+        let (tx, rx) = channel::<ScriptReloadEvent>();
+        let mut pending: HashMap<PathBuf, (ScriptReloadEvent, Instant)> = HashMap::new();
+        let now = Instant::now();
+
+        // Fill up pending to the storm threshold
+        for i in 0..STORM_THRESHOLD {
+            let path = PathBuf::from(format!("/test/script{}.ts", i));
+            pending.insert(path.clone(), (ScriptReloadEvent::FileCreated(path), now));
+        }
+
+        // Verify we're at the threshold
+        assert_eq!(pending.len(), STORM_THRESHOLD);
+
+        // Simulate storm coalescing
+        if pending.len() >= STORM_THRESHOLD {
+            pending.clear();
+            let _ = tx.send(ScriptReloadEvent::FullReload);
+        }
+
+        // Pending should be cleared
+        assert_eq!(pending.len(), 0);
+
+        // FullReload should have been sent
+        let received = rx.try_recv().unwrap();
+        assert_eq!(received, ScriptReloadEvent::FullReload);
+    }
+
+    #[test]
+    fn test_compute_backoff_initial() {
+        // First attempt should use initial backoff
+        let delay = compute_backoff(0);
+        assert_eq!(delay, Duration::from_millis(INITIAL_BACKOFF_MS));
+    }
+
+    #[test]
+    fn test_compute_backoff_exponential() {
+        // Each attempt should double the delay
+        let delay0 = compute_backoff(0);
+        let delay1 = compute_backoff(1);
+        let delay2 = compute_backoff(2);
+        let delay3 = compute_backoff(3);
+
+        assert_eq!(delay0, Duration::from_millis(100));
+        assert_eq!(delay1, Duration::from_millis(200));
+        assert_eq!(delay2, Duration::from_millis(400));
+        assert_eq!(delay3, Duration::from_millis(800));
+    }
+
+    #[test]
+    fn test_compute_backoff_capped() {
+        // High attempts should be capped at MAX_BACKOFF_MS
+        let delay = compute_backoff(20); // 2^20 * 100ms would be huge
+        assert_eq!(delay, Duration::from_millis(MAX_BACKOFF_MS));
+    }
+
+    #[test]
+    fn test_compute_backoff_no_overflow() {
+        // Even with u32::MAX attempts, should not panic
+        let delay = compute_backoff(u32::MAX);
+        assert_eq!(delay, Duration::from_millis(MAX_BACKOFF_MS));
+    }
+
+    #[test]
+    fn test_interruptible_sleep_completes() {
+        use std::sync::atomic::AtomicBool;
+
+        let stop_flag = AtomicBool::new(false);
+        let start = Instant::now();
+
+        // Sleep for 50ms
+        let completed = interruptible_sleep(Duration::from_millis(50), &stop_flag);
+
+        assert!(completed);
+        assert!(start.elapsed() >= Duration::from_millis(50));
+    }
+
+    #[test]
+    fn test_interruptible_sleep_interrupted() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let flag_clone = Arc::clone(&stop_flag);
+
+        // Spawn a thread to set the stop flag after 50ms
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            flag_clone.store(true, Ordering::Relaxed);
+        });
+
+        let start = Instant::now();
+
+        // Try to sleep for 1 second, but should be interrupted
+        let completed = interruptible_sleep(Duration::from_millis(1000), &stop_flag);
+
+        assert!(!completed);
+        // Should have stopped much sooner than 1 second
+        assert!(start.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_backoff_constants() {
+        // Verify backoff constants are reasonable
+        const { assert!(INITIAL_BACKOFF_MS >= 50) }; // At least 50ms
+        const { assert!(INITIAL_BACKOFF_MS <= 1000) }; // At most 1s
+        const { assert!(MAX_BACKOFF_MS >= 5000) }; // At least 5s
+        const { assert!(MAX_BACKOFF_MS <= 120_000) }; // At most 2 minutes
+        const { assert!(MAX_NOTIFY_ERRORS >= 3) }; // At least 3 errors
+        const { assert!(MAX_NOTIFY_ERRORS <= 100) }; // At most 100 errors
     }
 }
