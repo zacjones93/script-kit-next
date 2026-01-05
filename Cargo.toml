@@ -124,6 +124,7 @@ ureq = { version = "3", features = ["json"] }
 # macOS launch-at-login via SMAppService
 smappservice-rs = "0.1"
 which = "8.0.0"
+hex = "0.4.3"
 
 [features]
 default = ["ocr"]

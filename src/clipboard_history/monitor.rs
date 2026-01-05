@@ -20,7 +20,7 @@ use super::database::{
     add_entry, get_connection, get_entry_content, prune_old_entries, run_incremental_vacuum,
     run_wal_checkpoint, trim_oversize_text_entries,
 };
-use super::image::{compute_image_hash, decode_to_render_image, encode_image_as_png};
+use super::image::{compute_image_hash, decode_to_render_image, encode_image_as_blob};
 use super::types::ContentType;
 
 /// Interval between background pruning checks (1 hour)
@@ -262,13 +262,13 @@ fn capture_clipboard_content(
                 "New image detected in clipboard"
             );
 
-            // Encode image as compressed PNG (base64)
-            match encode_image_as_png(&image_data) {
-                Ok(base64_content) => {
-                    match add_entry(&base64_content, ContentType::Image) {
+            // Encode image as blob (PNG file on disk)
+            match encode_image_as_blob(&image_data) {
+                Ok(blob_content) => {
+                    match add_entry(&blob_content, ContentType::Image) {
                         Ok(entry_id) => {
                             // Pre-decode the image immediately so it's ready for display
-                            if let Some(render_image) = decode_to_render_image(&base64_content) {
+                            if let Some(render_image) = decode_to_render_image(&blob_content) {
                                 cache_image(&entry_id, render_image);
                                 debug!(entry_id = %entry_id, "Pre-cached new image during monitoring");
                             }
@@ -283,7 +283,7 @@ fn capture_clipboard_content(
                 Err(e) => {
                     // Encoding failed (likely corrupt image data), skip but update hash
                     // to avoid repeated attempts on the same bad image
-                    warn!(error = %e, "Failed to encode image as PNG, skipping");
+                    warn!(error = %e, "Failed to encode image as blob, skipping");
                     *last_image_hash = Some(hash);
                 }
             }
@@ -294,8 +294,8 @@ fn capture_clipboard_content(
                 height = image_data.height,
                 "Same image copied again, updating timestamp"
             );
-            if let Ok(base64_content) = encode_image_as_png(&image_data) {
-                match add_entry(&base64_content, ContentType::Image) {
+            if let Ok(blob_content) = encode_image_as_blob(&image_data) {
+                match add_entry(&blob_content, ContentType::Image) {
                     Ok(entry_id) => {
                         debug!(entry_id = %entry_id, "Updated timestamp for existing image entry");
                     }

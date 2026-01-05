@@ -10,11 +10,38 @@ use smallvec::SmallVec;
 use std::sync::Arc;
 use tracing::{debug, warn};
 
+use super::blob_store::{is_blob_content, load_blob, store_blob};
+
+/// Encode image data as a blob file (PNG stored on disk)
+///
+/// Format: "blob:{hash}" where hash is SHA-256 of PNG bytes
+/// The PNG file is stored at ~/.scriptkit/clipboard/blobs/<hash>.png
+///
+/// This is the most efficient format:
+/// - No base64 overhead (saves 33%)
+/// - No SQLite WAL churn for large images
+/// - Content-addressed deduplication
+pub fn encode_image_as_blob(image: &arboard::ImageData) -> Result<String> {
+    let png_bytes = encode_image_to_png_bytes(image)?;
+    store_blob(&png_bytes)
+}
+
 /// Encode image data as base64 PNG string (compressed, ~90% smaller than raw RGBA)
 ///
 /// Format: "png:{base64_encoded_png_data}"
 /// The PNG format is detected by the "png:" prefix for decoding.
+///
+/// NOTE: For new images, prefer encode_image_as_blob() which avoids base64 overhead.
+/// This function is kept for backwards compatibility.
+#[allow(dead_code)] // Kept for backwards compatibility with existing clipboard entries
 pub fn encode_image_as_png(image: &arboard::ImageData) -> Result<String> {
+    let png_bytes = encode_image_to_png_bytes(image)?;
+    let base64_data = BASE64.encode(&png_bytes);
+    Ok(format!("png:{}", base64_data))
+}
+
+/// Internal helper to encode image to PNG bytes
+fn encode_image_to_png_bytes(image: &arboard::ImageData) -> Result<Vec<u8>> {
     use std::io::Cursor;
 
     // Create an RgbaImage from the raw bytes
@@ -32,9 +59,7 @@ pub fn encode_image_as_png(image: &arboard::ImageData) -> Result<String> {
         .write_to(&mut cursor, image::ImageFormat::Png)
         .context("Failed to encode image as PNG")?;
 
-    // Base64 encode and prefix with "png:"
-    let base64_data = BASE64.encode(&png_data);
-    Ok(format!("png:{}", base64_data))
+    Ok(png_data)
 }
 
 /// Encode image data as base64 raw RGBA string (legacy format, kept for compatibility)
@@ -102,8 +127,9 @@ fn decode_legacy_rgba(content: &str) -> Option<arboard::ImageData<'static>> {
 
 /// Decode a clipboard image content string to GPUI RenderImage
 ///
-/// Supports both formats:
-/// - New PNG format: "png:{base64_encoded_png_data}"
+/// Supports three formats:
+/// - Blob format: "blob:{hash}" (file-based, most efficient)
+/// - PNG format: "png:{base64_encoded_png_data}"
 /// - Legacy RGBA format: "rgba:{width}:{height}:{base64_data}"
 ///
 /// Returns an Arc<RenderImage> for efficient caching.
@@ -111,14 +137,37 @@ fn decode_legacy_rgba(content: &str) -> Option<arboard::ImageData<'static>> {
 /// **IMPORTANT**: Call this ONCE per entry and cache the result. Do NOT
 /// decode during rendering as this is expensive.
 pub fn decode_to_render_image(content: &str) -> Option<Arc<RenderImage>> {
-    if content.starts_with("png:") {
+    if is_blob_content(content) {
+        decode_blob_to_render_image(content)
+    } else if content.starts_with("png:") {
         decode_png_to_render_image(content)
     } else if content.starts_with("rgba:") {
         decode_rgba_to_render_image(content)
     } else {
-        warn!("Invalid clipboard image format, expected png: or rgba: prefix");
+        warn!("Invalid clipboard image format, expected blob:, png: or rgba: prefix");
         None
     }
+}
+
+/// Decode blob format to RenderImage
+fn decode_blob_to_render_image(content: &str) -> Option<Arc<RenderImage>> {
+    let png_bytes = load_blob(content)?;
+
+    let img = image::load_from_memory_with_format(&png_bytes, image::ImageFormat::Png).ok()?;
+    let rgba = img.to_rgba8();
+    let img_width = rgba.width();
+    let img_height = rgba.height();
+
+    let frame = image::Frame::new(rgba);
+    let render_image = RenderImage::new(SmallVec::from_elem(frame, 1));
+
+    debug!(
+        width = img_width,
+        height = img_height,
+        format = "blob",
+        "Decoded blob clipboard image to RenderImage"
+    );
+    Some(Arc::new(render_image))
 }
 
 /// Decode PNG format to RenderImage
@@ -181,10 +230,13 @@ fn decode_rgba_to_render_image(content: &str) -> Option<Arc<RenderImage>> {
 /// Get image dimensions from content string without fully decoding
 ///
 /// Returns (width, height) if the content is a valid image format.
+/// For blob format, reads PNG header from file to extract dimensions.
 /// For PNG format, reads PNG header to extract dimensions (fast, no full decode).
 /// For legacy RGBA format, parses dimensions from metadata prefix.
 pub fn get_image_dimensions(content: &str) -> Option<(u32, u32)> {
-    if content.starts_with("png:") {
+    if is_blob_content(content) {
+        get_blob_dimensions(content)
+    } else if content.starts_with("png:") {
         get_png_dimensions(content)
     } else if content.starts_with("rgba:") {
         let parts: Vec<&str> = content.splitn(4, ':').collect();
@@ -198,6 +250,17 @@ pub fn get_image_dimensions(content: &str) -> Option<(u32, u32)> {
     } else {
         None
     }
+}
+
+/// Extract dimensions from blob file without full decode
+fn get_blob_dimensions(content: &str) -> Option<(u32, u32)> {
+    let png_bytes = load_blob(content)?;
+
+    let cursor = std::io::Cursor::new(&png_bytes);
+    let reader = image::ImageReader::with_format(cursor, image::ImageFormat::Png);
+    let (width, height) = reader.into_dimensions().ok()?;
+
+    Some((width, height))
 }
 
 /// Extract dimensions from PNG header without full decode

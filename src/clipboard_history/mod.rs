@@ -20,6 +20,7 @@
 //! - `monitor`: Background clipboard polling and maintenance
 //! - `clipboard`: System clipboard operations
 
+mod blob_store;
 mod cache;
 mod change_detection;
 mod clipboard;

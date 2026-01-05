@@ -635,10 +635,19 @@ pub fn unpin_entry(id: &str) -> Result<()> {
 
 /// Remove a single entry from clipboard history
 pub fn remove_entry(id: &str) -> Result<()> {
+    use super::blob_store::{delete_blob, is_blob_content};
+
     let conn = get_connection()?;
     let conn = conn
         .lock()
         .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+
+    // Get content first to check if it's a blob (for cleanup)
+    let content: Option<String> = conn
+        .query_row("SELECT content FROM history WHERE id = ?", params![id], |row| {
+            row.get(0)
+        })
+        .ok();
 
     let affected = conn
         .execute("DELETE FROM history WHERE id = ?", params![id])
@@ -652,6 +661,13 @@ pub fn remove_entry(id: &str) -> Result<()> {
 
     drop(conn);
 
+    // Delete blob file if this was a blob-stored image
+    if let Some(ref content) = content {
+        if is_blob_content(content) {
+            delete_blob(content);
+        }
+    }
+
     evict_image_cache(id);
     // Incremental cache update instead of full refresh
     remove_entry_from_cache(id);
@@ -661,10 +677,19 @@ pub fn remove_entry(id: &str) -> Result<()> {
 
 /// Clear all clipboard history
 pub fn clear_history() -> Result<()> {
+    use super::blob_store::{delete_blob, is_blob_content};
+
     let conn = get_connection()?;
     let conn = conn
         .lock()
         .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+
+    // Collect blob references before deleting
+    let blob_contents: Vec<String> = {
+        let mut stmt = conn.prepare("SELECT content FROM history WHERE content LIKE 'blob:%'")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
 
     conn.execute("DELETE FROM history", [])
         .context("Failed to clear history")?;
@@ -672,6 +697,17 @@ pub fn clear_history() -> Result<()> {
     info!("Cleared all clipboard history");
 
     drop(conn);
+
+    // Delete all blob files
+    for content in &blob_contents {
+        if is_blob_content(content) {
+            delete_blob(content);
+        }
+    }
+
+    if !blob_contents.is_empty() {
+        debug!(count = blob_contents.len(), "Deleted blob files during history clear");
+    }
 
     clear_all_caches();
 
