@@ -1,13 +1,32 @@
 #![allow(dead_code)]
 use notify::{recommended_watcher, RecursiveMode, Result as NotifyResult, Watcher};
+use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use std::process::Command;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
+
+/// Internal control messages for watcher threads
+enum ControlMsg {
+    /// Signal from notify callback with a file event
+    Notify(notify::Result<notify::Event>),
+    /// Signal to stop the watcher thread
+    Stop,
+}
+
+/// Debounce configuration
+const DEBOUNCE_MS: u64 = 500;
+/// Storm threshold: if more than this many unique paths pending, collapse to FullReload
+const STORM_THRESHOLD: usize = 200;
+
+/// Check if an event kind is relevant (not just Access events)
+fn is_relevant_event_kind(kind: &notify::EventKind) -> bool {
+    !matches!(kind, notify::EventKind::Access(_))
+}
 
 /// Event emitted when config needs to be reloaded
 #[derive(Debug, Clone)]
@@ -44,8 +63,13 @@ pub enum AppearanceChangeEvent {
 }
 
 /// Watches ~/.scriptkit/kit/config.ts for changes and emits reload events
+///
+/// Uses trailing-edge debounce: each new event resets the deadline.
+/// Handles atomic saves (rename/remove operations).
+/// Properly shuts down via Stop control message.
 pub struct ConfigWatcher {
     tx: Option<Sender<ConfigReloadEvent>>,
+    control_tx: Option<Sender<ControlMsg>>,
     watcher_thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -58,6 +82,7 @@ impl ConfigWatcher {
         let (tx, rx) = channel();
         let watcher = ConfigWatcher {
             tx: Some(tx),
+            control_tx: None,
             watcher_thread: None,
         };
         (watcher, rx)
@@ -73,8 +98,14 @@ impl ConfigWatcher {
             .take()
             .ok_or_else(|| std::io::Error::other("watcher already started"))?;
 
+        let (control_tx, control_rx) = channel::<ControlMsg>();
+        let callback_tx = control_tx.clone();
+        self.control_tx = Some(control_tx);
+
+        let target_path = PathBuf::from(shellexpand::tilde("~/.scriptkit/kit/config.ts").as_ref());
+
         let thread_handle = thread::spawn(move || {
-            if let Err(e) = Self::watch_loop(tx) {
+            if let Err(e) = Self::watch_loop(target_path, tx, control_rx, callback_tx) {
                 warn!(error = %e, watcher = "config", "Config watcher error");
             }
         });
@@ -84,98 +115,113 @@ impl ConfigWatcher {
     }
 
     /// Internal watch loop running in background thread
-    fn watch_loop(tx: Sender<ConfigReloadEvent>) -> NotifyResult<()> {
-        // Expand the config path
-        let config_path = PathBuf::from(shellexpand::tilde("~/.scriptkit/kit/config.ts").as_ref());
+    fn watch_loop(
+        target_path: PathBuf,
+        out_tx: Sender<ConfigReloadEvent>,
+        control_rx: Receiver<ControlMsg>,
+        callback_tx: Sender<ControlMsg>,
+    ) -> NotifyResult<()> {
+        let target_name: OsString = target_path
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new(""))
+            .to_owned();
 
-        // Get the parent directory to watch
-        let watch_path = config_path
+        let watch_path = target_path
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."));
 
-        // Create a debounce timer using Arc<Mutex>
-        let debounce_active = Arc::new(Mutex::new(false));
-        let debounce_active_clone = debounce_active.clone();
-
-        // Channel for the file watcher thread
-        let (watch_tx, watch_rx) = channel();
-
-        // Create the watcher with a callback
+        // Create the watcher with a callback that forwards to control channel
         let mut watcher: Box<dyn Watcher> = Box::new(recommended_watcher(
             move |res: notify::Result<notify::Event>| {
-                let _ = watch_tx.send(res);
+                let _ = callback_tx.send(ControlMsg::Notify(res));
             },
         )?);
 
-        // Watch the directory containing config.ts
         watcher.watch(watch_path, RecursiveMode::NonRecursive)?;
 
         info!(
             path = %watch_path.display(),
-            target = "config.ts",
+            target = ?target_name,
             "Config watcher started"
         );
 
-        // Main watch loop
+        let debounce = Duration::from_millis(DEBOUNCE_MS);
+        let mut deadline: Option<Instant> = None;
+
         loop {
-            match watch_rx.recv() {
-                Ok(Ok(event)) => {
-                    // Check if this is an event for config.ts
-                    let is_config_change = event.paths.iter().any(|path: &PathBuf| {
-                        path.file_name()
-                            .and_then(|name| name.to_str())
-                            .map(|name| name == "config.ts")
+            let msg = match deadline {
+                None => {
+                    // No pending reload => wait indefinitely for next msg
+                    match control_rx.recv() {
+                        Ok(m) => m,
+                        Err(_) => break,
+                    }
+                }
+                Some(dl) => {
+                    // Pending reload => wait until deadline, unless a new event comes in
+                    let timeout = dl.saturating_duration_since(Instant::now());
+                    match control_rx.recv_timeout(timeout) {
+                        Ok(m) => m,
+                        Err(RecvTimeoutError::Timeout) => {
+                            // Quiet period ended => emit reload
+                            debug!(file = ?target_name, "Config debounce complete, emitting reload");
+                            let _ = out_tx.send(ConfigReloadEvent::Reload);
+                            info!(file = ?target_name, "Config file changed, emitting reload event");
+                            deadline = None;
+                            continue;
+                        }
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+            };
+
+            match msg {
+                ControlMsg::Stop => {
+                    info!(watcher = "config", "Config watcher received stop signal");
+                    break;
+                }
+
+                ControlMsg::Notify(Err(e)) => {
+                    warn!(error = %e, watcher = "config", "notify delivered error");
+                }
+
+                ControlMsg::Notify(Ok(event)) => {
+                    // Filter: does this event mention the target filename?
+                    let touches_target = event.paths.iter().any(|p| {
+                        p.file_name()
+                            .map(|n| n == target_name.as_os_str())
                             .unwrap_or(false)
                     });
 
-                    // Only care about Create and Modify events
-                    let is_relevant_event = matches!(
-                        event.kind,
-                        notify::EventKind::Create(_) | notify::EventKind::Modify(_)
-                    );
+                    // Treat everything except Access as potentially relevant
+                    // This covers atomic saves (remove/rename) too
+                    let relevant_kind = is_relevant_event_kind(&event.kind);
 
-                    if is_config_change && is_relevant_event {
-                        // Check if debounce is already active
-                        let mut debounce = debounce_active_clone.lock().unwrap();
-                        if !*debounce {
-                            *debounce = true;
-                            drop(debounce); // Release lock before spawning thread
-
-                            let tx_clone = tx.clone();
-                            let debounce_flag = debounce_active_clone.clone();
-
-                            // Spawn debounce thread
-                            thread::spawn(move || {
-                                thread::sleep(Duration::from_millis(500));
-                                let _ = tx_clone.send(ConfigReloadEvent::Reload);
-                                let mut flag = debounce_flag.lock().unwrap();
-                                *flag = false;
-                                info!(
-                                    file = "config.ts",
-                                    "Config file changed, emitting reload event"
-                                );
-                            });
-                        }
+                    if touches_target && relevant_kind {
+                        // Trailing-edge debounce: reset deadline on every hit
+                        debug!(
+                            file = ?target_name,
+                            event_kind = ?event.kind,
+                            "Config change detected, resetting debounce"
+                        );
+                        deadline = Some(Instant::now() + debounce);
                     }
-                }
-                Ok(Err(e)) => {
-                    warn!(error = %e, watcher = "config", "File watcher error");
-                }
-                Err(_) => {
-                    // Channel closed, exit watch loop
-                    info!(watcher = "config", "Config watcher shutting down");
-                    break;
                 }
             }
         }
 
+        info!(watcher = "config", "Config watcher shutting down");
         Ok(())
     }
 }
 
 impl Drop for ConfigWatcher {
     fn drop(&mut self) {
-        // Wait for watcher thread to finish (with timeout)
+        // Send stop signal first
+        if let Some(tx) = self.control_tx.take() {
+            let _ = tx.send(ControlMsg::Stop);
+        }
+        // Now join - the thread will exit because it received Stop
         if let Some(handle) = self.watcher_thread.take() {
             let _ = handle.join();
         }
@@ -183,8 +229,13 @@ impl Drop for ConfigWatcher {
 }
 
 /// Watches ~/.scriptkit/kit/theme.json for changes and emits reload events
+///
+/// Uses trailing-edge debounce: each new event resets the deadline.
+/// Handles atomic saves (rename/remove operations).
+/// Properly shuts down via Stop control message.
 pub struct ThemeWatcher {
     tx: Option<Sender<ThemeReloadEvent>>,
+    control_tx: Option<Sender<ControlMsg>>,
     watcher_thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -197,6 +248,7 @@ impl ThemeWatcher {
         let (tx, rx) = channel();
         let watcher = ThemeWatcher {
             tx: Some(tx),
+            control_tx: None,
             watcher_thread: None,
         };
         (watcher, rx)
@@ -212,8 +264,14 @@ impl ThemeWatcher {
             .take()
             .ok_or_else(|| std::io::Error::other("watcher already started"))?;
 
+        let (control_tx, control_rx) = channel::<ControlMsg>();
+        let callback_tx = control_tx.clone();
+        self.control_tx = Some(control_tx);
+
+        let target_path = PathBuf::from(shellexpand::tilde("~/.scriptkit/kit/theme.json").as_ref());
+
         let thread_handle = thread::spawn(move || {
-            if let Err(e) = Self::watch_loop(tx) {
+            if let Err(e) = Self::watch_loop(target_path, tx, control_rx, callback_tx) {
                 warn!(error = %e, watcher = "theme", "Theme watcher error");
             }
         });
@@ -223,98 +281,101 @@ impl ThemeWatcher {
     }
 
     /// Internal watch loop running in background thread
-    fn watch_loop(tx: Sender<ThemeReloadEvent>) -> NotifyResult<()> {
-        // Expand the theme path
-        let theme_path = PathBuf::from(shellexpand::tilde("~/.scriptkit/kit/theme.json").as_ref());
+    fn watch_loop(
+        target_path: PathBuf,
+        out_tx: Sender<ThemeReloadEvent>,
+        control_rx: Receiver<ControlMsg>,
+        callback_tx: Sender<ControlMsg>,
+    ) -> NotifyResult<()> {
+        let target_name: OsString = target_path
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new(""))
+            .to_owned();
 
-        // Get the parent directory to watch
-        let watch_path = theme_path
+        let watch_path = target_path
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."));
 
-        // Create a debounce timer using Arc<Mutex>
-        let debounce_active = Arc::new(Mutex::new(false));
-        let debounce_active_clone = debounce_active.clone();
-
-        // Channel for the file watcher thread
-        let (watch_tx, watch_rx) = channel();
-
-        // Create the watcher with a callback
         let mut watcher: Box<dyn Watcher> = Box::new(recommended_watcher(
             move |res: notify::Result<notify::Event>| {
-                let _ = watch_tx.send(res);
+                let _ = callback_tx.send(ControlMsg::Notify(res));
             },
         )?);
 
-        // Watch the directory containing theme.json
         watcher.watch(watch_path, RecursiveMode::NonRecursive)?;
 
         info!(
             path = %watch_path.display(),
-            target = "theme.json",
+            target = ?target_name,
             "Theme watcher started"
         );
 
-        // Main watch loop
+        let debounce = Duration::from_millis(DEBOUNCE_MS);
+        let mut deadline: Option<Instant> = None;
+
         loop {
-            match watch_rx.recv() {
-                Ok(Ok(event)) => {
-                    // Check if this is an event for theme.json
-                    let is_theme_change = event.paths.iter().any(|path: &PathBuf| {
-                        path.file_name()
-                            .and_then(|name| name.to_str())
-                            .map(|name| name == "theme.json")
+            let msg = match deadline {
+                None => match control_rx.recv() {
+                    Ok(m) => m,
+                    Err(_) => break,
+                },
+                Some(dl) => {
+                    let timeout = dl.saturating_duration_since(Instant::now());
+                    match control_rx.recv_timeout(timeout) {
+                        Ok(m) => m,
+                        Err(RecvTimeoutError::Timeout) => {
+                            debug!(file = ?target_name, "Theme debounce complete, emitting reload");
+                            let _ = out_tx.send(ThemeReloadEvent::Reload);
+                            info!(file = ?target_name, "Theme file changed, emitting reload event");
+                            deadline = None;
+                            continue;
+                        }
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+            };
+
+            match msg {
+                ControlMsg::Stop => {
+                    info!(watcher = "theme", "Theme watcher received stop signal");
+                    break;
+                }
+
+                ControlMsg::Notify(Err(e)) => {
+                    warn!(error = %e, watcher = "theme", "notify delivered error");
+                }
+
+                ControlMsg::Notify(Ok(event)) => {
+                    let touches_target = event.paths.iter().any(|p| {
+                        p.file_name()
+                            .map(|n| n == target_name.as_os_str())
                             .unwrap_or(false)
                     });
 
-                    // Only care about Create and Modify events
-                    let is_relevant_event = matches!(
-                        event.kind,
-                        notify::EventKind::Create(_) | notify::EventKind::Modify(_)
-                    );
+                    let relevant_kind = is_relevant_event_kind(&event.kind);
 
-                    if is_theme_change && is_relevant_event {
-                        // Check if debounce is already active
-                        let mut debounce = debounce_active_clone.lock().unwrap();
-                        if !*debounce {
-                            *debounce = true;
-                            drop(debounce); // Release lock before spawning thread
-
-                            let tx_clone = tx.clone();
-                            let debounce_flag = debounce_active_clone.clone();
-
-                            // Spawn debounce thread
-                            thread::spawn(move || {
-                                thread::sleep(Duration::from_millis(500));
-                                let _ = tx_clone.send(ThemeReloadEvent::Reload);
-                                let mut flag = debounce_flag.lock().unwrap();
-                                *flag = false;
-                                info!(
-                                    file = "theme.json",
-                                    "Theme file changed, emitting reload event"
-                                );
-                            });
-                        }
+                    if touches_target && relevant_kind {
+                        debug!(
+                            file = ?target_name,
+                            event_kind = ?event.kind,
+                            "Theme change detected, resetting debounce"
+                        );
+                        deadline = Some(Instant::now() + debounce);
                     }
-                }
-                Ok(Err(e)) => {
-                    warn!(error = %e, watcher = "theme", "File watcher error");
-                }
-                Err(_) => {
-                    // Channel closed, exit watch loop
-                    info!(watcher = "theme", "Theme watcher shutting down");
-                    break;
                 }
             }
         }
 
+        info!(watcher = "theme", "Theme watcher shutting down");
         Ok(())
     }
 }
 
 impl Drop for ThemeWatcher {
     fn drop(&mut self) {
-        // Wait for watcher thread to finish (with timeout)
+        if let Some(tx) = self.control_tx.take() {
+            let _ = tx.send(ControlMsg::Stop);
+        }
         if let Some(handle) = self.watcher_thread.take() {
             let _ = handle.join();
         }
@@ -337,9 +398,47 @@ fn is_relevant_script_file(path: &std::path::Path) -> bool {
     )
 }
 
-/// Watches ~/.scriptkit/kit/*/scripts and ~/.scriptkit/kit/*/extensions directories for changes and emits reload events
+/// Compute the next deadline from pending events
+fn next_deadline(
+    pending: &HashMap<PathBuf, (ScriptReloadEvent, Instant)>,
+    debounce: Duration,
+) -> Option<Instant> {
+    pending.values().map(|(_, t)| *t + debounce).min()
+}
+
+/// Flush expired events from pending map
+fn flush_expired(
+    pending: &mut HashMap<PathBuf, (ScriptReloadEvent, Instant)>,
+    debounce: Duration,
+    out_tx: &Sender<ScriptReloadEvent>,
+) {
+    let now = Instant::now();
+    let mut to_send: Vec<ScriptReloadEvent> = Vec::new();
+
+    pending.retain(|path, (ev, t)| {
+        if now.duration_since(*t) >= debounce {
+            debug!(path = %path.display(), event = ?ev, "Script debounce complete, flushing");
+            to_send.push(ev.clone());
+            false
+        } else {
+            true
+        }
+    });
+
+    for ev in to_send {
+        info!(event = ?ev, "Emitting script reload event");
+        let _ = out_tx.send(ev);
+    }
+}
+
+/// Watches ~/.scriptkit/kit/*/scripts and ~/.scriptkit/kit/*/extensions directories for changes
+///
+/// Uses per-file trailing-edge debounce with storm coalescing.
+/// No separate flush thread - all debouncing in single recv_timeout loop.
+/// Properly shuts down via Stop control message.
 pub struct ScriptWatcher {
     tx: Option<Sender<ScriptReloadEvent>>,
+    control_tx: Option<Sender<ControlMsg>>,
     watcher_thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -352,6 +451,7 @@ impl ScriptWatcher {
         let (tx, rx) = channel();
         let watcher = ScriptWatcher {
             tx: Some(tx),
+            control_tx: None,
             watcher_thread: None,
         };
         (watcher, rx)
@@ -367,8 +467,19 @@ impl ScriptWatcher {
             .take()
             .ok_or_else(|| std::io::Error::other("watcher already started"))?;
 
+        let (control_tx, control_rx) = channel::<ControlMsg>();
+        let callback_tx = control_tx.clone();
+        self.control_tx = Some(control_tx);
+
+        let scripts_path =
+            PathBuf::from(shellexpand::tilde("~/.scriptkit/kit/main/scripts").as_ref());
+        let extensions_path =
+            PathBuf::from(shellexpand::tilde("~/.scriptkit/kit/main/extensions").as_ref());
+
         let thread_handle = thread::spawn(move || {
-            if let Err(e) = Self::watch_loop(tx) {
+            if let Err(e) =
+                Self::watch_loop(scripts_path, extensions_path, tx, control_rx, callback_tx)
+            {
                 warn!(error = %e, watcher = "scripts", "Script watcher error");
             }
         });
@@ -378,36 +489,21 @@ impl ScriptWatcher {
     }
 
     /// Internal watch loop running in background thread
-    fn watch_loop(tx: Sender<ScriptReloadEvent>) -> NotifyResult<()> {
-        // Expand the scripts and extensions paths (under kit/ subdirectory)
-        let scripts_path =
-            PathBuf::from(shellexpand::tilde("~/.scriptkit/kit/main/scripts").as_ref());
-        let extensions_path =
-            PathBuf::from(shellexpand::tilde("~/.scriptkit/kit/main/extensions").as_ref());
-
-        // Track pending events for debouncing (path -> (event_type, timestamp))
-        let pending_events: Arc<
-            Mutex<std::collections::HashMap<PathBuf, (ScriptReloadEvent, std::time::Instant)>>,
-        > = Arc::new(Mutex::new(std::collections::HashMap::new()));
-        let pending_events_clone = pending_events.clone();
-
-        // Debounce interval
-        let debounce_ms = 500;
-
-        // Channel for the file watcher thread
-        let (watch_tx, watch_rx) = channel();
-
-        // Create the watcher with a callback
+    fn watch_loop(
+        scripts_path: PathBuf,
+        extensions_path: PathBuf,
+        out_tx: Sender<ScriptReloadEvent>,
+        control_rx: Receiver<ControlMsg>,
+        callback_tx: Sender<ControlMsg>,
+    ) -> NotifyResult<()> {
         let mut watcher: Box<dyn Watcher> = Box::new(recommended_watcher(
             move |res: notify::Result<notify::Event>| {
-                let _ = watch_tx.send(res);
+                let _ = callback_tx.send(ControlMsg::Notify(res));
             },
         )?);
 
-        // Watch the scripts directory recursively
         watcher.watch(&scripts_path, RecursiveMode::Recursive)?;
 
-        // Watch the extensions directory recursively (for *.md files)
         if extensions_path.exists() {
             watcher.watch(&extensions_path, RecursiveMode::Recursive)?;
             info!(
@@ -423,65 +519,49 @@ impl ScriptWatcher {
             "Script watcher started"
         );
 
-        // Spawn a background thread to flush pending events after debounce interval
-        let tx_clone = tx.clone();
-        let flush_pending = pending_events_clone.clone();
-        thread::spawn(move || {
-            loop {
-                thread::sleep(Duration::from_millis(100)); // Check every 100ms
+        let debounce = Duration::from_millis(DEBOUNCE_MS);
+        let mut pending: HashMap<PathBuf, (ScriptReloadEvent, Instant)> = HashMap::new();
 
-                let now = std::time::Instant::now();
-                let mut events_to_send = Vec::new();
-
-                {
-                    let mut pending = flush_pending.lock().unwrap();
-                    let debounce_threshold = Duration::from_millis(debounce_ms);
-
-                    // Find events that have been pending long enough
-                    let expired: Vec<PathBuf> = pending
-                        .iter()
-                        .filter(|(_, (_, timestamp))| {
-                            now.duration_since(*timestamp) >= debounce_threshold
-                        })
-                        .map(|(path, _)| path.clone())
-                        .collect();
-
-                    // Remove expired events and collect them for sending
-                    for path in expired {
-                        if let Some((event, _)) = pending.remove(&path) {
-                            events_to_send.push((path, event));
-                        }
-                    }
-                }
-
-                // Send events outside the lock
-                for (path, event) in events_to_send {
-                    info!(
-                        path = %path.display(),
-                        event_type = ?event,
-                        "Emitting script reload event"
-                    );
-                    if tx_clone.send(event).is_err() {
-                        // Channel closed, exit flush thread
-                        return;
-                    }
-                }
-            }
-        });
-
-        // Main watch loop
         loop {
-            match watch_rx.recv() {
-                Ok(Ok(event)) => {
-                    // Process each path in the event
+            let deadline = next_deadline(&pending, debounce);
+
+            let msg = match deadline {
+                None => match control_rx.recv() {
+                    Ok(m) => m,
+                    Err(_) => break,
+                },
+                Some(dl) => {
+                    let timeout = dl.saturating_duration_since(Instant::now());
+                    match control_rx.recv_timeout(timeout) {
+                        Ok(m) => m,
+                        Err(RecvTimeoutError::Timeout) => {
+                            flush_expired(&mut pending, debounce, &out_tx);
+                            continue;
+                        }
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+            };
+
+            match msg {
+                ControlMsg::Stop => {
+                    info!(watcher = "scripts", "Script watcher received stop signal");
+                    break;
+                }
+
+                ControlMsg::Notify(Err(e)) => {
+                    warn!(error = %e, watcher = "scripts", "notify delivered error");
+                }
+
+                ControlMsg::Notify(Ok(event)) => {
+                    let kind = &event.kind;
+
                     for path in event.paths.iter() {
-                        // Skip non-relevant files
                         if !is_relevant_script_file(path) {
                             continue;
                         }
 
-                        // Determine the event type based on notify::EventKind
-                        let reload_event = match event.kind {
+                        let reload_event = match kind {
                             notify::EventKind::Create(_) => {
                                 ScriptReloadEvent::FileCreated(path.clone())
                             }
@@ -491,33 +571,45 @@ impl ScriptWatcher {
                             notify::EventKind::Remove(_) => {
                                 ScriptReloadEvent::FileDeleted(path.clone())
                             }
-                            // For other events (Access, Other), use FullReload as fallback
-                            _ => continue,
+                            // Access events are not relevant
+                            notify::EventKind::Access(_) => continue,
+                            // For Other/Any events, use FullReload as a safe fallback
+                            _ => ScriptReloadEvent::FullReload,
                         };
 
-                        // Update pending events map (this implements per-file debouncing)
-                        let mut pending = pending_events.lock().unwrap();
-                        pending.insert(path.clone(), (reload_event, std::time::Instant::now()));
+                        debug!(
+                            path = %path.display(),
+                            event_kind = ?kind,
+                            "Script change detected, updating pending"
+                        );
+                        pending.insert(path.clone(), (reload_event, Instant::now()));
+
+                        // Storm coalescing: if too many pending events, collapse to FullReload
+                        if pending.len() >= STORM_THRESHOLD {
+                            warn!(
+                                pending_count = pending.len(),
+                                threshold = STORM_THRESHOLD,
+                                "Event storm detected, collapsing to FullReload"
+                            );
+                            pending.clear();
+                            let _ = out_tx.send(ScriptReloadEvent::FullReload);
+                            break;
+                        }
                     }
-                }
-                Ok(Err(e)) => {
-                    warn!(error = %e, watcher = "scripts", "File watcher error");
-                }
-                Err(_) => {
-                    // Channel closed, exit watch loop
-                    info!(watcher = "scripts", "Script watcher shutting down");
-                    break;
                 }
             }
         }
 
+        info!(watcher = "scripts", "Script watcher shutting down");
         Ok(())
     }
 }
 
 impl Drop for ScriptWatcher {
     fn drop(&mut self) {
-        // Wait for watcher thread to finish (with timeout)
+        if let Some(tx) = self.control_tx.take() {
+            let _ = tx.send(ControlMsg::Stop);
+        }
         if let Some(handle) = self.watcher_thread.take() {
             let _ = handle.join();
         }
@@ -528,8 +620,11 @@ impl Drop for ScriptWatcher {
 ///
 /// This watcher polls the system appearance setting every 2 seconds by running
 /// the `defaults read -g AppleInterfaceStyle` command on macOS.
+///
+/// Properly shuts down via stop flag.
 pub struct AppearanceWatcher {
     tx: Option<async_channel::Sender<AppearanceChangeEvent>>,
+    stop_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     watcher_thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -542,6 +637,7 @@ impl AppearanceWatcher {
         let (tx, rx) = async_channel::bounded(100);
         let watcher = AppearanceWatcher {
             tx: Some(tx),
+            stop_flag: None,
             watcher_thread: None,
         };
         (watcher, rx)
@@ -557,8 +653,12 @@ impl AppearanceWatcher {
             .take()
             .ok_or_else(|| "watcher already started".to_string())?;
 
+        let stop_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread_stop_flag = stop_flag.clone();
+        self.stop_flag = Some(stop_flag);
+
         let thread_handle = thread::spawn(move || {
-            if let Err(e) = Self::watch_loop(tx) {
+            if let Err(e) = Self::watch_loop(tx, thread_stop_flag) {
                 warn!(error = %e, watcher = "appearance", "Appearance watcher error");
             }
         });
@@ -568,13 +668,24 @@ impl AppearanceWatcher {
     }
 
     /// Internal watch loop running in background thread
-    fn watch_loop(tx: async_channel::Sender<AppearanceChangeEvent>) -> Result<(), String> {
+    fn watch_loop(
+        tx: async_channel::Sender<AppearanceChangeEvent>,
+        stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<(), String> {
         let mut last_appearance: Option<AppearanceChangeEvent> = None;
-        let poll_interval = Duration::from_secs(2);
 
         info!(poll_interval_secs = 2, "Appearance watcher started");
 
         loop {
+            // Check stop flag first
+            if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                info!(
+                    watcher = "appearance",
+                    "Appearance watcher received stop signal"
+                );
+                break;
+            }
+
             // Detect current system appearance
             let current_appearance = Self::detect_appearance();
 
@@ -595,10 +706,21 @@ impl AppearanceWatcher {
                 last_appearance = Some(current_appearance);
             }
 
-            // Poll every 2 seconds
-            thread::sleep(poll_interval);
+            // Poll with interruptible sleep (check stop flag more frequently)
+            for _ in 0..20 {
+                // 20 * 100ms = 2s
+                if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    info!(
+                        watcher = "appearance",
+                        "Appearance watcher received stop signal during sleep"
+                    );
+                    return Ok(());
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
         }
 
+        info!(watcher = "appearance", "Appearance watcher shutting down");
         Ok(())
     }
 
@@ -626,7 +748,11 @@ impl AppearanceWatcher {
 
 impl Drop for AppearanceWatcher {
     fn drop(&mut self) {
-        // Wait for watcher thread to finish (with timeout)
+        // Signal stop
+        if let Some(flag) = self.stop_flag.take() {
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        // Wait for thread to finish
         if let Some(handle) = self.watcher_thread.take() {
             let _ = handle.join();
         }
@@ -825,5 +951,213 @@ mod tests {
     fn test_appearance_watcher_creation() {
         let (_watcher, _rx) = AppearanceWatcher::new();
         // Watcher should be created without panicking
+    }
+
+    #[test]
+    fn test_is_relevant_event_kind() {
+        use notify::event::{AccessKind, CreateKind, ModifyKind, RemoveKind};
+
+        // Access events should NOT be relevant
+        assert!(!is_relevant_event_kind(&notify::EventKind::Access(
+            AccessKind::Read
+        )));
+
+        // Create events SHOULD be relevant
+        assert!(is_relevant_event_kind(&notify::EventKind::Create(
+            CreateKind::File
+        )));
+
+        // Modify events SHOULD be relevant
+        assert!(is_relevant_event_kind(&notify::EventKind::Modify(
+            ModifyKind::Any
+        )));
+
+        // Remove events SHOULD be relevant
+        assert!(is_relevant_event_kind(&notify::EventKind::Remove(
+            RemoveKind::File
+        )));
+
+        // Other/Any events SHOULD be relevant (includes renames)
+        assert!(is_relevant_event_kind(&notify::EventKind::Other));
+        assert!(is_relevant_event_kind(&notify::EventKind::Any));
+    }
+
+    #[test]
+    fn test_next_deadline_empty() {
+        let pending: HashMap<PathBuf, (ScriptReloadEvent, Instant)> = HashMap::new();
+        let debounce = Duration::from_millis(500);
+
+        assert!(next_deadline(&pending, debounce).is_none());
+    }
+
+    #[test]
+    fn test_next_deadline_single() {
+        let mut pending: HashMap<PathBuf, (ScriptReloadEvent, Instant)> = HashMap::new();
+        let now = Instant::now();
+        let debounce = Duration::from_millis(500);
+
+        pending.insert(
+            PathBuf::from("/test/script.ts"),
+            (
+                ScriptReloadEvent::FileChanged(PathBuf::from("/test/script.ts")),
+                now,
+            ),
+        );
+
+        let deadline = next_deadline(&pending, debounce);
+        assert!(deadline.is_some());
+        // Deadline should be approximately now + debounce
+        let expected = now + debounce;
+        let actual = deadline.unwrap();
+        // Allow 1ms tolerance for timing
+        assert!(actual >= expected && actual <= expected + Duration::from_millis(1));
+    }
+
+    #[test]
+    fn test_next_deadline_multiple_picks_earliest() {
+        let mut pending: HashMap<PathBuf, (ScriptReloadEvent, Instant)> = HashMap::new();
+        let now = Instant::now();
+        let debounce = Duration::from_millis(500);
+
+        // Add an older event
+        let older_time = now - Duration::from_millis(200);
+        pending.insert(
+            PathBuf::from("/test/old.ts"),
+            (
+                ScriptReloadEvent::FileChanged(PathBuf::from("/test/old.ts")),
+                older_time,
+            ),
+        );
+
+        // Add a newer event
+        pending.insert(
+            PathBuf::from("/test/new.ts"),
+            (
+                ScriptReloadEvent::FileChanged(PathBuf::from("/test/new.ts")),
+                now,
+            ),
+        );
+
+        let deadline = next_deadline(&pending, debounce);
+        assert!(deadline.is_some());
+        // Should pick the older event's deadline (earlier)
+        let expected = older_time + debounce;
+        let actual = deadline.unwrap();
+        assert!(actual >= expected && actual <= expected + Duration::from_millis(1));
+    }
+
+    #[test]
+    fn test_flush_expired_none_expired() {
+        let (tx, _rx) = channel::<ScriptReloadEvent>();
+        let mut pending: HashMap<PathBuf, (ScriptReloadEvent, Instant)> = HashMap::new();
+        let now = Instant::now();
+        let debounce = Duration::from_millis(500);
+
+        // Add a fresh event (not expired)
+        pending.insert(
+            PathBuf::from("/test/script.ts"),
+            (
+                ScriptReloadEvent::FileChanged(PathBuf::from("/test/script.ts")),
+                now,
+            ),
+        );
+
+        flush_expired(&mut pending, debounce, &tx);
+
+        // Event should still be pending
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
+    fn test_flush_expired_some_expired() {
+        let (tx, rx) = channel::<ScriptReloadEvent>();
+        let mut pending: HashMap<PathBuf, (ScriptReloadEvent, Instant)> = HashMap::new();
+        let debounce = Duration::from_millis(500);
+
+        // Add an expired event (from 600ms ago)
+        let old_time = Instant::now() - Duration::from_millis(600);
+        pending.insert(
+            PathBuf::from("/test/old.ts"),
+            (
+                ScriptReloadEvent::FileChanged(PathBuf::from("/test/old.ts")),
+                old_time,
+            ),
+        );
+
+        // Add a fresh event
+        pending.insert(
+            PathBuf::from("/test/new.ts"),
+            (
+                ScriptReloadEvent::FileChanged(PathBuf::from("/test/new.ts")),
+                Instant::now(),
+            ),
+        );
+
+        flush_expired(&mut pending, debounce, &tx);
+
+        // Only fresh event should remain
+        assert_eq!(pending.len(), 1);
+        assert!(pending.contains_key(&PathBuf::from("/test/new.ts")));
+
+        // Should have received the expired event
+        let received = rx.try_recv().unwrap();
+        assert_eq!(
+            received,
+            ScriptReloadEvent::FileChanged(PathBuf::from("/test/old.ts"))
+        );
+    }
+
+    #[test]
+    fn test_config_watcher_shutdown_no_hang() {
+        // Create and start a watcher
+        let (mut watcher, _rx) = ConfigWatcher::new();
+
+        // This may fail if the watch directory doesn't exist, but that's fine
+        // We're testing that drop doesn't hang, not that watching works
+        let _ = watcher.start();
+
+        // Drop should complete within a reasonable time (not hang)
+        // The Drop implementation sends Stop and then joins
+        drop(watcher);
+
+        // If we get here, the test passed (didn't hang)
+    }
+
+    #[test]
+    fn test_theme_watcher_shutdown_no_hang() {
+        let (mut watcher, _rx) = ThemeWatcher::new();
+        let _ = watcher.start();
+        drop(watcher);
+        // If we get here, the test passed (didn't hang)
+    }
+
+    #[test]
+    fn test_script_watcher_shutdown_no_hang() {
+        let (mut watcher, _rx) = ScriptWatcher::new();
+        let _ = watcher.start();
+        drop(watcher);
+        // If we get here, the test passed (didn't hang)
+    }
+
+    #[test]
+    fn test_appearance_watcher_shutdown_no_hang() {
+        let (mut watcher, _rx) = AppearanceWatcher::new();
+        let _ = watcher.start();
+        drop(watcher);
+        // If we get here, the test passed (didn't hang)
+    }
+
+    #[test]
+    fn test_storm_threshold_constant() {
+        // Verify storm threshold is a reasonable value (compile-time checks)
+        const { assert!(STORM_THRESHOLD > 0) };
+        const { assert!(STORM_THRESHOLD <= 1000) }; // Not too high
+    }
+
+    #[test]
+    fn test_debounce_constant() {
+        // Verify debounce is a reasonable value (compile-time checks)
+        const { assert!(DEBOUNCE_MS >= 100) }; // At least 100ms
+        const { assert!(DEBOUNCE_MS <= 2000) }; // At most 2s
     }
 }
