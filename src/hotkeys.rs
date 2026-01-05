@@ -3,41 +3,144 @@ use global_hotkey::{
     Error as HotkeyError, GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock, RwLock};
 
 use crate::{config, logging, scripts, shortcuts};
 
 // =============================================================================
-// Global state for hotkey hot-reload
+// Unified Hotkey Routing System
 // =============================================================================
+// All hotkey events (main, notes, ai, scripts) are dispatched through a single
+// routing table. This ensures:
+// 1. Consistent dispatch behavior for all hotkey types
+// 2. Proper hot-reload support (routing and registration are coupled)
+// 3. No lost hotkeys on failed registration (transactional updates)
+
+/// Action to take when a hotkey is pressed
+#[derive(Clone, Debug, PartialEq)]
+pub enum HotkeyAction {
+    /// Main launcher hotkey
+    Main,
+    /// Notes window hotkey
+    Notes,
+    /// AI window hotkey
+    Ai,
+    /// Script shortcut - run the script at this path
+    Script(String),
+}
+
+/// Registered hotkey entry with all needed data for unregistration/updates
+#[derive(Clone)]
+struct RegisteredHotkey {
+    /// The HotKey object (needed for unregister)
+    hotkey: HotKey,
+    /// What action to take on press
+    action: HotkeyAction,
+    /// Display string for logging (e.g., "cmd+shift+k")
+    display: String,
+}
+
+/// Unified routing table for all hotkeys
+/// Uses RwLock for fast reads (event dispatch) with occasional writes (updates)
+struct HotkeyRoutes {
+    /// Maps hotkey ID -> registered hotkey entry
+    routes: HashMap<u32, RegisteredHotkey>,
+    /// Reverse lookup: script path -> hotkey ID (for script updates)
+    script_paths: HashMap<String, u32>,
+    /// Current main hotkey ID (for quick lookup)
+    main_id: Option<u32>,
+    /// Current notes hotkey ID (for quick lookup)
+    notes_id: Option<u32>,
+    /// Current AI hotkey ID (for quick lookup)
+    ai_id: Option<u32>,
+}
+
+impl HotkeyRoutes {
+    fn new() -> Self {
+        Self {
+            routes: HashMap::new(),
+            script_paths: HashMap::new(),
+            main_id: None,
+            notes_id: None,
+            ai_id: None,
+        }
+    }
+
+    /// Get the action for a hotkey ID
+    fn get_action(&self, id: u32) -> Option<HotkeyAction> {
+        self.routes.get(&id).map(|r| r.action.clone())
+    }
+
+    /// Add a route (internal - doesn't register with OS)
+    fn add_route(&mut self, id: u32, entry: RegisteredHotkey) {
+        match &entry.action {
+            HotkeyAction::Main => self.main_id = Some(id),
+            HotkeyAction::Notes => self.notes_id = Some(id),
+            HotkeyAction::Ai => self.ai_id = Some(id),
+            HotkeyAction::Script(path) => {
+                self.script_paths.insert(path.clone(), id);
+            }
+        }
+        self.routes.insert(id, entry);
+    }
+
+    /// Remove a route by ID (internal - doesn't unregister from OS)
+    fn remove_route(&mut self, id: u32) -> Option<RegisteredHotkey> {
+        if let Some(entry) = self.routes.remove(&id) {
+            match &entry.action {
+                HotkeyAction::Main => {
+                    if self.main_id == Some(id) {
+                        self.main_id = None;
+                    }
+                }
+                HotkeyAction::Notes => {
+                    if self.notes_id == Some(id) {
+                        self.notes_id = None;
+                    }
+                }
+                HotkeyAction::Ai => {
+                    if self.ai_id == Some(id) {
+                        self.ai_id = None;
+                    }
+                }
+                HotkeyAction::Script(path) => {
+                    self.script_paths.remove(path);
+                }
+            }
+            Some(entry)
+        } else {
+            None
+        }
+    }
+
+    /// Get script hotkey ID by path
+    fn get_script_id(&self, path: &str) -> Option<u32> {
+        self.script_paths.get(path).copied()
+    }
+
+    /// Get the hotkey entry for an action type
+    #[allow(dead_code)]
+    fn get_builtin_entry(&self, action: &HotkeyAction) -> Option<&RegisteredHotkey> {
+        let id = match action {
+            HotkeyAction::Main => self.main_id?,
+            HotkeyAction::Notes => self.notes_id?,
+            HotkeyAction::Ai => self.ai_id?,
+            HotkeyAction::Script(path) => *self.script_paths.get(path)?,
+        };
+        self.routes.get(&id)
+    }
+}
+
+/// Global routing table - protected by RwLock for fast reads
+static HOTKEY_ROUTES: OnceLock<RwLock<HotkeyRoutes>> = OnceLock::new();
+
+fn routes() -> &'static RwLock<HotkeyRoutes> {
+    HOTKEY_ROUTES.get_or_init(|| RwLock::new(HotkeyRoutes::new()))
+}
 
 /// The main GlobalHotKeyManager - stored globally so update_hotkeys can access it
 static MAIN_MANAGER: OnceLock<Mutex<GlobalHotKeyManager>> = OnceLock::new();
-
-/// Current hotkey IDs - read by the event loop via atomics
-static MAIN_HOTKEY_ID: AtomicU32 = AtomicU32::new(0);
-static NOTES_HOTKEY_ID: AtomicU32 = AtomicU32::new(0);
-static AI_HOTKEY_ID: AtomicU32 = AtomicU32::new(0);
-
-/// Stores the actual HotKey objects (needed for unregistration)
-struct CurrentHotkeys {
-    main: Option<HotKey>,
-    notes: Option<HotKey>,
-    ai: Option<HotKey>,
-}
-
-static CURRENT_HOTKEYS: OnceLock<Mutex<CurrentHotkeys>> = OnceLock::new();
-
-fn get_current_hotkeys() -> &'static Mutex<CurrentHotkeys> {
-    CURRENT_HOTKEYS.get_or_init(|| {
-        Mutex::new(CurrentHotkeys {
-            main: None,
-            notes: None,
-            ai: None,
-        })
-    })
-}
 
 /// Parse a HotkeyConfig into (Modifiers, Code)
 fn parse_hotkey_config(hk: &config::HotkeyConfig) -> Option<(Modifiers, Code)> {
@@ -120,7 +223,92 @@ fn hotkey_config_to_display(hk: &config::HotkeyConfig) -> String {
     )
 }
 
+/// Transactional hotkey rebind: register new BEFORE unregistering old
+/// This prevents losing a working hotkey if the new registration fails
+fn rebind_hotkey_transactional(
+    manager: &GlobalHotKeyManager,
+    action: HotkeyAction,
+    mods: Modifiers,
+    code: Code,
+    display: &str,
+) -> bool {
+    let new_hotkey = HotKey::new(Some(mods), code);
+    let new_id = new_hotkey.id();
+
+    // Check if already registered with same ID (no change needed)
+    let current_id = {
+        let routes_guard = routes().read().unwrap();
+        match &action {
+            HotkeyAction::Main => routes_guard.main_id,
+            HotkeyAction::Notes => routes_guard.notes_id,
+            HotkeyAction::Ai => routes_guard.ai_id,
+            HotkeyAction::Script(path) => routes_guard.get_script_id(path),
+        }
+    };
+
+    if current_id == Some(new_id) {
+        return true; // No change needed
+    }
+
+    // TRANSACTIONAL: Register new FIRST, before unregistering old
+    // This ensures we never lose a working hotkey on registration failure
+    if let Err(e) = manager.register(new_hotkey) {
+        logging::log(
+            "HOTKEY",
+            &format!("Failed to register {}: {} - keeping existing", display, e),
+        );
+        return false;
+    }
+
+    // New registration succeeded - now safe to update routing and unregister old
+    let old_entry = {
+        let mut routes_guard = routes().write().unwrap();
+
+        // Get old entry before adding new (they might have same action type)
+        let old_id = match &action {
+            HotkeyAction::Main => routes_guard.main_id,
+            HotkeyAction::Notes => routes_guard.notes_id,
+            HotkeyAction::Ai => routes_guard.ai_id,
+            HotkeyAction::Script(path) => routes_guard.get_script_id(path),
+        };
+        let old_entry = old_id.and_then(|id| routes_guard.remove_route(id));
+
+        // Add new route
+        routes_guard.add_route(
+            new_id,
+            RegisteredHotkey {
+                hotkey: new_hotkey,
+                action: action.clone(),
+                display: display.to_string(),
+            },
+        );
+
+        old_entry
+    };
+
+    // Unregister old hotkey (best-effort - it's already removed from routing)
+    if let Some(old) = old_entry {
+        if let Err(e) = manager.unregister(old.hotkey) {
+            logging::log(
+                "HOTKEY",
+                &format!(
+                    "Warning: failed to unregister old {} hotkey: {}",
+                    old.display, e
+                ),
+            );
+            // Continue anyway - new hotkey is working
+        }
+    }
+
+    logging::log(
+        "HOTKEY",
+        &format!("Hot-reloaded {:?} hotkey: {} (id: {})", action, display, new_id),
+    );
+    true
+}
+
 /// Update hotkeys from config - call this when config changes
+/// Uses transactional updates: register new before unregistering old
 pub fn update_hotkeys(cfg: &config::Config) {
     let manager_guard = match MAIN_MANAGER.get() {
         Some(m) => match m.lock() {
@@ -136,134 +324,26 @@ pub fn update_hotkeys(cfg: &config::Config) {
         }
     };
 
-    let mut hotkeys_guard = match get_current_hotkeys().lock() {
-        Ok(g) => g,
-        Err(e) => {
-            logging::log("HOTKEY", &format!("Failed to lock current hotkeys: {}", e));
-            return;
-        }
-    };
-
     // Update main hotkey
     let main_config = &cfg.hotkey;
     if let Some((mods, code)) = parse_hotkey_config(main_config) {
-        let new_hotkey = HotKey::new(Some(mods), code);
-        let new_id = new_hotkey.id();
-        let current_id = MAIN_HOTKEY_ID.load(Ordering::SeqCst);
-
-        if new_id != current_id {
-            let display = hotkey_config_to_display(main_config);
-
-            // Unregister old
-            if let Some(old_hotkey) = hotkeys_guard.main.take() {
-                if let Err(e) = manager_guard.unregister(old_hotkey) {
-                    logging::log(
-                        "HOTKEY",
-                        &format!("Failed to unregister old main hotkey: {}", e),
-                    );
-                }
-            }
-
-            // Register new
-            match manager_guard.register(new_hotkey) {
-                Ok(()) => {
-                    MAIN_HOTKEY_ID.store(new_id, Ordering::SeqCst);
-                    hotkeys_guard.main = Some(HotKey::new(Some(mods), code));
-                    MAIN_HOTKEY_REGISTERED.store(true, Ordering::SeqCst);
-                    logging::log(
-                        "HOTKEY",
-                        &format!("Hot-reloaded main hotkey: {} (id: {})", display, new_id),
-                    );
-                }
-                Err(e) => {
-                    MAIN_HOTKEY_REGISTERED.store(false, Ordering::SeqCst);
-                    logging::log(
-                        "HOTKEY",
-                        &format!("Failed to register main hotkey {}: {}", display, e),
-                    );
-                }
-            }
-        }
+        let display = hotkey_config_to_display(main_config);
+        let success = rebind_hotkey_transactional(&manager_guard, HotkeyAction::Main, mods, code, &display);
+        MAIN_HOTKEY_REGISTERED.store(success, Ordering::Relaxed);
     }
 
     // Update notes hotkey
     let notes_config = cfg.get_notes_hotkey();
     if let Some((mods, code)) = parse_hotkey_config(&notes_config) {
-        let new_hotkey = HotKey::new(Some(mods), code);
-        let new_id = new_hotkey.id();
-        let current_id = NOTES_HOTKEY_ID.load(Ordering::SeqCst);
-
-        if new_id != current_id {
-            let display = hotkey_config_to_display(&notes_config);
-
-            // Unregister old
-            if let Some(old_hotkey) = hotkeys_guard.notes.take() {
-                if let Err(e) = manager_guard.unregister(old_hotkey) {
-                    logging::log(
-                        "HOTKEY",
-                        &format!("Failed to unregister old notes hotkey: {}", e),
-                    );
-                }
-            }
-
-            // Register new
-            match manager_guard.register(new_hotkey) {
-                Ok(()) => {
-                    NOTES_HOTKEY_ID.store(new_id, Ordering::SeqCst);
-                    hotkeys_guard.notes = Some(HotKey::new(Some(mods), code));
-                    logging::log(
-                        "HOTKEY",
-                        &format!("Hot-reloaded notes hotkey: {} (id: {})", display, new_id),
-                    );
-                }
-                Err(e) => {
-                    logging::log(
-                        "HOTKEY",
-                        &format!("Failed to register notes hotkey {}: {}", display, e),
-                    );
-                }
-            }
-        }
+        let display = hotkey_config_to_display(&notes_config);
+        rebind_hotkey_transactional(&manager_guard, HotkeyAction::Notes, mods, code, &display);
     }
 
     // Update AI hotkey
     let ai_config = cfg.get_ai_hotkey();
     if let Some((mods, code)) = parse_hotkey_config(&ai_config) {
-        let new_hotkey = HotKey::new(Some(mods), code);
-        let new_id = new_hotkey.id();
-        let current_id = AI_HOTKEY_ID.load(Ordering::SeqCst);
-
-        if new_id != current_id {
-            let display = hotkey_config_to_display(&ai_config);
-
-            // Unregister old
-            if let Some(old_hotkey) = hotkeys_guard.ai.take() {
-                if let Err(e) = manager_guard.unregister(old_hotkey) {
-                    logging::log(
-                        "HOTKEY",
-                        &format!("Failed to unregister old AI hotkey: {}", e),
-                    );
-                }
-            }
-
-            // Register new
-            match manager_guard.register(new_hotkey) {
-                Ok(()) => {
-                    AI_HOTKEY_ID.store(new_id, Ordering::SeqCst);
-                    hotkeys_guard.ai = Some(HotKey::new(Some(mods), code));
-                    logging::log(
-                        "HOTKEY",
-                        &format!("Hot-reloaded AI hotkey: {} (id: {})", display, new_id),
-                    );
-                }
-                Err(e) => {
-                    logging::log(
-                        "HOTKEY",
-                        &format!("Failed to register AI hotkey {}: {}", display, e),
-                    );
-                }
-            }
-        }
+        let display = hotkey_config_to_display(&ai_config);
+        rebind_hotkey_transactional(&manager_guard, HotkeyAction::Ai, mods, code, &display);
     }
 }
 
@@ -541,6 +621,7 @@ pub fn set_ai_hotkey_handler<F: Fn() + Send + Sync + 'static>(handler: F) {
 #[cfg(target_os = "macos")]
 mod gcd {
     use std::ffi::c_void;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
 
     // Link to libSystem for GCD functions
     // Note: dispatch_get_main_queue is actually a macro that returns &_dispatch_main_q
@@ -559,6 +640,9 @@ mod gcd {
 
     /// Dispatch a closure to the main thread via GCD.
     /// This is the key to making hotkeys work before the GPUI event loop is "warmed up".
+    ///
+    /// SAFETY: The trampoline uses catch_unwind to prevent panics from unwinding
+    /// across the FFI boundary, which would be undefined behavior.
     pub fn dispatch_to_main<F: FnOnce() + Send + 'static>(f: F) {
         let boxed: Box<dyn FnOnce() + Send> = Box::new(f);
         let raw = Box::into_raw(Box::new(boxed));
@@ -566,7 +650,21 @@ mod gcd {
         extern "C" fn trampoline(context: *mut c_void) {
             unsafe {
                 let boxed: Box<Box<dyn FnOnce() + Send>> = Box::from_raw(context as *mut _);
-                boxed();
+                // CRITICAL: Catch panics to prevent UB from unwinding across FFI boundary
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    boxed();
+                }));
+                if let Err(e) = result {
+                    // Log the panic but don't propagate it across FFI
+                    let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = e.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic".to_string()
+                    };
+                    eprintln!("[HOTKEY] PANIC in GCD dispatch: {}", msg);
+                }
             }
         }
 
@@ -707,7 +805,7 @@ static MAIN_HOTKEY_REGISTERED: AtomicBool = AtomicBool::new(false);
 
 /// Check if the main hotkey was successfully registered
 pub fn is_main_hotkey_registered() -> bool {
-    MAIN_HOTKEY_REGISTERED.load(Ordering::SeqCst)
+    MAIN_HOTKEY_REGISTERED.load(Ordering::Relaxed)
 }
 
 #[allow(dead_code)]
@@ -743,6 +841,64 @@ fn format_hotkey_error(e: &HotkeyError, shortcut_display: &str) -> String {
     }
 }
 
+/// Register a builtin hotkey (main/notes/ai) and add to unified routing table
+fn register_builtin_hotkey(
+    manager: &GlobalHotKeyManager,
+    action: HotkeyAction,
+    cfg: &config::HotkeyConfig,
+) -> Option<u32> {
+    let (mods, code) = parse_hotkey_config(cfg)?;
+    let hotkey = HotKey::new(Some(mods), code);
+    let id = hotkey.id();
+    let display = hotkey_config_to_display(cfg);
+
+    match manager.register(hotkey) {
+        Ok(()) => {
+            let mut routes_guard = routes().write().unwrap();
+            routes_guard.add_route(id, RegisteredHotkey {
+                hotkey,
+                action: action.clone(),
+                display: display.clone(),
+            });
+            logging::log("HOTKEY", &format!("Registered {:?} hotkey {} (id: {})", action, display, id));
+            Some(id)
+        }
+        Err(e) => {
+            logging::log("HOTKEY", &format_hotkey_error(&e, &display));
+            None
+        }
+    }
+}
+
+/// Register a script hotkey and add to unified routing table
+fn register_script_hotkey_internal(
+    manager: &GlobalHotKeyManager,
+    path: &str,
+    shortcut: &str,
+    name: &str,
+) -> Option<u32> {
+    let (mods, code) = shortcuts::parse_shortcut(shortcut)?;
+    let hotkey = HotKey::new(Some(mods), code);
+    let id = hotkey.id();
+
+    match manager.register(hotkey) {
+        Ok(()) => {
+            let mut routes_guard = routes().write().unwrap();
+            routes_guard.add_route(id, RegisteredHotkey {
+                hotkey,
+                action: HotkeyAction::Script(path.to_string()),
+                display: shortcut.to_string(),
+            });
+            logging::log("HOTKEY", &format!("Registered script shortcut '{}' for {} (id: {})", shortcut, name, id));
+            Some(id)
+        }
+        Err(e) => {
+            logging::log("HOTKEY", &format!("{} (script: {})", format_hotkey_error(&e, shortcut), name));
+            None
+        }
+    }
+}
+
 #[allow(dead_code)]
 pub(crate) fn start_hotkey_listener(config: config::Config) {
     std::thread::spawn(move || {
@@ -754,13 +910,11 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
             }
         };
 
-        // Store manager globally for hot-reload access
         if MAIN_MANAGER.set(Mutex::new(manager)).is_err() {
             logging::log("HOTKEY", "Manager already initialized (unexpected)");
             return;
         }
 
-        // Get a reference to the manager for initial registration
         let manager_guard = match MAIN_MANAGER.get().unwrap().lock() {
             Ok(g) => g,
             Err(e) => {
@@ -769,395 +923,92 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
             }
         };
 
-        // Convert config hotkey to global_hotkey::Code
-        let code = match config.hotkey.key.as_str() {
-            "Semicolon" => Code::Semicolon,
-            "KeyK" => Code::KeyK,
-            "KeyP" => Code::KeyP,
-            "Space" => Code::Space,
-            "Enter" => Code::Enter,
-            "Digit0" => Code::Digit0,
-            "Digit1" => Code::Digit1,
-            "Digit2" => Code::Digit2,
-            "Digit3" => Code::Digit3,
-            "Digit4" => Code::Digit4,
-            "Digit5" => Code::Digit5,
-            "Digit6" => Code::Digit6,
-            "Digit7" => Code::Digit7,
-            "Digit8" => Code::Digit8,
-            "Digit9" => Code::Digit9,
-            "KeyA" => Code::KeyA,
-            "KeyB" => Code::KeyB,
-            "KeyC" => Code::KeyC,
-            "KeyD" => Code::KeyD,
-            "KeyE" => Code::KeyE,
-            "KeyF" => Code::KeyF,
-            "KeyG" => Code::KeyG,
-            "KeyH" => Code::KeyH,
-            "KeyI" => Code::KeyI,
-            "KeyJ" => Code::KeyJ,
-            "KeyL" => Code::KeyL,
-            "KeyM" => Code::KeyM,
-            "KeyN" => Code::KeyN,
-            "KeyO" => Code::KeyO,
-            "KeyQ" => Code::KeyQ,
-            "KeyR" => Code::KeyR,
-            "KeyS" => Code::KeyS,
-            "KeyT" => Code::KeyT,
-            "KeyU" => Code::KeyU,
-            "KeyV" => Code::KeyV,
-            "KeyW" => Code::KeyW,
-            "KeyX" => Code::KeyX,
-            "KeyY" => Code::KeyY,
-            "KeyZ" => Code::KeyZ,
-            // Function keys
-            "F1" => Code::F1,
-            "F2" => Code::F2,
-            "F3" => Code::F3,
-            "F4" => Code::F4,
-            "F5" => Code::F5,
-            "F6" => Code::F6,
-            "F7" => Code::F7,
-            "F8" => Code::F8,
-            "F9" => Code::F9,
-            "F10" => Code::F10,
-            "F11" => Code::F11,
-            "F12" => Code::F12,
-            other => {
-                logging::log(
-                    "HOTKEY",
-                    &format!(
-                        "Unknown key code: '{}'. Valid keys: KeyA-KeyZ, Digit0-Digit9, F1-F12, Space, Enter, Semicolon. Falling back to Semicolon",
-                        other
-                    ),
-                );
-                Code::Semicolon
-            }
-        };
-
-        // Convert modifiers from config strings to Modifiers flags
-        let mut modifiers = Modifiers::empty();
-        for modifier in &config.hotkey.modifiers {
-            match modifier.as_str() {
-                "meta" => modifiers |= Modifiers::META,
-                "ctrl" => modifiers |= Modifiers::CONTROL,
-                "alt" => modifiers |= Modifiers::ALT,
-                "shift" => modifiers |= Modifiers::SHIFT,
-                other => {
-                    logging::log("HOTKEY", &format!("Unknown modifier: {}", other));
-                }
-            }
+        // Register main hotkey using unified registration
+        if register_builtin_hotkey(&manager_guard, HotkeyAction::Main, &config.hotkey).is_some() {
+            MAIN_HOTKEY_REGISTERED.store(true, Ordering::Relaxed);
         }
 
-        let hotkey = HotKey::new(Some(modifiers), code);
-        let main_hotkey_id = hotkey.id();
-
-        let hotkey_display = format!(
-            "{}{}",
-            config.hotkey.modifiers.join("+"),
-            if config.hotkey.modifiers.is_empty() {
-                String::new()
-            } else {
-                "+".to_string()
-            }
-        ) + &config.hotkey.key;
-
-        if let Err(e) = manager_guard.register(hotkey) {
-            logging::log("HOTKEY", &format_hotkey_error(&e, &hotkey_display));
-            // Main hotkey registration failed - flag stays false
-            return;
-        }
-
-        // Store ID in atomic for event loop and HotKey for unregistration
-        MAIN_HOTKEY_ID.store(main_hotkey_id, Ordering::SeqCst);
-        {
-            let mut hotkeys = get_current_hotkeys().lock().unwrap();
-            hotkeys.main = Some(HotKey::new(Some(modifiers), code));
-        }
-
-        // Mark main hotkey as successfully registered
-        MAIN_HOTKEY_REGISTERED.store(true, Ordering::SeqCst);
-
-        logging::log(
-            "HOTKEY",
-            &format!(
-                "Registered global hotkey {} (id: {})",
-                hotkey_display, main_hotkey_id
-            ),
-        );
-
-        // Register notes hotkey (Cmd+Shift+N by default)
-        let notes_config = config.get_notes_hotkey();
-        let notes_code = match notes_config.key.as_str() {
-            "KeyN" => Code::KeyN,
-            "KeyM" => Code::KeyM,
-            "KeyO" => Code::KeyO,
-            "KeyP" => Code::KeyP,
-            _ => Code::KeyN, // Default to N
-        };
-
-        let mut notes_modifiers = Modifiers::empty();
-        for modifier in &notes_config.modifiers {
-            match modifier.as_str() {
-                "meta" => notes_modifiers |= Modifiers::META,
-                "ctrl" => notes_modifiers |= Modifiers::CONTROL,
-                "alt" => notes_modifiers |= Modifiers::ALT,
-                "shift" => notes_modifiers |= Modifiers::SHIFT,
-                _ => {}
-            }
-        }
-
-        let notes_hotkey = HotKey::new(Some(notes_modifiers), notes_code);
-        let notes_hotkey_id = notes_hotkey.id();
-
-        let notes_display = format!(
-            "{}{}",
-            notes_config.modifiers.join("+"),
-            if notes_config.modifiers.is_empty() {
-                String::new()
-            } else {
-                "+".to_string()
-            }
-        ) + &notes_config.key;
-
-        if let Err(e) = manager_guard.register(notes_hotkey) {
-            logging::log("HOTKEY", &format_hotkey_error(&e, &notes_display));
-        } else {
-            // Store ID in atomic and HotKey for unregistration
-            NOTES_HOTKEY_ID.store(notes_hotkey_id, Ordering::SeqCst);
-            {
-                let mut hotkeys = get_current_hotkeys().lock().unwrap();
-                hotkeys.notes = Some(HotKey::new(Some(notes_modifiers), notes_code));
-            }
-            logging::log(
-                "HOTKEY",
-                &format!(
-                    "Registered notes hotkey {} (id: {})",
-                    notes_display, notes_hotkey_id
-                ),
-            );
-        }
-
-        // Register AI hotkey (Cmd+Shift+Space by default)
-        let ai_config = config.get_ai_hotkey();
-        let ai_code = match ai_config.key.as_str() {
-            "Space" => Code::Space,
-            "KeyA" => Code::KeyA,
-            "KeyI" => Code::KeyI,
-            _ => Code::Space, // Default to Space
-        };
-
-        let mut ai_modifiers = Modifiers::empty();
-        for modifier in &ai_config.modifiers {
-            match modifier.as_str() {
-                "meta" => ai_modifiers |= Modifiers::META,
-                "ctrl" => ai_modifiers |= Modifiers::CONTROL,
-                "alt" => ai_modifiers |= Modifiers::ALT,
-                "shift" => ai_modifiers |= Modifiers::SHIFT,
-                _ => {}
-            }
-        }
-
-        let ai_hotkey = HotKey::new(Some(ai_modifiers), ai_code);
-        let ai_hotkey_id = ai_hotkey.id();
-
-        let ai_display = format!(
-            "{}{}",
-            ai_config.modifiers.join("+"),
-            if ai_config.modifiers.is_empty() {
-                String::new()
-            } else {
-                "+".to_string()
-            }
-        ) + &ai_config.key;
-
-        if let Err(e) = manager_guard.register(ai_hotkey) {
-            logging::log("HOTKEY", &format_hotkey_error(&e, &ai_display));
-        } else {
-            // Store ID in atomic and HotKey for unregistration
-            AI_HOTKEY_ID.store(ai_hotkey_id, Ordering::SeqCst);
-            {
-                let mut hotkeys = get_current_hotkeys().lock().unwrap();
-                hotkeys.ai = Some(HotKey::new(Some(ai_modifiers), ai_code));
-            }
-            logging::log(
-                "HOTKEY",
-                &format!("Registered AI hotkey {} (id: {})", ai_display, ai_hotkey_id),
-            );
-        }
+        // Register notes and AI hotkeys
+        register_builtin_hotkey(&manager_guard, HotkeyAction::Notes, &config.get_notes_hotkey());
+        register_builtin_hotkey(&manager_guard, HotkeyAction::Ai, &config.get_ai_hotkey());
 
         // Register script shortcuts
-        // Map from hotkey ID to script path
-        let mut script_hotkey_map: std::collections::HashMap<u32, String> =
-            std::collections::HashMap::new();
+        let mut script_count = 0;
 
-        // Load scripts with shortcuts
         let all_scripts = scripts::read_scripts();
         for script in &all_scripts {
             if let Some(ref shortcut) = script.shortcut {
-                if let Some((mods, key_code)) = shortcuts::parse_shortcut(shortcut) {
-                    let script_hotkey = HotKey::new(Some(mods), key_code);
-                    let script_hotkey_id = script_hotkey.id();
-
-                    match manager_guard.register(script_hotkey) {
-                        Ok(()) => {
-                            script_hotkey_map.insert(
-                                script_hotkey_id,
-                                script.path.to_string_lossy().to_string(),
-                            );
-                            logging::log(
-                                "HOTKEY",
-                                &format!(
-                                    "Registered script shortcut '{}' for {} (id: {})",
-                                    shortcut, script.name, script_hotkey_id
-                                ),
-                            );
-                        }
-                        Err(e) => {
-                            logging::log(
-                                "HOTKEY",
-                                &format!(
-                                    "{} (script: {})",
-                                    format_hotkey_error(&e, shortcut),
-                                    script.name
-                                ),
-                            );
-                        }
-                    }
-                } else {
-                    logging::log(
-                        "HOTKEY",
-                        &format!(
-                            "Failed to parse shortcut '{}' for script {}",
-                            shortcut, script.name
-                        ),
-                    );
+                let path = script.path.to_string_lossy().to_string();
+                if register_script_hotkey_internal(&manager_guard, &path, shortcut, &script.name).is_some() {
+                    script_count += 1;
                 }
             }
         }
 
-        // Load scriptlets with shortcuts
         let all_scriptlets = scripts::load_scriptlets();
         for scriptlet in &all_scriptlets {
             if let Some(ref shortcut) = scriptlet.shortcut {
-                if let Some((mods, key_code)) = shortcuts::parse_shortcut(shortcut) {
-                    let scriptlet_hotkey = HotKey::new(Some(mods), key_code);
-                    let scriptlet_hotkey_id = scriptlet_hotkey.id();
-
-                    // Use file_path as the identifier (already includes #command)
-                    let scriptlet_path = scriptlet
-                        .file_path
-                        .clone()
-                        .unwrap_or_else(|| scriptlet.name.clone());
-
-                    match manager_guard.register(scriptlet_hotkey) {
-                        Ok(()) => {
-                            script_hotkey_map.insert(scriptlet_hotkey_id, scriptlet_path.clone());
-                            logging::log(
-                                "HOTKEY",
-                                &format!(
-                                    "Registered scriptlet shortcut '{}' for {} (id: {})",
-                                    shortcut, scriptlet.name, scriptlet_hotkey_id
-                                ),
-                            );
-                        }
-                        Err(e) => {
-                            logging::log(
-                                "HOTKEY",
-                                &format!(
-                                    "{} (scriptlet: {})",
-                                    format_hotkey_error(&e, shortcut),
-                                    scriptlet.name
-                                ),
-                            );
-                        }
-                    }
+                let path = scriptlet.file_path.clone().unwrap_or_else(|| scriptlet.name.clone());
+                if register_script_hotkey_internal(&manager_guard, &path, shortcut, &scriptlet.name).is_some() {
+                    script_count += 1;
                 }
             }
         }
 
-        logging::log(
-            "HOTKEY",
-            &format!(
-                "Registered {} script/scriptlet shortcuts",
-                script_hotkey_map.len()
-            ),
-        );
+        logging::log("HOTKEY", &format!("Registered {} script/scriptlet shortcuts", script_count));
 
-        // Drop the manager guard before entering event loop
-        // This allows update_hotkeys to acquire the lock for hot-reload
+        // Log routing table summary
+        {
+            let routes_guard = routes().read().unwrap();
+            logging::log("HOTKEY", &format!(
+                "Routing table: main={:?}, notes={:?}, ai={:?}, scripts={}",
+                routes_guard.main_id, routes_guard.notes_id, routes_guard.ai_id,
+                routes_guard.script_paths.len()
+            ));
+        }
+
         drop(manager_guard);
-
         let receiver = GlobalHotKeyEvent::receiver();
-
-        // Log all registered hotkey IDs for debugging
-        logging::log(
-            "HOTKEY",
-            &format!(
-                "Hotkey ID map: main={}, notes={}, ai={}",
-                main_hotkey_id, notes_hotkey_id, ai_hotkey_id
-            ),
-        );
 
         loop {
             if let Ok(event) = receiver.recv() {
-                // Only respond to key PRESS, not release
                 if event.state != HotKeyState::Pressed {
                     continue;
                 }
 
-                // Read current IDs from atomics (support hot-reload)
-                let current_main_id = MAIN_HOTKEY_ID.load(Ordering::SeqCst);
-                let current_notes_id = NOTES_HOTKEY_ID.load(Ordering::SeqCst);
-                let current_ai_id = AI_HOTKEY_ID.load(Ordering::SeqCst);
+                // Look up action in unified routing table (fast read lock)
+                let action = {
+                    let routes_guard = routes().read().unwrap();
+                    routes_guard.get_action(event.id)
+                };
 
-                // Log EVERY hotkey event with its ID for debugging
-                logging::log(
-                    "HOTKEY",
-                    &format!(
-                        "Received event id={} (main={}, notes={}, ai={})",
-                        event.id, current_main_id, current_notes_id, current_ai_id
-                    ),
-                );
-
-                // Check if it's the main app hotkey
-                if event.id == current_main_id {
-                    let count = HOTKEY_TRIGGER_COUNT.fetch_add(1, Ordering::SeqCst);
-                    // Send via async_channel for immediate event-driven handling
-                    if hotkey_channel().0.send_blocking(()).is_err() {
-                        logging::log("HOTKEY", "Hotkey channel closed, cannot send");
+                match action {
+                    Some(HotkeyAction::Main) => {
+                        let count = HOTKEY_TRIGGER_COUNT.fetch_add(1, Ordering::Relaxed);
+                        // NON-BLOCKING: Use try_send to prevent hotkey thread from blocking
+                        if hotkey_channel().0.try_send(()).is_err() {
+                            logging::log("HOTKEY", "Main hotkey channel full/closed");
+                        }
+                        logging::log("HOTKEY", &format!("Main hotkey pressed (trigger #{})", count + 1));
                     }
-                    logging::log(
-                        "HOTKEY",
-                        &format!("Main hotkey pressed (trigger #{})", count + 1),
-                    );
-                }
-                // Check if it's the notes hotkey - dispatch directly to main thread via GCD
-                else if event.id == current_notes_id {
-                    logging::log(
-                        "HOTKEY",
-                        "Notes hotkey pressed - dispatching to main thread",
-                    );
-                    dispatch_notes_hotkey();
-                }
-                // Check if it's the AI hotkey - dispatch directly to main thread via GCD
-                else if event.id == current_ai_id {
-                    logging::log("HOTKEY", "AI hotkey pressed - dispatching to main thread");
-                    dispatch_ai_hotkey();
-                }
-                // Check if it's a script shortcut
-                else if let Some(script_path) = script_hotkey_map.get(&event.id) {
-                    logging::log(
-                        "HOTKEY",
-                        &format!("Script shortcut triggered: {}", script_path),
-                    );
-                    // Send the script path to be executed
-                    if script_hotkey_channel()
-                        .0
-                        .send_blocking(script_path.clone())
-                        .is_err()
-                    {
-                        logging::log("HOTKEY", "Script hotkey channel closed, cannot send");
+                    Some(HotkeyAction::Notes) => {
+                        logging::log("HOTKEY", "Notes hotkey pressed - dispatching to main thread");
+                        dispatch_notes_hotkey();
+                    }
+                    Some(HotkeyAction::Ai) => {
+                        logging::log("HOTKEY", "AI hotkey pressed - dispatching to main thread");
+                        dispatch_ai_hotkey();
+                    }
+                    Some(HotkeyAction::Script(path)) => {
+                        logging::log("HOTKEY", &format!("Script shortcut triggered: {}", path));
+                        // NON-BLOCKING: Use try_send to prevent hotkey thread from blocking
+                        if script_hotkey_channel().0.try_send(path.clone()).is_err() {
+                            logging::log("HOTKEY", &format!("Script channel full/closed for {}", path));
+                        }
+                    }
+                    None => {
+                        // Unknown hotkey ID - can happen during hot-reload transitions
+                        logging::log("HOTKEY", &format!("Unknown hotkey event id={}", event.id));
                     }
                 }
             }
@@ -1169,6 +1020,107 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
 mod tests {
     use super::*;
     use async_channel::TryRecvError;
+
+    // =============================================================================
+    // Unified Routing Table Tests
+    // =============================================================================
+    mod routing_table_tests {
+        use super::*;
+
+        #[test]
+        fn test_hotkey_routes_new() {
+            let routes = HotkeyRoutes::new();
+            assert!(routes.routes.is_empty());
+            assert!(routes.script_paths.is_empty());
+            assert!(routes.main_id.is_none());
+            assert!(routes.notes_id.is_none());
+            assert!(routes.ai_id.is_none());
+        }
+
+        #[test]
+        fn test_add_main_route() {
+            let mut routes = HotkeyRoutes::new();
+            let hotkey = HotKey::new(Some(Modifiers::META), Code::Semicolon);
+            let entry = RegisteredHotkey {
+                hotkey,
+                action: HotkeyAction::Main,
+                display: "cmd+;".to_string(),
+            };
+            routes.add_route(hotkey.id(), entry);
+
+            assert_eq!(routes.main_id, Some(hotkey.id()));
+            assert!(routes.routes.contains_key(&hotkey.id()));
+            assert_eq!(routes.get_action(hotkey.id()), Some(HotkeyAction::Main));
+        }
+
+        #[test]
+        fn test_add_script_route() {
+            let mut routes = HotkeyRoutes::new();
+            let hotkey = HotKey::new(Some(Modifiers::META | Modifiers::SHIFT), Code::KeyT);
+            let path = "/test/script.ts".to_string();
+            let entry = RegisteredHotkey {
+                hotkey,
+                action: HotkeyAction::Script(path.clone()),
+                display: "cmd+shift+t".to_string(),
+            };
+            routes.add_route(hotkey.id(), entry);
+
+            assert_eq!(routes.script_paths.get(&path), Some(&hotkey.id()));
+            assert_eq!(routes.get_script_id(&path), Some(hotkey.id()));
+            assert_eq!(routes.get_action(hotkey.id()), Some(HotkeyAction::Script(path)));
+        }
+
+        #[test]
+        fn test_remove_route() {
+            let mut routes = HotkeyRoutes::new();
+            let hotkey = HotKey::new(Some(Modifiers::META), Code::KeyN);
+            let entry = RegisteredHotkey {
+                hotkey,
+                action: HotkeyAction::Notes,
+                display: "cmd+n".to_string(),
+            };
+            routes.add_route(hotkey.id(), entry);
+            assert!(routes.notes_id.is_some());
+
+            let removed = routes.remove_route(hotkey.id());
+            assert!(removed.is_some());
+            assert!(routes.notes_id.is_none());
+            assert!(routes.get_action(hotkey.id()).is_none());
+        }
+
+        #[test]
+        fn test_remove_script_route() {
+            let mut routes = HotkeyRoutes::new();
+            let hotkey = HotKey::new(Some(Modifiers::META), Code::KeyS);
+            let path = "/test/script.ts".to_string();
+            let entry = RegisteredHotkey {
+                hotkey,
+                action: HotkeyAction::Script(path.clone()),
+                display: "cmd+s".to_string(),
+            };
+            routes.add_route(hotkey.id(), entry);
+            assert!(routes.script_paths.contains_key(&path));
+
+            routes.remove_route(hotkey.id());
+            assert!(!routes.script_paths.contains_key(&path));
+        }
+
+        #[test]
+        fn test_hotkey_action_equality() {
+            assert_eq!(HotkeyAction::Main, HotkeyAction::Main);
+            assert_eq!(HotkeyAction::Notes, HotkeyAction::Notes);
+            assert_eq!(HotkeyAction::Ai, HotkeyAction::Ai);
+            assert_eq!(
+                HotkeyAction::Script("/a.ts".to_string()),
+                HotkeyAction::Script("/a.ts".to_string())
+            );
+            assert_ne!(HotkeyAction::Main, HotkeyAction::Notes);
+            assert_ne!(
+                HotkeyAction::Script("/a.ts".to_string()),
+                HotkeyAction::Script("/b.ts".to_string())
+            );
+        }
+    }
 
     #[test]
     fn hotkey_channels_are_independent() {
