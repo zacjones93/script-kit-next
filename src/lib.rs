@@ -36,6 +36,7 @@ pub mod utils;
 pub mod warning_banner;
 pub mod window_manager;
 pub mod window_resize;
+pub mod windows;
 
 // Phase 1 system API modules
 pub mod clipboard_history;
