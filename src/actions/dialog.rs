@@ -310,6 +310,13 @@ impl ActionsDialog {
         self.refilter();
     }
 
+    /// Update the theme when hot-reloading
+    /// Call this from the parent when theme changes to ensure dialog reflects new colors
+    pub fn update_theme(&mut self, theme: Arc<theme::Theme>) {
+        logging::log("ACTIONS_THEME", "Theme updated in ActionsDialog");
+        self.theme = theme;
+    }
+
     /// Refilter actions based on current search_text using ranked fuzzy matching.
     ///
     /// Scoring system:

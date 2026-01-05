@@ -346,6 +346,16 @@ impl ScriptListApp {
     fn update_theme(&mut self, cx: &mut Context<Self>) {
         self.theme = theme::load_theme();
         logging::log("APP", "Theme reloaded based on system appearance");
+
+        // Propagate theme to open ActionsDialog (if any) for hot-reload support
+        if let Some(ref dialog) = self.actions_dialog {
+            let theme_arc = std::sync::Arc::new(self.theme.clone());
+            dialog.update(cx, |d, _| {
+                d.update_theme(theme_arc);
+            });
+            logging::log("APP", "Theme propagated to ActionsDialog");
+        }
+
         cx.notify();
     }
 
