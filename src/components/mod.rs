@@ -25,6 +25,8 @@
 
 pub mod button;
 pub mod form_fields;
+#[cfg(test)]
+mod form_fields_tests;
 pub mod prompt_container;
 pub mod prompt_header;
 pub mod scrollbar;

@@ -567,14 +567,17 @@ impl Render for FormTextField {
         let cursor_pos = self.cursor_position;
         let has_value = !self.value.is_empty();
 
-        // Log focus state for debugging
-        crate::logging::log(
-            "FIELD",
-            &format!(
-                "TextField[{}] render: is_focused={}, value='{}'",
-                self.field.name, is_focused, self.value
-            ),
-        );
+        // Only log in debug builds to avoid performance issues in production
+        #[cfg(debug_assertions)]
+        if std::env::var("SCRIPT_KIT_FIELD_DEBUG").is_ok() {
+            crate::logging::log(
+                "FIELD",
+                &format!(
+                    "TextField[{}] render: is_focused={}, value='{}'",
+                    self.field.name, is_focused, self.value
+                ),
+            );
+        }
 
         // Calculate border and background based on focus
         let border_color = if is_focused {
@@ -591,39 +594,31 @@ impl Render for FormTextField {
         let field_name = self.field.name.clone();
         let field_name_for_log = field_name.clone();
 
-        // Keyboard handler for text input
+        // Keyboard handler for text input - use unified handler that properly
+        // handles char indexing, modifiers, selection, and clipboard
         let handle_key = cx.listener(
             move |this: &mut Self,
                   event: &KeyDownEvent,
                   _window: &mut Window,
                   cx: &mut Context<Self>| {
-                let key = event.keystroke.key.as_str();
-                crate::logging::log(
-                    "FIELD",
-                    &format!(
-                        "TextField[{}] key: '{}' (key_char: {:?})",
-                        field_name_for_log, key, event.keystroke.key_char
-                    ),
-                );
-
-                // First handle special keys (backspace, delete, arrows, etc.)
-                this.handle_key_down(event, cx);
-
-                // Then handle printable character input
-                if let Some(ref key_char) = event.keystroke.key_char {
-                    if let Some(ch) = key_char.chars().next() {
-                        if !ch.is_control() {
-                            crate::logging::log(
-                                "FIELD",
-                                &format!(
-                                    "TextField[{}] inserting char: '{}'",
-                                    field_name_for_log, ch
-                                ),
-                            );
-                            this.handle_input(&ch.to_string(), cx);
-                        }
-                    }
+                #[cfg(debug_assertions)]
+                {
+                    let key = event.keystroke.key.as_str();
+                    crate::logging::log(
+                        "FIELD",
+                        &format!(
+                            "TextField[{}] key: '{}' (key_char: {:?})",
+                            field_name_for_log, key, event.keystroke.key_char
+                        ),
+                    );
                 }
+
+                // Use the unified key event handler which:
+                // - Uses char indices (not byte indices) for cursor/selection
+                // - Handles Cmd/Ctrl modifiers correctly (won't insert "v" on Cmd+V)
+                // - Supports selection with Shift+Arrow
+                // - Supports clipboard operations
+                this.handle_key_event(event, cx);
             },
         );
 
@@ -631,6 +626,13 @@ impl Render for FormTextField {
         let cursor_element = div().w(px(2.)).h(rems(1.125)).bg(rgb(colors.cursor));
 
         // Build text content based on value and focus state
+        // IMPORTANT: cursor_pos is a CHAR index, not byte index.
+        // For password fields with bullets ("•" = 3 bytes), we must slice by char.
+        let display_len = char_len(&display_text);
+        let safe_cursor = cursor_pos.min(display_len);
+        let text_before = slice_by_char_range(&display_text, 0, safe_cursor);
+        let text_after = slice_by_char_range(&display_text, safe_cursor, display_len);
+
         let text_content: Div = if has_value {
             let mut content = div()
                 .flex()
@@ -641,7 +643,7 @@ impl Render for FormTextField {
                     div()
                         .text_lg()
                         .text_color(rgb(colors.text))
-                        .child(display_text[..cursor_pos.min(display_text.len())].to_string()),
+                        .child(text_before.to_string()),
                 );
 
             // Cursor (only when focused)
@@ -654,7 +656,7 @@ impl Render for FormTextField {
                 div()
                     .text_lg()
                     .text_color(rgb(colors.text))
-                    .child(display_text[cursor_pos.min(display_text.len())..].to_string()),
+                    .child(text_after.to_string()),
             )
         } else {
             let mut content = div().flex().flex_row().items_center();
@@ -1171,6 +1173,7 @@ impl Render for FormTextArea {
                   _event: &ClickEvent,
                   window: &mut Window,
                   cx: &mut Context<Self>| {
+                #[cfg(debug_assertions)]
                 crate::logging::log(
                     "FIELD",
                     &format!("TextArea[{}] clicked - focusing", field_name_for_log),
@@ -1179,23 +1182,20 @@ impl Render for FormTextArea {
             },
         );
 
-        // Keyboard handler for text input
+        // Keyboard handler for text input - use unified handler that properly
+        // handles char indexing, modifiers, selection, and clipboard
         let handle_key = cx.listener(
             |this: &mut Self,
              event: &KeyDownEvent,
              _window: &mut Window,
              cx: &mut Context<Self>| {
-                // First handle special keys (backspace, delete, arrows, etc.)
-                this.handle_key_down(event, cx);
-
-                // Then handle printable character input
-                if let Some(ref key_char) = event.keystroke.key_char {
-                    if let Some(ch) = key_char.chars().next() {
-                        if !ch.is_control() {
-                            this.handle_input(&ch.to_string(), cx);
-                        }
-                    }
-                }
+                // Use the unified key event handler which:
+                // - Uses char indices (not byte indices) for cursor/selection
+                // - Handles Cmd/Ctrl modifiers correctly (won't insert "v" on Cmd+V)
+                // - Supports selection with Shift+Arrow
+                // - Supports clipboard operations
+                // - Handles Enter to insert newlines
+                this.handle_key_event(event, cx);
             },
         );
 
@@ -1438,13 +1438,7 @@ impl Render for FormCheckbox {
     }
 }
 
-// Note: Tests omitted for this module due to GPUI macro recursion limit issues.
-// The form field components are integration-tested via the main application's
-// form prompt rendering.
-//
-// Verified traits:
-// - FormFieldColors: Copy, Clone, Debug, Default
-// - FormFieldState: Clone with get_value()/set_value() for shared state
-// - FormTextField: Render + Focusable with value state management
-// - FormTextArea: Render + Focusable with multi-line value state
-// - FormCheckbox: Render + Focusable with checked/unchecked toggle
+// Note: Full GPUI component tests require the test harness which has macro recursion
+// limit issues. The form field components are integration-tested via the main
+// application's form prompt rendering. Unit tests for helper functions are in
+// src/components/form_fields_tests.rs.

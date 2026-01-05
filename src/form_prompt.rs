@@ -148,123 +148,29 @@ impl FormPromptState {
     }
 
     /// Handle keyboard input by forwarding to the currently focused field.
+    ///
+    /// This forwards key events to the field's unified `handle_key_event` method
+    /// which properly handles:
+    /// - Char-based cursor positioning (not byte-based)
+    /// - Modifier keys (Cmd/Ctrl+C/V/X/A work correctly)
+    /// - Selection with Shift+Arrow
+    /// - Clipboard operations
     pub fn handle_key_input(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         if let Some((_, entity)) = self.fields.get(self.focused_index) {
-            let key = event.keystroke.key.as_str();
-
             match entity {
                 FormFieldEntity::TextField(e) => {
                     e.update(cx, |field, cx| {
-                        // Handle special keys
-                        match key {
-                            "backspace" => {
-                                if field.cursor_position > 0 {
-                                    field.cursor_position -= 1;
-                                    field.value.remove(field.cursor_position);
-                                    field.state.set_value(field.value.clone());
-                                    cx.notify();
-                                }
-                            }
-                            "delete" => {
-                                if field.cursor_position < field.value.len() {
-                                    field.value.remove(field.cursor_position);
-                                    field.state.set_value(field.value.clone());
-                                    cx.notify();
-                                }
-                            }
-                            "left" | "arrowleft" => {
-                                if field.cursor_position > 0 {
-                                    field.cursor_position -= 1;
-                                    cx.notify();
-                                }
-                            }
-                            "right" | "arrowright" => {
-                                if field.cursor_position < field.value.len() {
-                                    field.cursor_position += 1;
-                                    cx.notify();
-                                }
-                            }
-                            "home" => {
-                                field.cursor_position = 0;
-                                cx.notify();
-                            }
-                            "end" => {
-                                field.cursor_position = field.value.len();
-                                cx.notify();
-                            }
-                            _ => {
-                                // Handle printable character input
-                                if let Some(ref key_char) = event.keystroke.key_char {
-                                    if let Some(ch) = key_char.chars().next() {
-                                        if !ch.is_control() {
-                                            field.value.insert(field.cursor_position, ch);
-                                            field.cursor_position += ch.len_utf8();
-                                            field.state.set_value(field.value.clone());
-                                            cx.notify();
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        field.handle_key_event(event, cx);
                     });
                 }
                 FormFieldEntity::TextArea(e) => {
                     e.update(cx, |field, cx| {
-                        // Handle special keys
-                        match key {
-                            "backspace" => {
-                                if field.cursor_position > 0 {
-                                    field.cursor_position -= 1;
-                                    field.value.remove(field.cursor_position);
-                                    field.state.set_value(field.value.clone());
-                                    cx.notify();
-                                }
-                            }
-                            "delete" => {
-                                if field.cursor_position < field.value.len() {
-                                    field.value.remove(field.cursor_position);
-                                    field.state.set_value(field.value.clone());
-                                    cx.notify();
-                                }
-                            }
-                            "left" | "arrowleft" => {
-                                if field.cursor_position > 0 {
-                                    field.cursor_position -= 1;
-                                    cx.notify();
-                                }
-                            }
-                            "right" | "arrowright" => {
-                                if field.cursor_position < field.value.len() {
-                                    field.cursor_position += 1;
-                                    cx.notify();
-                                }
-                            }
-                            "home" => {
-                                field.cursor_position = 0;
-                                cx.notify();
-                            }
-                            "end" => {
-                                field.cursor_position = field.value.len();
-                                cx.notify();
-                            }
-                            _ => {
-                                // Handle printable character input
-                                if let Some(ref key_char) = event.keystroke.key_char {
-                                    if let Some(ch) = key_char.chars().next() {
-                                        if !ch.is_control() {
-                                            field.value.insert(field.cursor_position, ch);
-                                            field.cursor_position += ch.len_utf8();
-                                            field.state.set_value(field.value.clone());
-                                            cx.notify();
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        field.handle_key_event(event, cx);
                     });
                 }
                 FormFieldEntity::Checkbox(e) => {
                     // Space toggles checkbox
+                    let key = event.keystroke.key.as_str();
                     if key == "space" || key == " " {
                         e.update(cx, |checkbox, cx| {
                             checkbox.toggle(cx);
