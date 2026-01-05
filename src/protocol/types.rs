@@ -4,6 +4,7 @@
 //! - Choice, Field for prompts
 //! - Clipboard, Keyboard, Mouse action types
 //! - ExecOptions, MouseEventData
+//! - SubmitValue for JSON-capable submit values
 //! - ScriptletData, ProtocolAction
 //! - Element types for UI querying
 //! - Error data types
@@ -11,6 +12,112 @@
 use serde::{Deserialize, Serialize};
 
 use super::semantic_id::{generate_semantic_id, generate_semantic_id_named};
+
+// ============================================================
+// SUBMIT VALUE TYPE
+// ============================================================
+
+/// A submit value that can be either a string or arbitrary JSON.
+///
+/// This type provides backwards-compatible handling of submit values:
+/// - Old scripts sending `"value": "text"` deserialize as `Text("text")`
+/// - New scripts sending `"value": ["a", "b"]` or `"value": {...}` deserialize as `Json(...)`
+///
+/// The untagged serde representation means no type discrimination field is needed;
+/// strings are tried first, then arbitrary JSON.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum SubmitValue {
+    /// A simple string value (backwards compatible with Option<String>)
+    Text(String),
+    /// An arbitrary JSON value (for arrays, objects, numbers, booleans, null)
+    Json(serde_json::Value),
+}
+
+impl SubmitValue {
+    /// Create a text value
+    pub fn text(s: impl Into<String>) -> Self {
+        SubmitValue::Text(s.into())
+    }
+
+    /// Create a JSON value
+    pub fn json(v: serde_json::Value) -> Self {
+        SubmitValue::Json(v)
+    }
+
+    /// Try to get the value as a string.
+    /// Returns Some for Text variant, None for Json variant.
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            SubmitValue::Text(s) => Some(s),
+            SubmitValue::Json(_) => None,
+        }
+    }
+
+    /// Convert to a string representation.
+    /// - Text: returns the string
+    /// - Json: returns JSON-serialized string
+    pub fn to_string_repr(&self) -> String {
+        match self {
+            SubmitValue::Text(s) => s.clone(),
+            SubmitValue::Json(v) => serde_json::to_string(v).unwrap_or_default(),
+        }
+    }
+
+    /// Convert to an Option<String> for backwards compatibility.
+    /// - Text: returns Some(string)
+    /// - Json: returns Some(json_serialized)
+    pub fn to_option_string(&self) -> Option<String> {
+        Some(self.to_string_repr())
+    }
+
+    /// Check if this is a text value
+    pub fn is_text(&self) -> bool {
+        matches!(self, SubmitValue::Text(_))
+    }
+
+    /// Check if this is a JSON value
+    pub fn is_json(&self) -> bool {
+        matches!(self, SubmitValue::Json(_))
+    }
+
+    /// Get the underlying serde_json::Value
+    pub fn to_json_value(&self) -> serde_json::Value {
+        match self {
+            SubmitValue::Text(s) => serde_json::Value::String(s.clone()),
+            SubmitValue::Json(v) => v.clone(),
+        }
+    }
+}
+
+impl From<String> for SubmitValue {
+    fn from(s: String) -> Self {
+        SubmitValue::Text(s)
+    }
+}
+
+impl From<&str> for SubmitValue {
+    fn from(s: &str) -> Self {
+        SubmitValue::Text(s.to_string())
+    }
+}
+
+impl From<serde_json::Value> for SubmitValue {
+    fn from(v: serde_json::Value) -> Self {
+        // If it's a string JSON value, convert to Text for consistency
+        if let serde_json::Value::String(s) = v {
+            SubmitValue::Text(s)
+        } else {
+            SubmitValue::Json(v)
+        }
+    }
+}
+
+impl Default for SubmitValue {
+    fn default() -> Self {
+        SubmitValue::Text(String::new())
+    }
+}
 
 /// A choice option for arg() prompts
 ///
@@ -1361,5 +1468,133 @@ mod tests {
         // newField should still be in the output
         assert!(serialized.contains("newField"));
         assert!(serialized.contains("preserved"));
+    }
+
+    // ============================================================
+    // SubmitValue Tests
+    // ============================================================
+
+    #[test]
+    fn test_submit_value_text() {
+        let val = SubmitValue::text("hello");
+        assert!(val.is_text());
+        assert!(!val.is_json());
+        assert_eq!(val.as_str(), Some("hello"));
+        assert_eq!(val.to_string_repr(), "hello");
+    }
+
+    #[test]
+    fn test_submit_value_json_array() {
+        let arr = serde_json::json!(["a", "b", "c"]);
+        let val = SubmitValue::json(arr);
+        assert!(val.is_json());
+        assert!(!val.is_text());
+        assert!(val.as_str().is_none());
+        assert_eq!(val.to_string_repr(), r#"["a","b","c"]"#);
+    }
+
+    #[test]
+    fn test_submit_value_json_object() {
+        let obj = serde_json::json!({"name": "test", "count": 42});
+        let val = SubmitValue::json(obj);
+        assert!(val.is_json());
+        // to_string_repr should serialize to JSON
+        let repr = val.to_string_repr();
+        assert!(repr.contains("name"));
+        assert!(repr.contains("test"));
+        assert!(repr.contains("42"));
+    }
+
+    #[test]
+    fn test_submit_value_deserialize_string() {
+        // Old format: plain string
+        let json = r#""hello world""#;
+        let val: SubmitValue = serde_json::from_str(json).unwrap();
+        assert!(val.is_text());
+        assert_eq!(val.as_str(), Some("hello world"));
+    }
+
+    #[test]
+    fn test_submit_value_deserialize_array() {
+        // New format: JSON array (for multi-select)
+        let json = r#"["apple","banana"]"#;
+        let val: SubmitValue = serde_json::from_str(json).unwrap();
+        assert!(val.is_json());
+        match val {
+            SubmitValue::Json(v) => {
+                assert!(v.is_array());
+                assert_eq!(v.as_array().unwrap().len(), 2);
+            }
+            _ => panic!("Expected Json variant"),
+        }
+    }
+
+    #[test]
+    fn test_submit_value_deserialize_object() {
+        // New format: JSON object (for forms)
+        let json = r#"{"field1":"value1","field2":123}"#;
+        let val: SubmitValue = serde_json::from_str(json).unwrap();
+        assert!(val.is_json());
+        match val {
+            SubmitValue::Json(v) => {
+                assert!(v.is_object());
+                let obj = v.as_object().unwrap();
+                assert_eq!(obj.get("field1").unwrap(), "value1");
+            }
+            _ => panic!("Expected Json variant"),
+        }
+    }
+
+    #[test]
+    fn test_submit_value_roundtrip_text() {
+        let original = SubmitValue::text("hello");
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: SubmitValue = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, restored);
+    }
+
+    #[test]
+    fn test_submit_value_roundtrip_json() {
+        let original = SubmitValue::json(serde_json::json!(["x", "y", "z"]));
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: SubmitValue = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, restored);
+    }
+
+    #[test]
+    fn test_submit_value_from_string() {
+        let val: SubmitValue = "test".into();
+        assert!(val.is_text());
+        assert_eq!(val.as_str(), Some("test"));
+    }
+
+    #[test]
+    fn test_submit_value_from_json_value() {
+        // JSON string should become Text
+        let val: SubmitValue = serde_json::Value::String("hello".to_string()).into();
+        assert!(val.is_text());
+        assert_eq!(val.as_str(), Some("hello"));
+
+        // JSON array should become Json
+        let val: SubmitValue = serde_json::json!([1, 2, 3]).into();
+        assert!(val.is_json());
+    }
+
+    #[test]
+    fn test_submit_value_to_option_string() {
+        let text_val = SubmitValue::text("hello");
+        assert_eq!(text_val.to_option_string(), Some("hello".to_string()));
+
+        let json_val = SubmitValue::json(serde_json::json!(["a"]));
+        assert_eq!(json_val.to_option_string(), Some(r#"["a"]"#.to_string()));
+    }
+
+    #[test]
+    fn test_submit_value_to_json_value() {
+        let text_val = SubmitValue::text("hello");
+        assert_eq!(text_val.to_json_value(), serde_json::Value::String("hello".to_string()));
+
+        let json_val = SubmitValue::json(serde_json::json!({"key": "val"}));
+        assert_eq!(json_val.to_json_value(), serde_json::json!({"key": "val"}));
     }
 }
