@@ -308,11 +308,15 @@ impl ScriptListApp {
                                     action.value.clone(),
                                     self.arg_input.text().to_string(),
                                 );
-                                if let Err(e) = sender.send(msg) {
-                                    logging::log(
-                                        "ERROR",
-                                        &format!("Failed to send ActionTriggered: {}", e),
-                                    );
+                                // Use try_send to avoid blocking UI thread
+                                match sender.try_send(msg) {
+                                    Ok(()) => {}
+                                    Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                                        logging::log("WARN", "Response channel full - action trigger dropped");
+                                    }
+                                    Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                                        logging::log("UI", "Response channel disconnected - script exited");
+                                    }
                                 }
                             }
                         } else if let Some(ref value) = action.value {
@@ -329,8 +333,15 @@ impl ScriptListApp {
                                     id: "action".to_string(),
                                     value: Some(value.clone()),
                                 };
-                                if let Err(e) = sender.send(msg) {
-                                    logging::log("ERROR", &format!("Failed to send Submit: {}", e));
+                                // Use try_send to avoid blocking UI thread
+                                match sender.try_send(msg) {
+                                    Ok(()) => {}
+                                    Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                                        logging::log("WARN", "Response channel full - action submit dropped");
+                                    }
+                                    Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                                        logging::log("UI", "Response channel disconnected - script exited");
+                                    }
                                 }
                             }
                         } else {
@@ -375,11 +386,15 @@ impl ScriptListApp {
                             action.value.clone(),
                             self.arg_input.text().to_string(),
                         );
-                        if let Err(e) = sender.send(msg) {
-                            logging::log(
-                                "ERROR",
-                                &format!("Failed to send ActionTriggered: {}", e),
-                            );
+                        // Use try_send to avoid blocking UI thread
+                        match sender.try_send(msg) {
+                            Ok(()) => {}
+                            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                                logging::log("WARN", "Response channel full - action trigger dropped");
+                            }
+                            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                                logging::log("UI", "Response channel disconnected - script exited");
+                            }
                         }
                     }
                 } else if let Some(ref value) = action.value {
@@ -389,8 +404,15 @@ impl ScriptListApp {
                             id: "action".to_string(),
                             value: Some(value.clone()),
                         };
-                        if let Err(e) = sender.send(msg) {
-                            logging::log("ERROR", &format!("Failed to send Submit: {}", e));
+                        // Use try_send to avoid blocking UI thread
+                        match sender.try_send(msg) {
+                            Ok(()) => {}
+                            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                                logging::log("WARN", "Response channel full - action submit dropped");
+                            }
+                            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                                logging::log("UI", "Response channel disconnected - script exited");
+                            }
                         }
                     }
                 }

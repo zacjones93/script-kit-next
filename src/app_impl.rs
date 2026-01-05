@@ -2076,17 +2076,22 @@ impl ScriptListApp {
         logging::log("EXEC", "=== Canceling script execution ===");
 
         // Send cancel message to script (Exit with cancel code)
+        // Use try_send to avoid blocking UI thread during cancellation
         if let Some(ref sender) = self.response_sender {
             // Try to send Exit message to terminate the script cleanly
             let exit_msg = Message::Exit {
                 code: Some(1), // Non-zero code indicates cancellation
                 message: Some("Cancelled by user".to_string()),
             };
-            match sender.send(exit_msg) {
+            match sender.try_send(exit_msg) {
                 Ok(()) => logging::log("EXEC", "Sent Exit message to script"),
-                Err(e) => logging::log(
+                Err(std::sync::mpsc::TrySendError::Full(_)) => logging::log(
                     "EXEC",
-                    &format!("Failed to send Exit: {} (script may have exited)", e),
+                    "Exit message dropped - channel full (script may be stuck)",
+                ),
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => logging::log(
+                    "EXEC",
+                    "Exit message dropped - script already exited",
                 ),
             }
         } else {
@@ -2541,6 +2546,9 @@ impl ScriptListApp {
     }
 
     /// Submit a response to the current prompt
+    ///
+    /// Uses try_send() to avoid blocking the UI thread if the script's input
+    /// channel is full. User-initiated actions should never freeze the UI.
     fn submit_prompt_response(
         &mut self,
         id: String,
@@ -2555,12 +2563,23 @@ impl ScriptListApp {
         let response = Message::Submit { id, value };
 
         if let Some(ref sender) = self.response_sender {
-            match sender.send(response) {
+            // Use try_send to avoid blocking UI thread
+            // If channel is full, the script isn't reading - log warning but don't freeze UI
+            match sender.try_send(response) {
                 Ok(()) => {
                     logging::log("UI", "Response queued for script");
                 }
-                Err(e) => {
-                    logging::log("UI", &format!("Failed to queue response: {}", e));
+                Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                    // Channel is full - script isn't reading stdin fast enough
+                    // This shouldn't happen in normal operation, log as warning
+                    logging::log(
+                        "WARN",
+                        "Response channel full - script may be stuck. Response dropped.",
+                    );
+                }
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                    // Channel disconnected - script has exited
+                    logging::log("UI", "Response channel disconnected - script exited");
                 }
             }
         } else {

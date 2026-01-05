@@ -86,8 +86,15 @@ impl ScriptListApp {
                     std::sync::Arc::new(move |id, value| {
                         if let Some(ref sender) = response_sender {
                             let response = Message::Submit { id, value };
-                            if let Err(e) = sender.send(response) {
-                                logging::log("UI", &format!("Failed to send div response: {}", e));
+                            // Use try_send to avoid blocking UI thread
+                            match sender.try_send(response) {
+                                Ok(()) => {}
+                                Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                                    logging::log("WARN", "Response channel full - div response dropped");
+                                }
+                                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                                    logging::log("UI", "Response channel disconnected - script exited");
+                                }
                             }
                         }
                     });
@@ -176,11 +183,15 @@ impl ScriptListApp {
                     std::sync::Arc::new(move |id, value| {
                         if let Some(ref sender) = response_sender {
                             let response = Message::Submit { id, value };
-                            if let Err(e) = sender.send(response) {
-                                logging::log(
-                                    "UI",
-                                    &format!("Failed to send terminal response: {}", e),
-                                );
+                            // Use try_send to avoid blocking UI thread
+                            match sender.try_send(response) {
+                                Ok(()) => {}
+                                Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                                    logging::log("WARN", "Response channel full - terminal response dropped");
+                                }
+                                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                                    logging::log("UI", "Response channel disconnected - script exited");
+                                }
                             }
                         }
                     });
@@ -238,11 +249,15 @@ impl ScriptListApp {
                     std::sync::Arc::new(move |id, value| {
                         if let Some(ref sender) = response_sender {
                             let response = Message::Submit { id, value };
-                            if let Err(e) = sender.send(response) {
-                                logging::log(
-                                    "UI",
-                                    &format!("Failed to send editor response: {}", e),
-                                );
+                            // Use try_send to avoid blocking UI thread
+                            match sender.try_send(response) {
+                                Ok(()) => {}
+                                Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                                    logging::log("WARN", "Response channel full - editor response dropped");
+                                }
+                                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                                    logging::log("UI", "Response channel disconnected - script exited");
+                                }
                             }
                         }
                     });
@@ -846,10 +861,16 @@ impl ScriptListApp {
                     &format!("Sending state result for request: {}", request_id),
                 );
 
-                // Send the response
+                // Send the response - use try_send to avoid blocking UI
                 if let Some(ref sender) = self.response_sender {
-                    if let Err(e) = sender.send(response) {
-                        logging::log("ERROR", &format!("Failed to send state result: {}", e));
+                    match sender.try_send(response) {
+                        Ok(()) => {}
+                        Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                            logging::log("WARN", "Response channel full - state result dropped");
+                        }
+                        Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                            logging::log("UI", "Response channel disconnected - script exited");
+                        }
                     }
                 } else {
                     logging::log("ERROR", "No response sender available for state result");
@@ -872,13 +893,16 @@ impl ScriptListApp {
                     &format!("Sending layout info result for request: {}", request_id),
                 );
 
-                // Send the response
+                // Send the response - use try_send to avoid blocking UI
                 if let Some(ref sender) = self.response_sender {
-                    if let Err(e) = sender.send(response) {
-                        logging::log(
-                            "ERROR",
-                            &format!("Failed to send layout info result: {}", e),
-                        );
+                    match sender.try_send(response) {
+                        Ok(()) => {}
+                        Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                            logging::log("WARN", "Response channel full - layout info dropped");
+                        }
+                        Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                            logging::log("UI", "Response channel disconnected - script exited");
+                        }
                     }
                 } else {
                     logging::log(
@@ -954,8 +978,15 @@ impl ScriptListApp {
                         );
                         if let Some(ref sender) = response_sender {
                             let response = Message::Submit { id, value };
-                            if let Err(e) = sender.send(response) {
-                                logging::log("UI", &format!("Failed to send path response: {}", e));
+                            // Use try_send to avoid blocking UI thread
+                            match sender.try_send(response) {
+                                Ok(()) => {}
+                                Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                                    logging::log("WARN", "Response channel full - path response dropped");
+                                }
+                                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                                    logging::log("UI", "Response channel disconnected - script exited");
+                                }
                             }
                         }
                     });
@@ -1044,8 +1075,15 @@ impl ScriptListApp {
                     std::sync::Arc::new(move |id, value| {
                         if let Some(ref sender) = response_sender {
                             let response = Message::Submit { id, value };
-                            if let Err(e) = sender.send(response) {
-                                logging::log("UI", &format!("Failed to send env response: {}", e));
+                            // Use try_send to avoid blocking UI thread
+                            match sender.try_send(response) {
+                                Ok(()) => {}
+                                Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                                    logging::log("WARN", "Response channel full - env response dropped");
+                                }
+                                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                                    logging::log("UI", "Response channel disconnected - script exited");
+                                }
                             }
                         }
                     });
@@ -1098,8 +1136,15 @@ impl ScriptListApp {
                     std::sync::Arc::new(move |id, value| {
                         if let Some(ref sender) = response_sender {
                             let response = Message::Submit { id, value };
-                            if let Err(e) = sender.send(response) {
-                                logging::log("UI", &format!("Failed to send drop response: {}", e));
+                            // Use try_send to avoid blocking UI thread
+                            match sender.try_send(response) {
+                                Ok(()) => {}
+                                Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                                    logging::log("WARN", "Response channel full - drop response dropped");
+                                }
+                                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                                    logging::log("UI", "Response channel disconnected - script exited");
+                                }
                             }
                         }
                     });
@@ -1139,11 +1184,15 @@ impl ScriptListApp {
                     std::sync::Arc::new(move |id, value| {
                         if let Some(ref sender) = response_sender {
                             let response = Message::Submit { id, value };
-                            if let Err(e) = sender.send(response) {
-                                logging::log(
-                                    "UI",
-                                    &format!("Failed to send template response: {}", e),
-                                );
+                            // Use try_send to avoid blocking UI thread
+                            match sender.try_send(response) {
+                                Ok(()) => {}
+                                Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                                    logging::log("WARN", "Response channel full - template response dropped");
+                                }
+                                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                                    logging::log("UI", "Response channel disconnected - script exited");
+                                }
                             }
                         }
                     });
@@ -1195,11 +1244,15 @@ impl ScriptListApp {
                     std::sync::Arc::new(move |id, value| {
                         if let Some(ref sender) = response_sender {
                             let response = Message::Submit { id, value };
-                            if let Err(e) = sender.send(response) {
-                                logging::log(
-                                    "UI",
-                                    &format!("Failed to send select response: {}", e),
-                                );
+                            // Use try_send to avoid blocking UI thread
+                            match sender.try_send(response) {
+                                Ok(()) => {}
+                                Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                                    logging::log("WARN", "Response channel full - select response dropped");
+                                }
+                                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                                    logging::log("UI", "Response channel disconnected - script exited");
+                                }
                             }
                         }
                     });
