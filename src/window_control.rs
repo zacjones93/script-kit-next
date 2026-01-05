@@ -249,9 +249,7 @@ fn cf_release(cf: CFTypeRef) {
 /// Returns the same pointer for convenience
 fn cf_retain(cf: CFTypeRef) -> CFTypeRef {
     if !cf.is_null() {
-        unsafe {
-            CFRetain(cf)
-        }
+        unsafe { CFRetain(cf) }
     } else {
         cf
     }
@@ -759,7 +757,10 @@ pub fn get_frontmost_window_of_previous_app() -> Result<Option<WindowInfo>> {
 
             Ok(Some(window_info))
         } else {
-            warn!(target_pid, "No focused or main window found for menu bar owner");
+            warn!(
+                target_pid,
+                "No focused or main window found for menu bar owner"
+            );
             Ok(None)
         }
     }

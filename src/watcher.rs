@@ -380,8 +380,10 @@ impl ScriptWatcher {
     /// Internal watch loop running in background thread
     fn watch_loop(tx: Sender<ScriptReloadEvent>) -> NotifyResult<()> {
         // Expand the scripts and extensions paths (under kit/ subdirectory)
-        let scripts_path = PathBuf::from(shellexpand::tilde("~/.scriptkit/kit/main/scripts").as_ref());
-        let extensions_path = PathBuf::from(shellexpand::tilde("~/.scriptkit/kit/main/extensions").as_ref());
+        let scripts_path =
+            PathBuf::from(shellexpand::tilde("~/.scriptkit/kit/main/scripts").as_ref());
+        let extensions_path =
+            PathBuf::from(shellexpand::tilde("~/.scriptkit/kit/main/extensions").as_ref());
 
         // Track pending events for debouncing (path -> (event_type, timestamp))
         let pending_events: Arc<

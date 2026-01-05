@@ -14,16 +14,23 @@ impl ScriptListApp {
 
         if text.is_empty() {
             // Empty - always reserve cursor space, only show bg when visible
-            return div().flex().flex_row().items_center().child(
-                div()
-                    .w(px(CURSOR_WIDTH))
-                    .h(px(CURSOR_HEIGHT_LG))
-                    .when(is_cursor_visible, |d: gpui::Div| d.bg(rgb(text_primary))),
-            );
+            // Note: height matches the fixed input_height (22px = CURSOR_HEIGHT_LG + 2*CURSOR_MARGIN_Y)
+            return div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .h(px(CURSOR_HEIGHT_LG + (CURSOR_MARGIN_Y * 2.0)))
+                .child(
+                    div()
+                        .w(px(CURSOR_WIDTH))
+                        .h(px(CURSOR_HEIGHT_LG))
+                        .when(is_cursor_visible, |d: gpui::Div| d.bg(rgb(text_primary))),
+                );
         }
 
         if has_selection {
             // With selection: before | selected | after (no cursor shown during selection)
+            // Use fixed height matching the input container for consistent centering
             let selection = self.arg_input.selection();
             let (start, end) = selection.range();
 
@@ -35,6 +42,7 @@ impl ScriptListApp {
                 .flex()
                 .flex_row()
                 .items_center()
+                .h(px(CURSOR_HEIGHT_LG + (CURSOR_MARGIN_Y * 2.0)))
                 .overflow_x_hidden()
                 .when(!before.is_empty(), |d: gpui::Div| {
                     d.child(div().child(before))
@@ -51,6 +59,7 @@ impl ScriptListApp {
         } else {
             // No selection: before cursor | cursor | after cursor
             // Always reserve cursor space to prevent layout shift during blink
+            // Use fixed height matching the input container for consistent centering
             let before: String = chars[..cursor_pos].iter().collect();
             let after: String = chars[cursor_pos..].iter().collect();
 
@@ -58,6 +67,7 @@ impl ScriptListApp {
                 .flex()
                 .flex_row()
                 .items_center()
+                .h(px(CURSOR_HEIGHT_LG + (CURSOR_MARGIN_Y * 2.0)))
                 .overflow_x_hidden()
                 .when(!before.is_empty(), |d: gpui::Div| {
                     d.child(div().child(before))
@@ -376,12 +386,15 @@ impl ScriptListApp {
                     .items_center()
                     .gap(px(HEADER_GAP))
                     // Search input with cursor and selection support
-                    .child(
+                    // Use explicit height matching main menu: CURSOR_HEIGHT_LG + 2*CURSOR_MARGIN_Y = 22px
+                    .child({
+                        let input_height = CURSOR_HEIGHT_LG + (CURSOR_MARGIN_Y * 2.0);
                         div()
                             .flex_1()
                             .flex()
                             .flex_row()
                             .items_center()
+                            .h(px(input_height)) // Fixed height for consistent vertical centering
                             .text_xl()
                             .text_color(if input_is_empty {
                                 rgb(text_muted)
@@ -393,31 +406,34 @@ impl ScriptListApp {
                                 let is_cursor_visible = self.focused_input
                                     == FocusedInput::ArgPrompt
                                     && self.cursor_visible;
-                                // Always render cursor div to reserve space, only show bg when visible
-                                // ALIGNMENT: cursor takes CURSOR_WIDTH + CURSOR_GAP_X space, so we
-                                // apply negative margin to placeholder to align it with typed text
+                                // Both cursor and placeholder in same flex container, centered together
+                                // Use relative positioning for the placeholder to overlay cursor space
                                 d.child(
                                     div()
-                                        .w(px(CURSOR_WIDTH))
-                                        .h(px(CURSOR_HEIGHT_LG))
-                                        .my(px(CURSOR_MARGIN_Y))
-                                        .mr(px(CURSOR_GAP_X))
-                                        .when(is_cursor_visible, |d: gpui::Div| {
-                                            d.bg(rgb(text_primary))
-                                        }),
-                                )
-                                .child(
-                                    div()
-                                        .ml(px(-(CURSOR_WIDTH + CURSOR_GAP_X)))
-                                        .text_color(rgb(text_muted))
-                                        .child(placeholder.clone()),
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .w(px(CURSOR_WIDTH))
+                                                .h(px(CURSOR_HEIGHT_LG))
+                                                .when(is_cursor_visible, |d: gpui::Div| {
+                                                    d.bg(rgb(text_primary))
+                                                }),
+                                        )
+                                        .child(
+                                            div()
+                                                .ml(px(-(CURSOR_WIDTH)))
+                                                .text_color(rgb(text_muted))
+                                                .child(placeholder.clone()),
+                                        ),
                                 )
                             })
                             // When has text: show text with cursor/selection via helper
                             .when(!input_is_empty, |d: gpui::Div| {
                                 d.child(self.render_arg_input_text(text_primary, accent_color))
-                            }),
-                    )
+                            })
+                    })
                     // CLS-FREE ACTIONS AREA: Matches main menu pattern exactly
                     // Both states are always rendered at the same position, visibility toggled via opacity
                     .when(has_actions, |d| {

@@ -549,19 +549,31 @@ impl TermPrompt {
                 } else if is_selected_start {
                     // Selection uses selection background with original foreground
                     (
-                        if is_default_fg { default_fg } else { rgb(fg_u32) },
+                        if is_default_fg {
+                            default_fg
+                        } else {
+                            rgb(fg_u32)
+                        },
                         selection_bg,
                     )
                 } else if !is_default_bg {
                     // Custom background (cell has explicit non-default background)
                     (
-                        if is_default_fg { default_fg } else { rgb(fg_u32) },
+                        if is_default_fg {
+                            default_fg
+                        } else {
+                            rgb(fg_u32)
+                        },
                         rgb(bg_u32),
                     )
                 } else {
                     // Default colors from theme
                     (
-                        if is_default_fg { default_fg } else { rgb(fg_u32) },
+                        if is_default_fg {
+                            default_fg
+                        } else {
+                            rgb(fg_u32)
+                        },
                         default_bg,
                     )
                 };

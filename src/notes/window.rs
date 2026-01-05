@@ -283,9 +283,7 @@ impl NotesApp {
 
         match self.last_save_time {
             None => true,
-            Some(last_save) => {
-                last_save.elapsed() >= Duration::from_millis(Self::SAVE_DEBOUNCE_MS)
-            }
+            Some(last_save) => last_save.elapsed() >= Duration::from_millis(Self::SAVE_DEBOUNCE_MS),
         }
     }
 
@@ -1001,12 +999,10 @@ impl NotesApp {
                     }
                 }
                 // Re-sort notes: pinned first, then by updated_at descending
-                self.notes.sort_by(|a, b| {
-                    match (a.is_pinned, b.is_pinned) {
-                        (true, false) => std::cmp::Ordering::Less,
-                        (false, true) => std::cmp::Ordering::Greater,
-                        _ => b.updated_at.cmp(&a.updated_at),
-                    }
+                self.notes.sort_by(|a, b| match (a.is_pinned, b.is_pinned) {
+                    (true, false) => std::cmp::Ordering::Less,
+                    (false, true) => std::cmp::Ordering::Greater,
+                    _ => b.updated_at.cmp(&a.updated_at),
                 });
                 cx.notify();
             }

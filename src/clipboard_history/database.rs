@@ -153,8 +153,11 @@ pub fn get_connection() -> Result<Arc<Mutex<Connection>>> {
             .context("Failed to add image_width column")?;
         conn.execute("ALTER TABLE history ADD COLUMN image_height INTEGER", [])
             .context("Failed to add image_height column")?;
-        conn.execute("ALTER TABLE history ADD COLUMN byte_size INTEGER DEFAULT 0", [])
-            .context("Failed to add byte_size column")?;
+        conn.execute(
+            "ALTER TABLE history ADD COLUMN byte_size INTEGER DEFAULT 0",
+            [],
+        )
+        .context("Failed to add byte_size column")?;
 
         info!("Migrated clipboard history: added metadata columns");
 
@@ -235,7 +238,10 @@ fn populate_existing_metadata(conn: &Connection) -> Result<()> {
 }
 
 /// Extract metadata from content for efficient storage
-fn extract_metadata(content: &str, content_type: ContentType) -> (Option<String>, Option<u32>, Option<u32>, usize) {
+fn extract_metadata(
+    content: &str,
+    content_type: ContentType,
+) -> (Option<String>, Option<u32>, Option<u32>, usize) {
     let byte_size = content.len();
 
     match content_type {
@@ -291,7 +297,8 @@ pub fn add_entry(content: &str, content_type: ContentType) -> Result<String> {
     }
 
     // Extract metadata for efficient list queries
-    let (text_preview, image_width, image_height, byte_size) = extract_metadata(content, content_type.clone());
+    let (text_preview, image_width, image_height, byte_size) =
+        extract_metadata(content, content_type.clone());
 
     let id = Uuid::new_v4().to_string();
     conn.execute(

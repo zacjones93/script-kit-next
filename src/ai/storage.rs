@@ -1254,10 +1254,7 @@ mod tests {
         // If it fails, it should only be because it's already initialized (which is OK)
         if let Err(ref e) = result1 {
             // This is the old behavior we're fixing - it shouldn't error
-            panic!(
-                "init_ai_db() should be idempotent but got error: {}",
-                e
-            );
+            panic!("init_ai_db() should be idempotent but got error: {}", e);
         }
 
         // Second call should also succeed (idempotent)
@@ -1284,18 +1281,34 @@ mod tests {
 
         // Empty search should return all chats (not error)
         let result = search_chats("");
-        assert!(result.is_ok(), "Empty search should not error: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Empty search should not error: {:?}",
+            result.err()
+        );
 
         // Simple text search should not error (even if no results)
         let result = search_chats("test");
-        assert!(result.is_ok(), "Simple text search should not error: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Simple text search should not error: {:?}",
+            result.err()
+        );
 
         // Search with special characters should not crash
         // (FTS MATCH is fragile with special characters - should fall back gracefully)
         let result = search_chats("test@example.com");
-        assert!(result.is_ok(), "Search with @ should not error: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Search with @ should not error: {:?}",
+            result.err()
+        );
 
         let result = search_chats("foo*bar");
-        assert!(result.is_ok(), "Search with * should not error: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Search with * should not error: {:?}",
+            result.err()
+        );
     }
 }

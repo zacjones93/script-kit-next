@@ -578,7 +578,10 @@ mod tests {
 
         // Should use ~/.scriptkit/ paths
         let home = dirs::home_dir().unwrap();
-        assert_eq!(manager.main_pid_path, home.join(".scriptkit/script-kit.pid"));
+        assert_eq!(
+            manager.main_pid_path,
+            home.join(".scriptkit/script-kit.pid")
+        );
         assert_eq!(
             manager.active_pids_path,
             home.join(".scriptkit/active-bun-pids.json")

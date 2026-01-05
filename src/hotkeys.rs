@@ -65,11 +65,7 @@ impl ScriptHotkeyManager {
                     )
                 }
                 HotkeyError::OsError(os_err) => {
-                    anyhow::anyhow!(
-                        "OS error registering hotkey '{}': {}",
-                        shortcut,
-                        os_err
-                    )
+                    anyhow::anyhow!("OS error registering hotkey '{}': {}", shortcut, os_err)
                 }
                 other => {
                     anyhow::anyhow!("Failed to register hotkey '{}': {}", shortcut, other)
@@ -481,7 +477,10 @@ fn format_hotkey_error(e: &HotkeyError, shortcut_display: &str) -> String {
                 shortcut_display, os_err
             )
         }
-        other => format!("Failed to register hotkey '{}': {}", shortcut_display, other),
+        other => format!(
+            "Failed to register hotkey '{}': {}",
+            shortcut_display, other
+        ),
     }
 }
 

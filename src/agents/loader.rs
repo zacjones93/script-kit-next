@@ -111,7 +111,11 @@ fn extract_kit_from_path(path: &Path, kit_root: &Path) -> Option<String> {
 
     if first == "kit" {
         // New structure: kit/<kit-name>/...
-        components.next()?.as_os_str().to_str().map(|s| s.to_string())
+        components
+            .next()?
+            .as_os_str()
+            .to_str()
+            .map(|s| s.to_string())
     } else {
         // Fallback for old structure (shouldn't happen but be safe)
         Some(first.to_string())
