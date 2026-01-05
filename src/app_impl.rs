@@ -1494,14 +1494,16 @@ impl ScriptListApp {
             let theme_arc = std::sync::Arc::new(self.theme.clone());
             let dialog = cx.new(|cx| {
                 let focus_handle = cx.focus_handle();
-                // Show the search input in the actions dialog
-                // Text input is routed here from main window keyboard events
-                ActionsDialog::with_script(
+                let mut d = ActionsDialog::with_script(
                     focus_handle,
                     std::sync::Arc::new(|_action_id| {}), // Callback handled via main app
                     script_info.clone(),
                     theme_arc,
-                )
+                );
+                // Hide the search input - main header already has the search box
+                // Text input routes to dialog.handle_char() for filtering
+                d.set_hide_search(true);
+                d
             });
 
             // Store the dialog entity for keyboard routing
