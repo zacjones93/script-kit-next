@@ -51,6 +51,52 @@ pub enum GroupedListItem {
     Item(usize),
 }
 
+/// Coerce a selection index to land on a selectable (non-header) row.
+///
+/// When the given index lands on a header or is out of bounds:
+/// 1. First tries searching DOWN to find the next Item
+/// 2. If not found, searches UP to find the previous Item
+/// 3. If still not found (list has no items), returns None
+///
+/// This is the canonical way to ensure selection never lands on a header.
+///
+/// # Performance
+/// O(n) worst case, but typically O(1) since headers are sparse.
+///
+/// # Returns
+/// - `Some(index)` - Valid selectable index
+/// - `None` - No selectable items exist (list is empty or contains only headers)
+pub fn coerce_selection(rows: &[GroupedListItem], ix: usize) -> Option<usize> {
+    if rows.is_empty() {
+        return None;
+    }
+
+    // Clamp to valid range first
+    let ix = ix.min(rows.len() - 1);
+
+    // If already on a selectable item, done
+    if matches!(rows[ix], GroupedListItem::Item(_)) {
+        return Some(ix);
+    }
+
+    // Search down for next selectable
+    for (j, item) in rows.iter().enumerate().skip(ix + 1) {
+        if matches!(item, GroupedListItem::Item(_)) {
+            return Some(j);
+        }
+    }
+
+    // Search up for previous selectable
+    for (j, item) in rows.iter().enumerate().take(ix).rev() {
+        if matches!(item, GroupedListItem::Item(_)) {
+            return Some(j);
+        }
+    }
+
+    // No selectable items found
+    None
+}
+
 /// Pre-computed grouped list state for efficient navigation
 ///
 /// This struct caches header positions and total counts to avoid expensive

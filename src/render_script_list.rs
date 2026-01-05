@@ -32,21 +32,13 @@ impl ScriptListApp {
         // ============================================================
 
         // Handle edge cases - keep selected_index in valid bounds
-        // Also skip section headers when adjusting bounds
+        // Use coerce_selection which tries down first, then up, handles all edge cases
         if item_count > 0 {
-            if self.selected_index >= item_count {
-                self.selected_index = item_count.saturating_sub(1);
-            }
-            // If we land on a section header, move to first valid item
-            if let Some(GroupedListItem::SectionHeader(_)) = grouped_items.get(self.selected_index)
-            {
-                // Move down to find first Item
-                for (i, item) in grouped_items.iter().enumerate().skip(self.selected_index) {
-                    if matches!(item, GroupedListItem::Item(_)) {
-                        self.selected_index = i;
-                        break;
-                    }
-                }
+            if let Some(valid_idx) = list_item::coerce_selection(&grouped_items, self.selected_index) {
+                self.selected_index = valid_idx;
+            } else {
+                // No selectable items (list is all headers) - set to 0 as fallback
+                self.selected_index = 0;
             }
         }
 
