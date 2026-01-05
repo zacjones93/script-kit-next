@@ -16,6 +16,48 @@ use super::types::*;
 #[allow(clippy::large_enum_variant)]
 pub enum Message {
     // ============================================================
+    // PROTOCOL HANDSHAKE
+    // ============================================================
+
+    /// Protocol version negotiation request (SDK → App)
+    ///
+    /// Optional handshake message sent at session start.
+    /// If not sent, app assumes legacy protocol with default capabilities.
+    ///
+    /// # Example
+    /// ```json
+    /// {"type":"hello","protocol":1,"sdkVersion":"1.0.0","capabilities":["submitJson","semanticIdV2"]}
+    /// ```
+    #[serde(rename = "hello")]
+    Hello {
+        /// Protocol version number (starts at 1)
+        protocol: u32,
+        /// SDK version string (e.g., "1.0.0")
+        #[serde(rename = "sdkVersion")]
+        sdk_version: String,
+        /// List of capability flags the SDK supports
+        #[serde(default)]
+        capabilities: Vec<String>,
+    },
+
+    /// Protocol version negotiation response (App → SDK)
+    ///
+    /// Sent in response to Hello, confirms negotiated capabilities.
+    ///
+    /// # Example
+    /// ```json
+    /// {"type":"helloAck","protocol":1,"capabilities":["submitJson"]}
+    /// ```
+    #[serde(rename = "helloAck")]
+    HelloAck {
+        /// Protocol version number the app supports
+        protocol: u32,
+        /// List of capability flags the app confirms it supports
+        #[serde(default)]
+        capabilities: Vec<String>,
+    },
+
+    // ============================================================
     // CORE PROMPTS (existing)
     // ============================================================
     /// Script sends arg prompt with choices and optional actions
@@ -892,7 +934,75 @@ pub enum Message {
     },
 }
 
+/// Known protocol capability flags
+///
+/// These constants represent the capability flags that can be exchanged
+/// during the Hello/HelloAck handshake.
+pub mod capabilities {
+    /// Submit values can be JSON (arrays, objects) not just strings
+    pub const SUBMIT_JSON: &str = "submitJson";
+    /// Semantic IDs use key-based format when key field is present
+    pub const SEMANTIC_ID_V2: &str = "semanticIdV2";
+    /// Unknown message types are gracefully handled (not errors)
+    pub const UNKNOWN_TYPE_OK: &str = "unknownTypeOk";
+    /// Forward-compatibility: extra fields preserved via flatten
+    pub const FORWARD_COMPAT: &str = "forwardCompat";
+    /// Stable Choice.key field for deterministic IDs
+    pub const CHOICE_KEY: &str = "choiceKey";
+    /// MouseData struct instead of untagged enum
+    pub const MOUSE_DATA_V2: &str = "mouseDataV2";
+}
+
 impl Message {
+    // ============================================================
+    // PROTOCOL HANDSHAKE CONSTRUCTORS
+    // ============================================================
+
+    /// Create a Hello handshake message (SDK → App)
+    ///
+    /// # Arguments
+    /// * `protocol` - Protocol version number (typically 1)
+    /// * `sdk_version` - SDK version string (e.g., "1.0.0")
+    /// * `capabilities` - List of capability flags the SDK supports
+    pub fn hello(protocol: u32, sdk_version: impl Into<String>, capabilities: Vec<String>) -> Self {
+        Message::Hello {
+            protocol,
+            sdk_version: sdk_version.into(),
+            capabilities,
+        }
+    }
+
+    /// Create a HelloAck response message (App → SDK)
+    ///
+    /// # Arguments
+    /// * `protocol` - Protocol version number the app supports
+    /// * `capabilities` - List of capability flags the app confirms it supports
+    pub fn hello_ack(protocol: u32, capabilities: Vec<String>) -> Self {
+        Message::HelloAck {
+            protocol,
+            capabilities,
+        }
+    }
+
+    /// Create a HelloAck with all current capabilities enabled
+    pub fn hello_ack_full(protocol: u32) -> Self {
+        Message::HelloAck {
+            protocol,
+            capabilities: vec![
+                capabilities::SUBMIT_JSON.to_string(),
+                capabilities::SEMANTIC_ID_V2.to_string(),
+                capabilities::UNKNOWN_TYPE_OK.to_string(),
+                capabilities::FORWARD_COMPAT.to_string(),
+                capabilities::CHOICE_KEY.to_string(),
+                capabilities::MOUSE_DATA_V2.to_string(),
+            ],
+        }
+    }
+
+    // ============================================================
+    // PROMPT CONSTRUCTORS
+    // ============================================================
+
     /// Create an arg prompt message
     pub fn arg(id: String, placeholder: String, choices: Vec<Choice>) -> Self {
         Message::Arg {
