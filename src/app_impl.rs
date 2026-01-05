@@ -267,6 +267,8 @@ impl ScriptListApp {
             wheel_accum: 0.0,
             // Window focus tracking - for detecting focus lost and auto-dismissing prompts
             was_window_focused: false,
+            // Pending focus: start with MainFilter since that's what we want focused initially
+            pending_focus: Some(FocusTarget::MainFilter),
             // Scroll stabilization: track last scrolled index for each handle
             last_scrolled_main: None,
             last_scrolled_arg: None,
@@ -359,6 +361,118 @@ impl ScriptListApp {
             &format!("Config reloaded: padding={:?}", self.config.get_padding()),
         );
         cx.notify();
+    }
+
+    /// Request focus for a specific target. Focus will be applied once on the
+    /// next render when window access is available, then cleared.
+    ///
+    /// This avoids the "perpetually enforce focus in render()" anti-pattern.
+    /// Use this instead of directly calling window.focus() from non-render code.
+    #[allow(dead_code)] // Public API for external callers without direct pending_focus access
+    pub fn request_focus(&mut self, target: FocusTarget, cx: &mut Context<Self>) {
+        self.pending_focus = Some(target);
+        cx.notify();
+    }
+
+    /// Apply pending focus if set. Called at the start of render() when window
+    /// is focused. This applies focus exactly once, then clears pending_focus.
+    ///
+    /// Returns true if focus was applied (for logging/debugging).
+    fn apply_pending_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        // Only apply if window is actually focused (avoid focus thrash)
+        if !platform::is_main_window_focused() {
+            return false;
+        }
+
+        let Some(target) = self.pending_focus.take() else {
+            return false;
+        };
+
+        logging::log("FOCUS", &format!("Applying pending focus: {:?}", target));
+
+        match target {
+            FocusTarget::MainFilter => {
+                let input_state = self.gpui_input_state.clone();
+                input_state.update(cx, |state, cx| {
+                    state.focus(window, cx);
+                });
+                self.focused_input = FocusedInput::MainFilter;
+            }
+            FocusTarget::ActionsDialog => {
+                if let Some(ref dialog) = self.actions_dialog {
+                    let fh = dialog.read(cx).focus_handle.clone();
+                    window.focus(&fh, cx);
+                    self.focused_input = FocusedInput::ActionsSearch;
+                }
+            }
+            FocusTarget::EditorPrompt => {
+                if let AppView::EditorPrompt { entity, .. } = &self.current_view {
+                    entity.update(cx, |editor, cx| {
+                        editor.focus(window, cx);
+                    });
+                    // EditorPrompt has its own cursor management
+                    self.focused_input = FocusedInput::None;
+                }
+            }
+            FocusTarget::PathPrompt => {
+                if let AppView::PathPrompt { focus_handle, .. } = &self.current_view {
+                    let fh = focus_handle.clone();
+                    window.focus(&fh, cx);
+                    // PathPrompt has its own cursor management
+                    self.focused_input = FocusedInput::None;
+                }
+            }
+            FocusTarget::FormPrompt => {
+                if let AppView::FormPrompt { entity, .. } = &self.current_view {
+                    let fh = entity.read(cx).focus_handle(cx);
+                    window.focus(&fh, cx);
+                    // FormPrompt has its own focus handling
+                    self.focused_input = FocusedInput::None;
+                }
+            }
+            FocusTarget::SelectPrompt => {
+                if let AppView::SelectPrompt { entity, .. } = &self.current_view {
+                    let fh = entity.read(cx).focus_handle(cx);
+                    window.focus(&fh, cx);
+                    self.focused_input = FocusedInput::None;
+                }
+            }
+            FocusTarget::EnvPrompt => {
+                if let AppView::EnvPrompt { entity, .. } = &self.current_view {
+                    let fh = entity.read(cx).focus_handle(cx);
+                    window.focus(&fh, cx);
+                    self.focused_input = FocusedInput::None;
+                }
+            }
+            FocusTarget::DropPrompt => {
+                if let AppView::DropPrompt { entity, .. } = &self.current_view {
+                    let fh = entity.read(cx).focus_handle(cx);
+                    window.focus(&fh, cx);
+                    self.focused_input = FocusedInput::None;
+                }
+            }
+            FocusTarget::TemplatePrompt => {
+                if let AppView::TemplatePrompt { entity, .. } = &self.current_view {
+                    let fh = entity.read(cx).focus_handle(cx);
+                    window.focus(&fh, cx);
+                    self.focused_input = FocusedInput::None;
+                }
+            }
+            FocusTarget::TermPrompt => {
+                if let AppView::TermPrompt { entity, .. } = &self.current_view {
+                    let fh = entity.read(cx).focus_handle.clone();
+                    window.focus(&fh, cx);
+                    // Terminal handles its own cursor
+                    self.focused_input = FocusedInput::None;
+                }
+            }
+            FocusTarget::AppRoot => {
+                window.focus(&self.focus_handle, cx);
+                self.focused_input = FocusedInput::None;
+            }
+        }
+
+        true
     }
 
     fn refresh_scripts(&mut self, cx: &mut Context<Self>) {
@@ -1312,7 +1426,8 @@ impl ScriptListApp {
             // Close - return focus to main filter
             self.show_actions_popup = false;
             self.actions_dialog = None;
-            self.focus_main_filter(window, cx);
+            self.focused_input = FocusedInput::MainFilter;
+            self.pending_focus = Some(FocusTarget::MainFilter);
             logging::log("FOCUS", "Actions closed, focus returned to MainFilter");
         } else {
             // Open - create dialog entity
@@ -1334,9 +1449,11 @@ impl ScriptListApp {
             // Hide the dialog's built-in search input since header already has search
             dialog.update(cx, |d, _| d.set_hide_search(true));
 
-            // Focus the dialog's internal focus handle
-            let dialog_focus_handle = dialog.read(cx).focus_handle.clone();
+            // Focus the dialog's internal focus handle via pending_focus mechanism
             self.actions_dialog = Some(dialog.clone());
+            self.pending_focus = Some(FocusTarget::ActionsDialog);
+            // Also apply immediately since we have window access
+            let dialog_focus_handle = dialog.read(cx).focus_handle.clone();
             window.focus(&dialog_focus_handle, cx);
             logging::log("FOCUS", "Actions opened, focus moved to ActionsSearch");
         }
@@ -1359,6 +1476,7 @@ impl ScriptListApp {
             self.show_actions_popup = false;
             self.actions_dialog = None;
             self.focused_input = FocusedInput::ArgPrompt;
+            self.pending_focus = Some(FocusTarget::AppRoot); // ArgPrompt uses parent focus
             window.focus(&self.focus_handle, cx);
             logging::log("FOCUS", "Arg actions closed, focus returned to ArgPrompt");
         } else {
@@ -1389,8 +1507,9 @@ impl ScriptListApp {
                     dialog.update(cx, |d, _| d.set_hide_search(true));
 
                     // Focus the dialog's internal focus handle
-                    let dialog_focus_handle = dialog.read(cx).focus_handle.clone();
                     self.actions_dialog = Some(dialog.clone());
+                    self.pending_focus = Some(FocusTarget::ActionsDialog);
+                    let dialog_focus_handle = dialog.read(cx).focus_handle.clone();
                     window.focus(&dialog_focus_handle, cx);
                     logging::log(
                         "FOCUS",
@@ -2348,6 +2467,7 @@ impl ScriptListApp {
         // script exit, causing the cursor to not show in the main filter.
         self.focused_input = FocusedInput::MainFilter;
         self.gpui_input_focused = false;
+        self.pending_focus = Some(FocusTarget::MainFilter);
         logging::log(
             "FOCUS",
             "Reset focused_input to MainFilter for cursor display",

@@ -9,6 +9,7 @@ impl ScriptListApp {
 
         // Close the dialog and return to script list
         self.current_view = AppView::ScriptList;
+        self.pending_focus = Some(FocusTarget::MainFilter);
 
         match action_id.as_str() {
             "create_script" => {

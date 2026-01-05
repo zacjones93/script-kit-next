@@ -546,6 +546,39 @@ enum FocusedInput {
     None,
 }
 
+/// Pending focus target - identifies which element should receive focus
+/// when window access becomes available. This prevents the "perpetual focus
+/// enforcement in render()" anti-pattern that causes focus thrash.
+///
+/// Focus is applied once when pending_focus is set, then cleared.
+/// This mechanism allows non-render code paths (like handle_prompt_message)
+/// to request focus changes that are applied on the next render.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FocusTarget {
+    /// Focus the main filter input (gpui_input_state)
+    MainFilter,
+    /// Focus the app root (self.focus_handle)
+    AppRoot,
+    /// Focus the actions dialog (if open)
+    ActionsDialog,
+    /// Focus the path prompt's focus handle
+    PathPrompt,
+    /// Focus the form prompt (delegates to active field)
+    FormPrompt,
+    /// Focus the editor prompt
+    EditorPrompt,
+    /// Focus the select prompt
+    SelectPrompt,
+    /// Focus the env prompt
+    EnvPrompt,
+    /// Focus the drop prompt
+    DropPrompt,
+    /// Focus the template prompt
+    TemplatePrompt,
+    /// Focus the term prompt
+    TermPrompt,
+}
+
 /// Messages sent from the prompt poller back to the main app
 #[derive(Debug, Clone)]
 enum PromptMessage {
@@ -820,6 +853,9 @@ struct ScriptListApp {
     // Window focus tracking - for detecting focus lost and auto-dismissing prompts
     // When window loses focus while in a dismissable prompt, close and reset
     was_window_focused: bool,
+    /// Pending focus target - when set, focus will be applied once on next render
+    /// then cleared. This avoids the "perpetually enforce focus in render()" anti-pattern.
+    pending_focus: Option<FocusTarget>,
     // Show warning banner when bun is not available
     show_bun_warning: bool,
     // Pending confirmation: when set, the entry with this ID is awaiting confirmation
@@ -896,88 +932,14 @@ impl Render for ScriptListApp {
         }
         self.was_window_focused = is_window_focused;
 
-        // P0-4: Focus handling using reference match (avoids clone for focus check)
-        // Focus handling depends on the view:
-        // - For EditorPrompt: Use its own focus handle (not the parent's)
-        // - For other views: Use the parent's focus handle
-        //
-        // Only enforce focus when the main window is currently focused.
-        if is_window_focused {
-            match &self.current_view {
-                AppView::EditorPrompt { entity, .. } => {
-                    // EditorPrompt uses gpui-component's Input which has its own internal
-                    // focus handle. But if actions dialog is showing, focus the dialog instead.
-                    if self.show_actions_popup {
-                        if let Some(ref dialog) = self.actions_dialog {
-                            let dialog_focus_handle = dialog.read(cx).focus_handle.clone();
-                            let is_focused = dialog_focus_handle.is_focused(window);
-                            if !is_focused {
-                                window.focus(&dialog_focus_handle, cx);
-                            }
-                        }
-                    } else {
-                        entity.update(cx, |editor, cx| {
-                            editor.focus(window, cx);
-                        });
-                    }
-                }
-                AppView::PathPrompt { focus_handle, .. } => {
-                    // PathPrompt has its own focus handle - focus it
-                    // But if actions dialog is showing, focus the dialog instead
-                    if self.show_actions_popup {
-                        if let Some(ref dialog) = self.actions_dialog {
-                            let dialog_focus_handle = dialog.read(cx).focus_handle.clone();
-                            let is_focused = dialog_focus_handle.is_focused(window);
-                            if !is_focused {
-                                window.focus(&dialog_focus_handle, cx);
-                            }
-                        }
-                    } else {
-                        let is_focused = focus_handle.is_focused(window);
-                        if !is_focused {
-                            let fh = focus_handle.clone();
-                            window.focus(&fh, cx);
-                        }
-                    }
-                }
-                AppView::FormPrompt { entity, .. } => {
-                    // FormPrompt uses delegated Focusable - get focus handle from the currently focused field
-                    // This prevents the parent from stealing focus from form text fields
-                    let form_focus_handle = entity.read(cx).focus_handle(cx);
-                    let is_focused = form_focus_handle.is_focused(window);
-                    if !is_focused {
-                        window.focus(&form_focus_handle, cx);
-                    }
-                }
-                AppView::ScriptList => {
-                    self.sync_filter_input_if_needed(window, cx);
+        // Apply pending focus request (if any). This is the new "apply once" mechanism
+        // that replaces the old "perpetually enforce focus in render()" pattern.
+        // Focus is applied exactly once when pending_focus is set, then cleared.
+        self.apply_pending_focus(window, cx);
 
-                    if self.show_actions_popup {
-                        if let Some(ref dialog) = self.actions_dialog {
-                            let dialog_focus_handle = dialog.read(cx).focus_handle.clone();
-                            let is_focused = dialog_focus_handle.is_focused(window);
-                            if !is_focused {
-                                window.focus(&dialog_focus_handle, cx);
-                            }
-                        }
-                    } else {
-                        let input_state = self.gpui_input_state.clone();
-                        let is_focused = input_state.read(cx).focus_handle(cx).is_focused(window);
-                        if !is_focused {
-                            input_state.update(cx, |state, cx| {
-                                state.focus(window, cx);
-                            });
-                        }
-                    }
-                }
-                _ => {
-                    // Other views use the parent's focus handle
-                    let is_focused = self.focus_handle.is_focused(window);
-                    if !is_focused {
-                        window.focus(&self.focus_handle, cx);
-                    }
-                }
-            }
+        // Sync filter input if needed (ScriptList view only)
+        if matches!(self.current_view, AppView::ScriptList) {
+            self.sync_filter_input_if_needed(window, cx);
         }
 
         // NOTE: Prompt messages are now handled via event-driven async_channel listener

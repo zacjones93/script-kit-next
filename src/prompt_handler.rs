@@ -53,6 +53,8 @@ impl ScriptListApp {
                 self.arg_input.clear();
                 self.arg_selected_index = 0;
                 self.focused_input = FocusedInput::ArgPrompt;
+                // Request focus via pending_focus mechanism (will be applied on next render)
+                self.pending_focus = Some(FocusTarget::AppRoot); // ArgPrompt uses parent focus
                 // Resize window based on number of choices
                 let view_type = if choice_count == 0 {
                     ViewType::ArgPromptNoChoices
@@ -124,6 +126,7 @@ impl ScriptListApp {
                 let entity = cx.new(|_| div_prompt);
                 self.current_view = AppView::DivPrompt { id, entity };
                 self.focused_input = FocusedInput::None; // DivPrompt has no text input
+                self.pending_focus = Some(FocusTarget::AppRoot); // DivPrompt uses parent focus
                 defer_resize_to_view(ViewType::DivPrompt, 0, cx);
                 cx.notify();
             }
@@ -143,6 +146,7 @@ impl ScriptListApp {
 
                 self.current_view = AppView::FormPrompt { id, entity };
                 self.focused_input = FocusedInput::None; // FormPrompt has its own focus handling
+                self.pending_focus = Some(FocusTarget::FormPrompt);
 
                 // Resize based on field count (more fields = taller window)
                 let view_type = if field_count > 0 {
@@ -198,6 +202,7 @@ impl ScriptListApp {
                         let entity = cx.new(|_| term_prompt);
                         self.current_view = AppView::TermPrompt { id, entity };
                         self.focused_input = FocusedInput::None; // Terminal handles its own cursor
+                        self.pending_focus = Some(FocusTarget::TermPrompt);
                         defer_resize_to_view(ViewType::TermPrompt, 0, cx);
                         cx.notify();
                     }
@@ -310,6 +315,7 @@ impl ScriptListApp {
                     focus_handle: editor_focus_handle,
                 };
                 self.focused_input = FocusedInput::None; // Editor handles its own focus
+                self.pending_focus = Some(FocusTarget::EditorPrompt);
 
                 defer_resize_to_view(ViewType::EditorPrompt, 0, cx);
                 cx.notify();
@@ -1004,6 +1010,7 @@ impl ScriptListApp {
                     focus_handle,
                 };
                 self.focused_input = FocusedInput::None;
+                self.pending_focus = Some(FocusTarget::PathPrompt);
 
                 // Clear any previous pending action and reset showing state
                 if let Ok(mut guard) = self.pending_path_action.lock() {
@@ -1066,6 +1073,7 @@ impl ScriptListApp {
                 let entity = cx.new(|_| env_prompt);
                 self.current_view = AppView::EnvPrompt { id, entity };
                 self.focused_input = FocusedInput::None; // EnvPrompt has its own focus handling
+                self.pending_focus = Some(FocusTarget::EnvPrompt);
 
                 defer_resize_to_view(ViewType::ArgPromptNoChoices, 0, cx);
                 cx.notify();
@@ -1110,6 +1118,7 @@ impl ScriptListApp {
                 let entity = cx.new(|_| drop_prompt);
                 self.current_view = AppView::DropPrompt { id, entity };
                 self.focused_input = FocusedInput::None;
+                self.pending_focus = Some(FocusTarget::DropPrompt);
 
                 defer_resize_to_view(ViewType::DivPrompt, 0, cx);
                 cx.notify();
@@ -1152,6 +1161,7 @@ impl ScriptListApp {
                 let entity = cx.new(|_| template_prompt);
                 self.current_view = AppView::TemplatePrompt { id, entity };
                 self.focused_input = FocusedInput::None;
+                self.pending_focus = Some(FocusTarget::TemplatePrompt);
 
                 defer_resize_to_view(ViewType::DivPrompt, 0, cx);
                 cx.notify();
@@ -1208,6 +1218,7 @@ impl ScriptListApp {
                 let entity = cx.new(|_| select_prompt);
                 self.current_view = AppView::SelectPrompt { id, entity };
                 self.focused_input = FocusedInput::None; // SelectPrompt has its own focus handling
+                self.pending_focus = Some(FocusTarget::SelectPrompt);
 
                 // Resize window based on number of choices
                 let view_type = if choice_count == 0 {
