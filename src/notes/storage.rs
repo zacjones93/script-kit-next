@@ -44,6 +44,10 @@ pub fn init_notes_db() -> Result<()> {
 
     let conn = Connection::open(&db_path).context("Failed to open notes database")?;
 
+    // Enable WAL mode for better write performance
+    conn.execute_batch("PRAGMA journal_mode=WAL;")
+        .context("Failed to enable WAL mode")?;
+
     // Create tables
     conn.execute_batch(
         r#"
@@ -69,27 +73,41 @@ pub fn init_notes_db() -> Result<()> {
             content='notes',
             content_rowid='rowid'
         );
+        "#,
+    )
+    .context("Failed to create notes tables")?;
 
-        -- Triggers to keep FTS in sync
-        CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
-            INSERT INTO notes_fts(rowid, title, content) 
+    // Drop old triggers if they exist (they fire on ALL updates)
+    // and recreate them to only fire on title/content changes
+    conn.execute_batch(
+        r#"
+        DROP TRIGGER IF EXISTS notes_ai;
+        DROP TRIGGER IF EXISTS notes_ad;
+        DROP TRIGGER IF EXISTS notes_au;
+
+        -- Trigger for INSERT: always sync to FTS
+        CREATE TRIGGER notes_ai AFTER INSERT ON notes BEGIN
+            INSERT INTO notes_fts(rowid, title, content)
             VALUES (NEW.rowid, NEW.title, NEW.content);
         END;
 
-        CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
-            INSERT INTO notes_fts(notes_fts, rowid, title, content) 
+        -- Trigger for DELETE: always sync to FTS
+        CREATE TRIGGER notes_ad AFTER DELETE ON notes BEGIN
+            INSERT INTO notes_fts(notes_fts, rowid, title, content)
             VALUES('delete', OLD.rowid, OLD.title, OLD.content);
         END;
 
-        CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
-            INSERT INTO notes_fts(notes_fts, rowid, title, content) 
+        -- Trigger for UPDATE: only sync when title or content changes
+        -- This prevents FTS churn when toggling pin or other metadata changes
+        CREATE TRIGGER notes_au AFTER UPDATE OF title, content ON notes BEGIN
+            INSERT INTO notes_fts(notes_fts, rowid, title, content)
             VALUES('delete', OLD.rowid, OLD.title, OLD.content);
-            INSERT INTO notes_fts(rowid, title, content) 
+            INSERT INTO notes_fts(rowid, title, content)
             VALUES (NEW.rowid, NEW.title, NEW.content);
         END;
         "#,
     )
-    .context("Failed to create notes tables")?;
+    .context("Failed to create FTS triggers")?;
 
     info!(db_path = %db_path.display(), "Notes database initialized");
 
@@ -236,16 +254,17 @@ pub fn search_notes(query: &str) -> Result<Vec<Note>> {
         .lock()
         .map_err(|e| anyhow::anyhow!("DB lock error: {}", e))?;
 
-    // FTS5 search with highlight
+    // FTS5 search with BM25 ranking
+    // Use bm25() function which returns a negative score (more negative = better match)
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT n.id, n.title, n.content, n.created_at, n.updated_at, 
+            SELECT n.id, n.title, n.content, n.created_at, n.updated_at,
                    n.deleted_at, n.is_pinned, n.sort_order
             FROM notes n
             INNER JOIN notes_fts fts ON n.rowid = fts.rowid
             WHERE notes_fts MATCH ?1 AND n.deleted_at IS NULL
-            ORDER BY rank
+            ORDER BY bm25(notes_fts)
             "#,
         )
         .context("Failed to prepare search query")?;

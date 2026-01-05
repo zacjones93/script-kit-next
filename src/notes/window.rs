@@ -23,6 +23,7 @@ use gpui_component::{
 #[cfg(target_os = "macos")]
 use objc::{msg_send, sel, sel_impl};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tracing::{debug, info};
 
 use super::actions_panel::{
@@ -36,6 +37,12 @@ use crate::watcher::ThemeWatcher;
 /// Global handle to the notes window
 static NOTES_WINDOW: std::sync::OnceLock<std::sync::Mutex<Option<gpui::WindowHandle<Root>>>> =
     std::sync::OnceLock::new();
+
+/// Flag to track if the Notes theme watcher is already running
+/// This ensures we only spawn one theme watcher task regardless of how many times
+/// the window is opened/closed
+static NOTES_THEME_WATCHER_RUNNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// View mode for the notes list
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -138,6 +145,12 @@ pub struct NotesApp {
 
     /// Pending action from browse panel (note id + action)
     pending_browse_action: Arc<Mutex<Option<(NoteId, NoteAction)>>>,
+
+    /// Debounce: Whether the current note has unsaved changes
+    has_unsaved_changes: bool,
+
+    /// Debounce: Last time we saved (to avoid too-frequent saves)
+    last_save_time: Option<Instant>,
 }
 
 impl NotesApp {
@@ -234,31 +247,79 @@ impl NotesApp {
             pending_browse_select: Arc::new(Mutex::new(None)),
             pending_browse_close: Arc::new(Mutex::new(false)),
             pending_browse_action: Arc::new(Mutex::new(None)),
+            has_unsaved_changes: false,
+            last_save_time: None,
+        }
+    }
+
+    /// Debounce interval for saves (in milliseconds)
+    const SAVE_DEBOUNCE_MS: u64 = 300;
+
+    /// Save the current note if it has unsaved changes
+    fn save_current_note(&mut self) {
+        if !self.has_unsaved_changes {
+            return;
+        }
+
+        if let Some(id) = self.selected_note_id {
+            if let Some(note) = self.notes.iter().find(|n| n.id == id) {
+                if let Err(e) = storage::save_note(note) {
+                    tracing::error!(error = %e, "Failed to save note");
+                    return;
+                }
+                debug!(note_id = %id, "Note saved (debounced)");
+            }
+        }
+
+        self.has_unsaved_changes = false;
+        self.last_save_time = Some(Instant::now());
+    }
+
+    /// Check if we should save now (debounce check)
+    fn should_save_now(&self) -> bool {
+        if !self.has_unsaved_changes {
+            return false;
+        }
+
+        match self.last_save_time {
+            None => true,
+            Some(last_save) => {
+                last_save.elapsed() >= Duration::from_millis(Self::SAVE_DEBOUNCE_MS)
+            }
         }
     }
 
     /// Handle editor content changes with auto-resize
     fn on_editor_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let content = self.editor_state.read(cx).value();
+        let content_string = content.to_string();
+
+        // Auto-create a note if user is typing with no note selected
+        // This prevents data loss when users start typing immediately
+        if self.selected_note_id.is_none() && !content_string.is_empty() {
+            info!("Auto-creating note from unselected editor content");
+            let note = Note::with_content(content_string.clone());
+            let id = note.id;
+
+            // Save to storage
+            if let Err(e) = storage::save_note(&note) {
+                tracing::error!(error = %e, "Failed to create auto-generated note");
+                return;
+            }
+
+            // Add to cache and select it
+            self.notes.insert(0, note);
+            self.selected_note_id = Some(id);
+            cx.notify();
+            return;
+        }
+
         if let Some(id) = self.selected_note_id {
-            let content = self.editor_state.read(cx).value();
-            let content_string = content.to_string();
-
-            // Update the note in our cache
+            // Update the note in our cache (in-memory only)
             if let Some(note) = self.notes.iter_mut().find(|n| n.id == id) {
-                let old_title = note.title.clone();
                 note.set_content(content_string.clone());
-                debug!(
-                    note_id = %id,
-                    old_title = %old_title,
-                    new_title = %note.title,
-                    content_preview = %content_string.chars().take(50).collect::<String>(),
-                    "Title updated from content"
-                );
-
-                // Save to storage (debounced in a real implementation)
-                if let Err(e) = storage::save_note(note) {
-                    tracing::error!(error = %e, "Failed to save note");
-                }
+                // Mark as dirty - actual save is debounced
+                self.has_unsaved_changes = true;
             }
 
             // Auto-resize: adjust window height based on content
@@ -405,6 +466,9 @@ impl NotesApp {
 
     /// Select a note for editing
     fn select_note(&mut self, id: NoteId, window: &mut Window, cx: &mut Context<Self>) {
+        // Save any unsaved changes to the current note before switching
+        self.save_current_note();
+
         self.selected_note_id = Some(id);
 
         // Load content into editor
@@ -522,10 +586,13 @@ impl NotesApp {
             if let Some(note) = self.notes.iter().find(|n| n.id == id) {
                 let content = match format {
                     ExportFormat::PlainText => note.content.clone(),
-                    ExportFormat::Markdown => {
-                        format!("# {}\n\n{}", note.title, note.content)
-                    }
+                    // For Markdown, just export the content as-is.
+                    // The title is derived from the first line of content,
+                    // so prepending it would cause duplication.
+                    ExportFormat::Markdown => note.content.clone(),
                     ExportFormat::Html => {
+                        // For HTML, we include proper structure with the title
+                        // and render the content as preformatted text
                         format!(
                             "<!DOCTYPE html>\n<html>\n<head><title>{}</title></head>\n<body>\n<h1>{}</h1>\n<pre>{}</pre>\n</body>\n</html>",
                             note.title, note.title, note.content
@@ -901,9 +968,14 @@ impl NotesApp {
                 })
         });
 
-        // Focus the browse panel
+        // Focus the browse panel and its search input
         let panel_focus_handle = browse_panel.read(cx).focus_handle(cx);
         window.focus(&panel_focus_handle, cx);
+
+        // Focus the search input so user can start typing immediately
+        browse_panel.update(cx, |panel, cx| {
+            panel.focus_search(window, cx);
+        });
 
         self.browse_panel = Some(browse_panel);
         cx.notify();
@@ -928,6 +1000,15 @@ impl NotesApp {
                         tracing::error!(error = %e, "Failed to save note pin state");
                     }
                 }
+                // Re-sort notes: pinned first, then by updated_at descending
+                self.notes.sort_by(|a, b| {
+                    match (a.is_pinned, b.is_pinned) {
+                        (true, false) => std::cmp::Ordering::Less,
+                        (false, true) => std::cmp::Ordering::Greater,
+                        _ => b.updated_at.cmp(&a.updated_at),
+                    }
+                });
+                cx.notify();
             }
             NoteAction::Delete => {
                 let current_id = self.selected_note_id;
@@ -1464,12 +1545,44 @@ impl Focusable for NotesApp {
     }
 }
 
+impl Drop for NotesApp {
+    fn drop(&mut self) {
+        // Save any unsaved changes before closing
+        if self.has_unsaved_changes {
+            if let Some(id) = self.selected_note_id {
+                if let Some(note) = self.notes.iter().find(|n| n.id == id) {
+                    if let Err(e) = storage::save_note(note) {
+                        tracing::error!(error = %e, "Failed to save note on close");
+                    } else {
+                        debug!(note_id = %id, "Note saved on window close");
+                    }
+                }
+            }
+        }
+
+        // Clear the global window handle when NotesApp is dropped
+        // This ensures is_notes_window_open() returns false after the window closes
+        // regardless of how it was closed (Cmd+W, traffic light, toggle, etc.)
+        if let Some(window_handle) = NOTES_WINDOW.get() {
+            if let Ok(mut guard) = window_handle.lock() {
+                *guard = None;
+                debug!("NotesApp dropped - cleared global window handle");
+            }
+        }
+    }
+}
+
 impl Render for NotesApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Detect if user manually resized the window (disables auto-sizing)
         self.detect_manual_resize(window);
         self.drain_pending_action(window, cx);
         self.drain_pending_browse_actions(window, cx);
+
+        // Debounced save: check if we should save now
+        if self.should_save_now() {
+            self.save_current_note();
+        }
 
         let show_actions = self.show_actions_panel;
         let show_browse = self.show_browse_panel;
@@ -1832,27 +1945,43 @@ pub fn open_notes_window(cx: &mut App) -> Result<()> {
 
     // Theme hot-reload watcher for Notes window
     // Spawns a background task that watches ~/.sk/kit/theme.json for changes
-    if let Some(notes_app) = notes_app_holder.lock().unwrap().clone() {
-        let notes_app_for_theme = notes_app.clone();
+    // Only spawns once to prevent task leaks across window open/close cycles
+    if !NOTES_THEME_WATCHER_RUNNING.swap(true, std::sync::atomic::Ordering::SeqCst) {
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {
             let (mut theme_watcher, theme_rx) = ThemeWatcher::new();
             if theme_watcher.start().is_err() {
+                NOTES_THEME_WATCHER_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
                 return;
             }
+            info!("Notes theme watcher started (singleton)");
             loop {
                 gpui::Timer::after(std::time::Duration::from_millis(200)).await;
                 if theme_rx.try_recv().is_ok() {
                     info!("Notes window: theme.json changed, reloading");
-                    let _ = cx.update(|cx| {
+                    let update_result = cx.update(|cx| {
                         // Re-sync gpui-component theme with updated Script Kit theme
                         crate::theme::sync_gpui_component_theme(cx);
-                        // Notify the Notes window to re-render with new colors
-                        notes_app_for_theme.update(cx, |_app, cx| {
-                            cx.notify();
-                        });
+
+                        // Notify the Notes window to re-render with new colors (if open)
+                        let window_handle =
+                            NOTES_WINDOW.get_or_init(|| std::sync::Mutex::new(None));
+                        if let Ok(guard) = window_handle.lock() {
+                            if let Some(ref handle) = *guard {
+                                let _ = handle.update(cx, |_root, _window, cx| {
+                                    // Notify to trigger re-render with new theme colors
+                                    cx.notify();
+                                });
+                            }
+                        }
                     });
+
+                    // If the update failed, the app may be shutting down
+                    if update_result.is_err() {
+                        break;
+                    }
                 }
             }
+            NOTES_THEME_WATCHER_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
         })
         .detach();
     }

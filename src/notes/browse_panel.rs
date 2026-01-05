@@ -153,6 +153,13 @@ impl BrowsePanel {
         self
     }
 
+    /// Focus the search input
+    pub fn focus_search(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search_state.update(cx, |state, cx| {
+            state.focus(window, cx);
+        });
+    }
+
     /// Set the callback for note actions
     pub fn on_action(mut self, callback: impl Fn(NoteId, NoteAction) + 'static) -> Self {
         self.on_action = Some(Box::new(callback));

@@ -1512,6 +1512,20 @@ impl Focusable for AiApp {
     }
 }
 
+impl Drop for AiApp {
+    fn drop(&mut self) {
+        // Clear the global window handle when AiApp is dropped
+        // This ensures is_ai_window_open() returns false after the window closes
+        // regardless of how it was closed (Cmd+W, traffic light, toggle, etc.)
+        if let Some(window_handle) = AI_WINDOW.get() {
+            if let Ok(mut guard) = window_handle.lock() {
+                *guard = None;
+                tracing::debug!("AiApp dropped - cleared global window handle");
+            }
+        }
+    }
+}
+
 impl Render for AiApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let box_shadows = self.create_box_shadows();
