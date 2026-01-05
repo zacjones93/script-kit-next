@@ -31,6 +31,7 @@ pub use types::ScriptInfo;
 // Window functions for separate vibrancy window
 pub use window::{
     close_actions_window, is_actions_window_open, notify_actions_window, open_actions_window,
+    resize_actions_window,
 };
 // get_actions_window_handle available but not re-exported (use window:: directly if needed)
 

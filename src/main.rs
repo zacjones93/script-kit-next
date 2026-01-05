@@ -187,7 +187,7 @@ use scripts::get_grouped_results;
 
 use actions::{
     close_actions_window, is_actions_window_open, notify_actions_window, open_actions_window,
-    ActionsDialog, ScriptInfo,
+    resize_actions_window, ActionsDialog, ScriptInfo,
 };
 use panel::{
     CURSOR_GAP_X, CURSOR_HEIGHT_LG, CURSOR_MARGIN_Y, CURSOR_WIDTH, DEFAULT_PLACEHOLDER, HEADER_GAP,

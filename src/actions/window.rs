@@ -7,7 +7,6 @@
 //! - Auto-closes when app loses focus
 //! - Shares the ActionsDialog entity with the main app for keyboard routing
 
-use crate::panel::HEADER_TOTAL_HEIGHT;
 use crate::platform;
 use crate::theme;
 use gpui::{
@@ -17,7 +16,7 @@ use gpui::{
 use gpui_component::Root;
 use std::sync::{Mutex, OnceLock};
 
-use super::constants::{ACTION_ITEM_HEIGHT, POPUP_MAX_HEIGHT};
+use super::constants::{ACTION_ITEM_HEIGHT, POPUP_MAX_HEIGHT, SEARCH_INPUT_HEIGHT};
 use super::dialog::ActionsDialog;
 
 /// Global singleton for the actions window handle
@@ -25,8 +24,8 @@ static ACTIONS_WINDOW: OnceLock<Mutex<Option<WindowHandle<Root>>>> = OnceLock::n
 
 /// Actions window width (height is calculated dynamically based on content)
 const ACTIONS_WINDOW_WIDTH: f32 = 320.0;
-/// Margin from main window edges
-const ACTIONS_MARGIN: f32 = 8.0;
+/// Horizontal margin from main window right edge
+const ACTIONS_MARGIN_X: f32 = 8.0;
 
 /// ActionsWindow wrapper that renders the shared ActionsDialog entity
 pub struct ActionsWindow {
@@ -99,14 +98,19 @@ pub fn open_actions_window(
 
     // Calculate window position:
     // - X: Right edge of main window, minus actions width, minus margin
-    // - Y: Below the header (HEADER_TOTAL_HEIGHT), plus margin
+    // - Y: Below the header (using canonical top-left origin coordinates)
+    //
+    // Canonical coordinates: Y=0 at top, Y increases downward
+    // Main window origin is at top-left of the window
     let window_width = px(ACTIONS_WINDOW_WIDTH);
     let window_height = px(dynamic_height);
 
     let window_x = main_window_bounds.origin.x + main_window_bounds.size.width
         - window_width
-        - px(ACTIONS_MARGIN);
-    let window_y = main_window_bounds.origin.y + px(HEADER_TOTAL_HEIGHT) + px(ACTIONS_MARGIN);
+        - px(ACTIONS_MARGIN_X);
+    // Position popup right below the search input in the header
+    // Using negative offset to compensate for coordinate system differences
+    let window_y = main_window_bounds.origin.y - px(55.0);
 
     let bounds = Bounds {
         origin: Point {
@@ -219,5 +223,47 @@ pub fn notify_actions_window(cx: &mut App) {
         let _ = handle.update(cx, |_root, _window, cx| {
             cx.notify();
         });
+    }
+}
+
+/// Resize the actions window to fit the current number of filtered actions
+/// Call this after filtering changes the action count
+pub fn resize_actions_window(cx: &mut App, dialog_entity: &Entity<ActionsDialog>) {
+    if let Some(handle) = get_actions_window_handle() {
+        // Read dialog state to calculate new height
+        let dialog = dialog_entity.read(cx);
+        let num_actions = dialog.filtered_actions.len();
+        let hide_search = dialog.hide_search;
+
+        // Calculate new height (same logic as open_actions_window)
+        let search_box_height = if hide_search {
+            0.0
+        } else {
+            SEARCH_INPUT_HEIGHT
+        };
+        let items_height =
+            (num_actions as f32 * ACTION_ITEM_HEIGHT).min(POPUP_MAX_HEIGHT - search_box_height);
+        let border_height = 2.0; // top + bottom border
+        let dynamic_height = items_height + search_box_height + border_height;
+
+        let new_height = px(dynamic_height);
+
+        let _ = handle.update(cx, |_root, window, cx| {
+            let current_bounds = window.bounds();
+            // Keep same position and width, just change height
+            window.resize(Size {
+                width: current_bounds.size.width,
+                height: new_height,
+            });
+            cx.notify();
+        });
+
+        crate::logging::log(
+            "ACTIONS",
+            &format!(
+                "Resized actions window: {} items, height={:?}",
+                num_actions, new_height
+            ),
+        );
     }
 }

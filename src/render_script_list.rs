@@ -573,9 +573,13 @@ impl ScriptListApp {
                             }
                             "backspace" => {
                                 dialog.update(cx, |d, cx| d.handle_backspace(cx));
-                                // Notify actions window to re-render
+                                // Resize and notify actions window to re-render
+                                let dialog_for_resize = dialog.clone();
                                 cx.spawn(async move |_this, cx| {
-                                    cx.update(notify_actions_window).ok();
+                                    cx.update(|cx| {
+                                        resize_actions_window(cx, &dialog_for_resize);
+                                    })
+                                    .ok();
                                 })
                                 .detach();
                                 return;
@@ -586,9 +590,13 @@ impl ScriptListApp {
                                     if let Some(ch) = key_char.chars().next() {
                                         if !ch.is_control() {
                                             dialog.update(cx, |d, cx| d.handle_char(ch, cx));
-                                            // Notify actions window to re-render
+                                            // Resize and notify actions window to re-render
+                                            let dialog_for_resize = dialog.clone();
                                             cx.spawn(async move |_this, cx| {
-                                                cx.update(notify_actions_window).ok();
+                                                cx.update(|cx| {
+                                                    resize_actions_window(cx, &dialog_for_resize);
+                                                })
+                                                .ok();
                                             })
                                             .detach();
                                         }
@@ -1003,56 +1011,10 @@ impl ScriptListApp {
                             .h_full() // Take full height
                             .min_h(px(0.)) // Allow shrinking
                             .overflow_hidden()
-                            // Preview panel ALWAYS renders (visible behind actions overlay)
-                            .child(self.render_preview_panel(cx))
-                            // Actions dialog overlays on top using absolute positioning
-                            // Includes a backdrop to capture clicks outside the dialog
-                            .when_some(
-                                if self.show_actions_popup {
-                                    self.actions_dialog.clone()
-                                } else {
-                                    None
-                                },
-                                |d, dialog| {
-                                    // Create click handler for backdrop to dismiss dialog
-                                    let backdrop_click = cx.listener(|this: &mut Self, _event: &gpui::ClickEvent, window: &mut Window, cx: &mut Context<Self>| {
-                                        logging::log("FOCUS", "Actions backdrop clicked - dismissing dialog");
-                                        this.show_actions_popup = false;
-                                        this.actions_dialog = None;
-                                        this.focus_main_filter(window, cx);
-                                        cx.notify();
-                                    });
-
-                                    // Get backdrop opacity from theme (reuse panel opacity)
-                                    let backdrop_alpha = (opacity.panel * 255.0 * 2.0).min(255.0) as u32; // 2x panel for better obscuring
-                                    
-                                    d.child(
-                                        div()
-                                            .absolute()
-                                            .inset_0() // Cover entire preview area
-                                            // Backdrop layer - semi-transparent to obscure content behind dialog
-                                            .child(
-                                                div()
-                                                    .id("actions-backdrop")
-                                                    .absolute()
-                                                    .inset_0()
-                                                    .bg(rgba(backdrop_alpha)) // Dark overlay (black with alpha)
-                                                    .on_click(backdrop_click)
-                                            )
-                                            // Dialog container - positioned at top-right
-                                            .child(
-                                                div()
-                                                    .absolute()
-                                                    .inset_0()
-                                                    .flex()
-                                                    .justify_end()
-                                                    .pr(px(8.)) // Small padding from right edge
-                                                    .pt(px(8.)) // Small padding from top
-                                                    .child(dialog),
-                                            ),
-                                    )
-                                },
-                            ),
+                            // Preview panel ALWAYS renders
+                            // NOTE: Actions dialog is now rendered in a separate popup window
+                            // (see actions/window.rs) - no inline overlay needed here
+                            .child(self.render_preview_panel(cx)),
                     ),
             );
 

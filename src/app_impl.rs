@@ -1509,8 +1509,40 @@ impl ScriptListApp {
             // Store the dialog entity for keyboard routing
             self.actions_dialog = Some(dialog.clone());
 
-            // Get main window bounds to position the actions window
-            let main_bounds = window.bounds();
+            // Get main window bounds for positioning the actions popup
+            // Use the canonical coordinate system (top-left origin, Y increases downward)
+            // which matches what our main window positioning uses
+            let main_bounds = if let Some((x, y, w, h)) = crate::platform::get_main_window_bounds()
+            {
+                logging::log(
+                    "ACTIONS",
+                    &format!(
+                        "Main window bounds (canonical): origin=({}, {}), size={}x{}",
+                        x, y, w, h
+                    ),
+                );
+                gpui::Bounds {
+                    origin: gpui::Point {
+                        x: px(x as f32),
+                        y: px(y as f32),
+                    },
+                    size: gpui::Size {
+                        width: px(w as f32),
+                        height: px(h as f32),
+                    },
+                }
+            } else {
+                // Fallback to GPUI bounds if platform API unavailable
+                let bounds = window.bounds();
+                logging::log(
+                    "ACTIONS",
+                    &format!(
+                        "Main window bounds (GPUI fallback): origin=({:?}, {:?}), size={:?}x{:?}",
+                        bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height
+                    ),
+                );
+                bounds
+            };
 
             // Open the actions window via spawn, passing the shared dialog entity
             cx.spawn(async move |_this, cx| {
