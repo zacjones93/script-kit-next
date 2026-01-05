@@ -3,6 +3,45 @@
 // Contains: handle_action, trigger_action_by_name
 
 impl ScriptListApp {
+    /// Helper to hide main window and set reset flag
+    fn hide_main_and_reset(&self, cx: &mut Context<Self>) {
+        set_main_window_visible(false);
+        NEEDS_RESET.store(true, Ordering::SeqCst);
+        cx.hide();
+    }
+
+    /// Helper to reveal a path in Finder (macOS)
+    fn reveal_in_finder(&self, path: &std::path::Path) {
+        let path_str = path.to_string_lossy().to_string();
+        std::thread::spawn(move || {
+            use std::process::Command;
+            match Command::new("open").arg("-R").arg(&path_str).spawn() {
+                Ok(_) => logging::log("UI", &format!("Revealed in Finder: {}", path_str)),
+                Err(e) => logging::log("ERROR", &format!("Failed to reveal in Finder: {}", e)),
+            }
+        });
+    }
+
+    /// Copy text to clipboard using pbcopy on macOS.
+    /// Critical: This properly closes stdin before waiting to prevent hangs.
+    #[cfg(target_os = "macos")]
+    fn pbcopy(&self, text: &str) -> Result<(), std::io::Error> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new("pbcopy").stdin(Stdio::piped()).spawn()?;
+
+        // Take ownership of stdin, write, then drop to signal EOF
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(text.as_bytes())?;
+            // stdin is dropped here => EOF delivered to pbcopy
+        }
+
+        // Now it's safe to wait - pbcopy has received EOF
+        child.wait()?;
+        Ok(())
+    }
+
     /// Handle action selection from the actions dialog
     fn handle_action(&mut self, action_id: String, cx: &mut Context<Self>) {
         logging::log("UI", &format!("Action selected: {}", action_id));
@@ -14,24 +53,16 @@ impl ScriptListApp {
         match action_id.as_str() {
             "create_script" => {
                 logging::log("UI", "Create script action - opening scripts folder");
-                // Open ~/.scriptkit/scripts/ in Finder for now (future: create script dialog)
                 let scripts_dir = shellexpand::tilde("~/.scriptkit/scripts").to_string();
                 std::thread::spawn(move || {
                     use std::process::Command;
                     match Command::new("open").arg(&scripts_dir).spawn() {
-                        Ok(_) => {
-                            logging::log("UI", &format!("Opened scripts folder: {}", scripts_dir))
-                        }
-                        Err(e) => {
-                            logging::log("ERROR", &format!("Failed to open scripts folder: {}", e))
-                        }
+                        Ok(_) => logging::log("UI", &format!("Opened scripts folder: {}", scripts_dir)),
+                        Err(e) => logging::log("ERROR", &format!("Failed to open scripts folder: {}", e)),
                     }
                 });
                 self.last_output = Some(SharedString::from("Opened scripts folder"));
-                // Hide window after opening folder and set reset flag
-                script_kit_gpui::set_main_window_visible(false);
-                NEEDS_RESET.store(true, Ordering::SeqCst);
-                cx.hide();
+                self.hide_main_and_reset(cx);
             }
             "run_script" => {
                 logging::log("UI", "Run script action");
@@ -44,81 +75,28 @@ impl ScriptListApp {
             "reveal_in_finder" => {
                 logging::log("UI", "Reveal in Finder action");
                 if let Some(result) = self.get_selected_result() {
-                    match result {
-                        scripts::SearchResult::Script(script_match) => {
-                            let path_str = script_match.script.path.to_string_lossy().to_string();
-                            std::thread::spawn(move || {
-                                use std::process::Command;
-                                match Command::new("open").arg("-R").arg(&path_str).spawn() {
-                                    Ok(_) => logging::log(
-                                        "UI",
-                                        &format!("Revealed in Finder: {}", path_str),
-                                    ),
-                                    Err(e) => logging::log(
-                                        "ERROR",
-                                        &format!("Failed to reveal in Finder: {}", e),
-                                    ),
-                                }
-                            });
-                            self.last_output = Some(SharedString::from("Revealed in Finder"));
-                            // Hide window after revealing in Finder and set reset flag
-                            script_kit_gpui::set_main_window_visible(false);
-                            NEEDS_RESET.store(true, Ordering::SeqCst);
-                            cx.hide();
-                        }
+                    let path_opt = match result {
+                        scripts::SearchResult::Script(m) => Some(m.script.path.clone()),
+                        scripts::SearchResult::App(m) => Some(m.app.path.clone()),
+                        scripts::SearchResult::Agent(m) => Some(m.agent.path.clone()),
                         scripts::SearchResult::Scriptlet(_) => {
-                            self.last_output =
-                                Some(SharedString::from("Cannot reveal scriptlets in Finder"));
+                            self.last_output = Some(SharedString::from("Cannot reveal scriptlets in Finder"));
+                            None
                         }
                         scripts::SearchResult::BuiltIn(_) => {
-                            self.last_output =
-                                Some(SharedString::from("Cannot reveal built-in features"));
-                        }
-                        scripts::SearchResult::App(app_match) => {
-                            let path_str = app_match.app.path.to_string_lossy().to_string();
-                            std::thread::spawn(move || {
-                                use std::process::Command;
-                                match Command::new("open").arg("-R").arg(&path_str).spawn() {
-                                    Ok(_) => logging::log(
-                                        "UI",
-                                        &format!("Revealed app in Finder: {}", path_str),
-                                    ),
-                                    Err(e) => logging::log(
-                                        "ERROR",
-                                        &format!("Failed to reveal app in Finder: {}", e),
-                                    ),
-                                }
-                            });
-                            self.last_output = Some(SharedString::from("Revealed app in Finder"));
-                            // Hide window after revealing app in Finder and set reset flag
-                            script_kit_gpui::set_main_window_visible(false);
-                            NEEDS_RESET.store(true, Ordering::SeqCst);
-                            cx.hide();
+                            self.last_output = Some(SharedString::from("Cannot reveal built-in features"));
+                            None
                         }
                         scripts::SearchResult::Window(_) => {
-                            self.last_output =
-                                Some(SharedString::from("Cannot reveal windows in Finder"));
+                            self.last_output = Some(SharedString::from("Cannot reveal windows in Finder"));
+                            None
                         }
-                        scripts::SearchResult::Agent(agent_match) => {
-                            let path_str = agent_match.agent.path.to_string_lossy().to_string();
-                            std::thread::spawn(move || {
-                                use std::process::Command;
-                                match Command::new("open").arg("-R").arg(&path_str).spawn() {
-                                    Ok(_) => logging::log(
-                                        "UI",
-                                        &format!("Revealed agent in Finder: {}", path_str),
-                                    ),
-                                    Err(e) => logging::log(
-                                        "ERROR",
-                                        &format!("Failed to reveal agent in Finder: {}", e),
-                                    ),
-                                }
-                            });
-                            self.last_output = Some(SharedString::from("Revealed agent in Finder"));
-                            script_kit_gpui::set_main_window_visible(false);
-                            NEEDS_RESET.store(true, Ordering::SeqCst);
-                            cx.hide();
-                        }
+                    };
+
+                    if let Some(path) = path_opt {
+                        self.reveal_in_finder(&path);
+                        self.last_output = Some(SharedString::from("Revealed in Finder"));
+                        self.hide_main_and_reset(cx);
                     }
                 } else {
                     self.last_output = Some(SharedString::from("No item selected"));
@@ -128,104 +106,53 @@ impl ScriptListApp {
                 logging::log("UI", "Copy path action");
                 if let Some(result) = self.get_selected_result() {
                     let path_opt = match result {
-                        scripts::SearchResult::Script(script_match) => {
-                            Some(script_match.script.path.to_string_lossy().to_string())
-                        }
-                        scripts::SearchResult::App(app_match) => {
-                            Some(app_match.app.path.to_string_lossy().to_string())
-                        }
+                        scripts::SearchResult::Script(m) => Some(m.script.path.clone()),
+                        scripts::SearchResult::App(m) => Some(m.app.path.clone()),
+                        scripts::SearchResult::Agent(m) => Some(m.agent.path.clone()),
                         scripts::SearchResult::Scriptlet(_) => {
-                            self.last_output =
-                                Some(SharedString::from("Cannot copy scriptlet path"));
+                            self.last_output = Some(SharedString::from("Cannot copy scriptlet path"));
                             None
                         }
                         scripts::SearchResult::BuiltIn(_) => {
-                            self.last_output =
-                                Some(SharedString::from("Cannot copy built-in path"));
+                            self.last_output = Some(SharedString::from("Cannot copy built-in path"));
                             None
                         }
                         scripts::SearchResult::Window(_) => {
                             self.last_output = Some(SharedString::from("Cannot copy window path"));
                             None
                         }
-                        scripts::SearchResult::Agent(agent_match) => {
-                            Some(agent_match.agent.path.to_string_lossy().to_string())
-                        }
                     };
 
-                    if let Some(path_str) = path_opt {
-                        // Use pbcopy on macOS for reliable clipboard access
+                    if let Some(path) = path_opt {
+                        let path_str = path.to_string_lossy().to_string();
+
                         #[cfg(target_os = "macos")]
                         {
-                            use std::io::Write;
-                            use std::process::{Command, Stdio};
-
-                            match Command::new("pbcopy").stdin(Stdio::piped()).spawn() {
-                                Ok(mut child) => {
-                                    if let Some(ref mut stdin) = child.stdin {
-                                        if stdin.write_all(path_str.as_bytes()).is_ok() {
-                                            let _ = child.wait();
-                                            logging::log(
-                                                "UI",
-                                                &format!("Copied path to clipboard: {}", path_str),
-                                            );
-                                            self.last_output = Some(SharedString::from(format!(
-                                                "Copied: {}",
-                                                path_str
-                                            )));
-                                        } else {
-                                            logging::log(
-                                                "ERROR",
-                                                "Failed to write to pbcopy stdin",
-                                            );
-                                            self.last_output =
-                                                Some(SharedString::from("Failed to copy path"));
-                                        }
-                                    }
+                            match self.pbcopy(&path_str) {
+                                Ok(_) => {
+                                    logging::log("UI", &format!("Copied path to clipboard: {}", path_str));
+                                    self.last_output =
+                                        Some(SharedString::from(format!("Copied: {}", path_str)));
                                 }
                                 Err(e) => {
-                                    logging::log(
-                                        "ERROR",
-                                        &format!("Failed to spawn pbcopy: {}", e),
-                                    );
-                                    self.last_output =
-                                        Some(SharedString::from("Failed to copy path"));
+                                    logging::log("ERROR", &format!("pbcopy failed: {}", e));
+                                    self.last_output = Some(SharedString::from("Failed to copy path"));
                                 }
                             }
                         }
 
-                        // Fallback for non-macOS platforms
                         #[cfg(not(target_os = "macos"))]
                         {
                             use arboard::Clipboard;
-                            match Clipboard::new() {
-                                Ok(mut clipboard) => match clipboard.set_text(&path_str) {
-                                    Ok(_) => {
-                                        logging::log(
-                                            "UI",
-                                            &format!("Copied path to clipboard: {}", path_str),
-                                        );
-                                        self.last_output = Some(SharedString::from(format!(
-                                            "Copied: {}",
-                                            path_str
-                                        )));
-                                    }
-                                    Err(e) => {
-                                        logging::log(
-                                            "ERROR",
-                                            &format!("Failed to copy path: {}", e),
-                                        );
-                                        self.last_output =
-                                            Some(SharedString::from("Failed to copy path"));
-                                    }
-                                },
-                                Err(e) => {
-                                    logging::log(
-                                        "ERROR",
-                                        &format!("Failed to access clipboard: {}", e),
-                                    );
+                            match Clipboard::new().and_then(|mut c| c.set_text(&path_str)) {
+                                Ok(_) => {
+                                    logging::log("UI", &format!("Copied path to clipboard: {}", path_str));
                                     self.last_output =
-                                        Some(SharedString::from("Failed to access clipboard"));
+                                        Some(SharedString::from(format!("Copied: {}", path_str)));
+                                }
+                                Err(e) => {
+                                    logging::log("ERROR", &format!("Failed to copy path: {}", e));
+                                    self.last_output = Some(SharedString::from("Failed to copy path"));
                                 }
                             }
                         }
@@ -237,34 +164,30 @@ impl ScriptListApp {
             "edit_script" => {
                 logging::log("UI", "Edit script action");
                 if let Some(result) = self.get_selected_result() {
-                    match result {
-                        scripts::SearchResult::Script(script_match) => {
-                            self.edit_script(&script_match.script.path);
-                            // Hide window after opening editor and set reset flag
-                            script_kit_gpui::set_main_window_visible(false);
-                            NEEDS_RESET.store(true, Ordering::SeqCst);
-                            cx.hide();
-                        }
+                    let path_opt = match result {
+                        scripts::SearchResult::Script(m) => Some(m.script.path.clone()),
+                        scripts::SearchResult::Agent(m) => Some(m.agent.path.clone()),
                         scripts::SearchResult::Scriptlet(_) => {
                             self.last_output = Some(SharedString::from("Cannot edit scriptlets"));
+                            None
                         }
                         scripts::SearchResult::BuiltIn(_) => {
-                            self.last_output =
-                                Some(SharedString::from("Cannot edit built-in features"));
+                            self.last_output = Some(SharedString::from("Cannot edit built-in features"));
+                            None
                         }
                         scripts::SearchResult::App(_) => {
                             self.last_output = Some(SharedString::from("Cannot edit applications"));
+                            None
                         }
                         scripts::SearchResult::Window(_) => {
                             self.last_output = Some(SharedString::from("Cannot edit windows"));
+                            None
                         }
-                        scripts::SearchResult::Agent(agent_match) => {
-                            self.edit_script(&agent_match.agent.path);
-                            // Hide window after opening editor and set reset flag
-                            script_kit_gpui::set_main_window_visible(false);
-                            NEEDS_RESET.store(true, Ordering::SeqCst);
-                            cx.hide();
-                        }
+                    };
+
+                    if let Some(path) = path_opt {
+                        self.edit_script(&path);
+                        self.hide_main_and_reset(cx);
                     }
                 } else {
                     self.last_output = Some(SharedString::from("No script selected"));
@@ -281,142 +204,100 @@ impl ScriptListApp {
             }
             "quit" => {
                 logging::log("UI", "Quit action");
-                // Clean up processes and PID file before quitting
                 PROCESS_MANAGER.kill_all_processes();
                 PROCESS_MANAGER.remove_main_pid();
                 cx.quit();
+                return; // Early return after quit - no notify needed
             }
             "__cancel__" => {
                 logging::log("UI", "Actions dialog cancelled");
             }
             _ => {
-                // Check if this is an SDK action with has_action=true
-                if let Some(ref actions) = self.sdk_actions {
-                    if let Some(action) = actions.iter().find(|a| a.name == action_id) {
-                        if action.has_action {
-                            // Send ActionTriggered back to SDK
-                            logging::log(
-                                "ACTIONS",
-                                &format!(
-                                    "SDK action with handler: '{}' (has_action=true), sending ActionTriggered",
-                                    action_id
-                                ),
-                            );
-                            if let Some(ref sender) = self.response_sender {
-                                let msg = protocol::Message::action_triggered(
-                                    action_id.clone(),
-                                    action.value.clone(),
-                                    self.arg_input.text().to_string(),
-                                );
-                                // Use try_send to avoid blocking UI thread
-                                match sender.try_send(msg) {
-                                    Ok(()) => {}
-                                    Err(std::sync::mpsc::TrySendError::Full(_)) => {
-                                        logging::log("WARN", "Response channel full - action trigger dropped");
-                                    }
-                                    Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
-                                        logging::log("UI", "Response channel disconnected - script exited");
-                                    }
-                                }
-                            }
-                        } else if let Some(ref value) = action.value {
-                            // Submit value directly (has_action=false with value)
-                            logging::log(
-                                "ACTIONS",
-                                &format!(
-                                    "SDK action without handler: '{}' (has_action=false), submitting value: {:?}",
-                                    action_id, value
-                                ),
-                            );
-                            if let Some(ref sender) = self.response_sender {
-                                let msg = protocol::Message::Submit {
-                                    id: "action".to_string(),
-                                    value: Some(value.clone()),
-                                };
-                                // Use try_send to avoid blocking UI thread
-                                match sender.try_send(msg) {
-                                    Ok(()) => {}
-                                    Err(std::sync::mpsc::TrySendError::Full(_)) => {
-                                        logging::log("WARN", "Response channel full - action submit dropped");
-                                    }
-                                    Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
-                                        logging::log("UI", "Response channel disconnected - script exited");
-                                    }
-                                }
-                            }
-                        } else {
-                            logging::log(
-                                "ACTIONS",
-                                &format!(
-                                    "SDK action '{}' has no value and has_action=false",
-                                    action_id
-                                ),
-                            );
-                        }
-                    } else {
-                        logging::log("UI", &format!("Unknown action: {}", action_id));
-                    }
-                } else {
-                    logging::log("UI", &format!("Unknown action: {}", action_id));
-                }
+                // Handle SDK actions using shared helper
+                self.trigger_sdk_action_internal(&action_id);
             }
         }
 
         cx.notify();
     }
 
-    /// Trigger an SDK action by name
-    /// Returns true if the action was found and triggered
-    fn trigger_action_by_name(&mut self, action_name: &str, cx: &mut Context<Self>) -> bool {
+    /// Internal helper for triggering SDK actions - used by both handle_action and trigger_action_by_name
+    fn trigger_sdk_action_internal(&mut self, action_name: &str) {
         if let Some(ref actions) = self.sdk_actions {
             if let Some(action) = actions.iter().find(|a| a.name == action_name) {
-                logging::log(
-                    "ACTIONS",
-                    &format!(
-                        "Triggering SDK action '{}' via shortcut (has_action={})",
-                        action_name, action.has_action
-                    ),
-                );
-
-                if action.has_action {
-                    // Send ActionTriggered back to SDK
+                let send_result = if action.has_action {
+                    logging::log(
+                        "ACTIONS",
+                        &format!(
+                            "SDK action with handler: '{}' (has_action=true), sending ActionTriggered",
+                            action_name
+                        ),
+                    );
                     if let Some(ref sender) = self.response_sender {
                         let msg = protocol::Message::action_triggered(
                             action_name.to_string(),
                             action.value.clone(),
                             self.arg_input.text().to_string(),
                         );
-                        // Use try_send to avoid blocking UI thread
-                        match sender.try_send(msg) {
-                            Ok(()) => {}
-                            Err(std::sync::mpsc::TrySendError::Full(_)) => {
-                                logging::log("WARN", "Response channel full - action trigger dropped");
-                            }
-                            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
-                                logging::log("UI", "Response channel disconnected - script exited");
-                            }
-                        }
+                        Some(sender.try_send(msg))
+                    } else {
+                        None
                     }
                 } else if let Some(ref value) = action.value {
-                    // Submit value directly
+                    logging::log(
+                        "ACTIONS",
+                        &format!(
+                            "SDK action without handler: '{}' (has_action=false), submitting value: {:?}",
+                            action_name, value
+                        ),
+                    );
                     if let Some(ref sender) = self.response_sender {
                         let msg = protocol::Message::Submit {
                             id: "action".to_string(),
                             value: Some(value.clone()),
                         };
-                        // Use try_send to avoid blocking UI thread
-                        match sender.try_send(msg) {
-                            Ok(()) => {}
-                            Err(std::sync::mpsc::TrySendError::Full(_)) => {
-                                logging::log("WARN", "Response channel full - action submit dropped");
-                            }
-                            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
-                                logging::log("UI", "Response channel disconnected - script exited");
-                            }
+                        Some(sender.try_send(msg))
+                    } else {
+                        None
+                    }
+                } else {
+                    logging::log(
+                        "ACTIONS",
+                        &format!("SDK action '{}' has no value and has_action=false", action_name),
+                    );
+                    None
+                };
+
+                // Log any send errors
+                if let Some(result) = send_result {
+                    match result {
+                        Ok(()) => {}
+                        Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                            logging::log("WARN", &format!("Response channel full - action '{}' dropped", action_name));
+                        }
+                        Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                            logging::log("UI", "Response channel disconnected - script exited");
                         }
                     }
                 }
+            } else {
+                logging::log("UI", &format!("Unknown action: {}", action_name));
+            }
+        } else {
+            logging::log("UI", &format!("Unknown action: {}", action_name));
+        }
+    }
 
+    /// Trigger an SDK action by name
+    /// Returns true if the action was found and triggered
+    fn trigger_action_by_name(&mut self, action_name: &str, cx: &mut Context<Self>) -> bool {
+        if let Some(ref actions) = self.sdk_actions {
+            if actions.iter().any(|a| a.name == action_name) {
+                logging::log(
+                    "ACTIONS",
+                    &format!("Triggering SDK action '{}' via shortcut", action_name),
+                );
+                self.trigger_sdk_action_internal(action_name);
                 cx.notify();
                 return true;
             }
