@@ -23,11 +23,26 @@ use super::types::{
 // ============================================
 // These functions avoid heap allocations by doing case-insensitive
 // comparisons byte-by-byte instead of calling to_lowercase().
+//
+// IMPORTANT: These functions ONLY work correctly for ASCII text. For Unicode,
+// they degrade to case-sensitive matching. Use the is_ascii_pair() helper to
+// gate their usage, or rely on nucleo for Unicode-safe fuzzy matching.
+
+/// Check if both strings are ASCII, enabling ASCII fast-path optimizations.
+/// When both are ASCII, we can use byte-level case-insensitive comparison.
+/// When either contains non-ASCII, we should rely on nucleo for matching.
+#[inline]
+pub(crate) fn is_ascii_pair(a: &str, b: &str) -> bool {
+    a.is_ascii() && b.is_ascii()
+}
 
 /// Check if haystack contains needle using ASCII case-insensitive matching.
 /// `needle_lower` must already be lowercase.
 /// Returns true if needle is found anywhere in haystack.
 /// No allocation - O(n*m) worst case but typically much faster.
+///
+/// WARNING: Only use when both strings are ASCII (check with is_ascii_pair()).
+/// For non-ASCII text, this degrades to case-sensitive matching.
 #[inline]
 pub(crate) fn contains_ignore_ascii_case(haystack: &str, needle_lower: &str) -> bool {
     let h = haystack.as_bytes();
@@ -53,6 +68,9 @@ pub(crate) fn contains_ignore_ascii_case(haystack: &str, needle_lower: &str) -> 
 /// `needle_lower` must already be lowercase.
 /// Returns Some(position) if found, None otherwise.
 /// No allocation - O(n*m) worst case.
+///
+/// WARNING: Only use when both strings are ASCII (check with is_ascii_pair()).
+/// For non-ASCII text, this degrades to case-sensitive matching.
 #[inline]
 pub(crate) fn find_ignore_ascii_case(haystack: &str, needle_lower: &str) -> Option<usize> {
     let h = haystack.as_bytes();
@@ -382,6 +400,8 @@ pub fn fuzzy_search_scripts(scripts: &[Arc<Script>], query: &str) -> Vec<ScriptM
 
     // Create nucleo context once for all scripts - reuses buffer across calls
     let mut nucleo = NucleoCtx::new(&query_lower);
+    // Check if query is ASCII once for all items
+    let query_is_ascii = query_lower.is_ascii();
 
     for script in scripts {
         let mut score = 0i32;
@@ -390,41 +410,53 @@ pub fn fuzzy_search_scripts(scripts: &[Arc<Script>], query: &str) -> Vec<ScriptM
 
         let filename = extract_filename(&script.path);
 
-        // Score by name match - highest priority (no allocation)
-        if let Some(pos) = find_ignore_ascii_case(&script.name, &query_lower) {
-            // Bonus for exact substring match at start of name
-            score += if pos == 0 { 100 } else { 75 };
+        // Score by name match - highest priority
+        // Only use ASCII fast-path when both strings are ASCII
+        if query_is_ascii && script.name.is_ascii() {
+            if let Some(pos) = find_ignore_ascii_case(&script.name, &query_lower) {
+                // Bonus for exact substring match at start of name
+                score += if pos == 0 { 100 } else { 75 };
+            }
         }
 
-        // Fuzzy character matching in name using nucleo (reuses buffer)
+        // Fuzzy character matching in name using nucleo (handles Unicode correctly)
         if let Some(nucleo_s) = nucleo.score(&script.name) {
             // Scale nucleo score (0-1000+) to match existing weights (~50 for fuzzy match)
             score += 50 + (nucleo_s / 20) as i32;
         }
 
         // Score by filename match - high priority (allows searching by ".ts", ".js", etc.)
-        if let Some(pos) = find_ignore_ascii_case(&filename, &query_lower) {
-            // Bonus for exact substring match at start of filename
-            score += if pos == 0 { 60 } else { 45 };
+        // Filenames are typically ASCII
+        if query_is_ascii && filename.is_ascii() {
+            if let Some(pos) = find_ignore_ascii_case(&filename, &query_lower) {
+                // Bonus for exact substring match at start of filename
+                score += if pos == 0 { 60 } else { 45 };
+            }
         }
 
-        // Fuzzy character matching in filename using nucleo (reuses buffer)
+        // Fuzzy character matching in filename using nucleo (handles Unicode)
         if let Some(nucleo_s) = nucleo.score(&filename) {
             // Scale nucleo score to match existing weights (~35 for filename fuzzy match)
             score += 35 + (nucleo_s / 30) as i32;
         }
 
-        // Score by description match - medium priority (no allocation)
+        // Score by description match - medium priority
+        // Only use ASCII fast-path when both are ASCII
         if let Some(ref desc) = script.description {
-            if contains_ignore_ascii_case(desc, &query_lower) {
-                score += 25;
+            if query_is_ascii && desc.is_ascii() {
+                if contains_ignore_ascii_case(desc, &query_lower) {
+                    score += 25;
+                }
             }
         }
 
-        // Score by path match - lower priority (no allocation for lowercase)
+        // Score by path match - lower priority
+        // Paths are typically ASCII
         let path_str = script.path.to_string_lossy();
-        if contains_ignore_ascii_case(&path_str, &query_lower) {
-            score += 10;
+        if query_is_ascii && path_str.is_ascii() {
+            if contains_ignore_ascii_case(&path_str, &query_lower) {
+                score += 10;
+            }
         }
 
         if score > 0 {
@@ -475,6 +507,8 @@ pub fn fuzzy_search_scriptlets(scriptlets: &[Arc<Scriptlet>], query: &str) -> Ve
 
     // Create nucleo context once for all scriptlets - reuses buffer across calls
     let mut nucleo = NucleoCtx::new(&query_lower);
+    // Check if query is ASCII once for all items
+    let query_is_ascii = query_lower.is_ascii();
 
     for scriptlet in scriptlets {
         let mut score = 0i32;
@@ -483,13 +517,16 @@ pub fn fuzzy_search_scriptlets(scriptlets: &[Arc<Scriptlet>], query: &str) -> Ve
 
         let display_file_path = extract_scriptlet_display_path(&scriptlet.file_path);
 
-        // Score by name match - highest priority (no allocation)
-        if let Some(pos) = find_ignore_ascii_case(&scriptlet.name, &query_lower) {
-            // Bonus for exact substring match at start of name
-            score += if pos == 0 { 100 } else { 75 };
+        // Score by name match - highest priority
+        // Only use ASCII fast-path when both strings are ASCII
+        if query_is_ascii && scriptlet.name.is_ascii() {
+            if let Some(pos) = find_ignore_ascii_case(&scriptlet.name, &query_lower) {
+                // Bonus for exact substring match at start of name
+                score += if pos == 0 { 100 } else { 75 };
+            }
         }
 
-        // Fuzzy character matching in name using nucleo (reuses buffer)
+        // Fuzzy character matching in name using nucleo (handles Unicode)
         if let Some(nucleo_s) = nucleo.score(&scriptlet.name) {
             // Scale nucleo score to match existing weights (~50 for fuzzy match)
             score += 50 + (nucleo_s / 20) as i32;
@@ -497,38 +534,50 @@ pub fn fuzzy_search_scriptlets(scriptlets: &[Arc<Scriptlet>], query: &str) -> Ve
 
         // Score by file_path match - high priority (allows searching by ".md", anchor names)
         if let Some(ref fp) = display_file_path {
-            if let Some(pos) = find_ignore_ascii_case(fp, &query_lower) {
-                // Bonus for exact substring match at start of file_path
-                score += if pos == 0 { 60 } else { 45 };
+            // File paths are typically ASCII
+            if query_is_ascii && fp.is_ascii() {
+                if let Some(pos) = find_ignore_ascii_case(fp, &query_lower) {
+                    // Bonus for exact substring match at start of file_path
+                    score += if pos == 0 { 60 } else { 45 };
+                }
             }
 
-            // Fuzzy character matching in file_path using nucleo (reuses buffer)
+            // Fuzzy character matching in file_path using nucleo (handles Unicode)
             if let Some(nucleo_s) = nucleo.score(fp) {
                 // Scale nucleo score to match existing weights (~35 for file_path fuzzy match)
                 score += 35 + (nucleo_s / 30) as i32;
             }
         }
 
-        // Score by description match - medium priority (no allocation)
+        // Score by description match - medium priority
+        // Only use ASCII fast-path when both are ASCII
         if let Some(ref desc) = scriptlet.description {
-            if contains_ignore_ascii_case(desc, &query_lower) {
-                score += 25;
+            if query_is_ascii && desc.is_ascii() {
+                if contains_ignore_ascii_case(desc, &query_lower) {
+                    score += 25;
+                }
             }
         }
 
         // CRITICAL OPTIMIZATION: Only search code when query is long enough (>=4 chars)
         // and no other matches were found. Code search is the biggest performance hit
         // because scriptlet.code can be very large.
+        // Code is typically ASCII
         if query_lower.len() >= 4
             && score == 0
+            && query_is_ascii
+            && scriptlet.code.is_ascii()
             && contains_ignore_ascii_case(&scriptlet.code, &query_lower)
         {
             score += 5;
         }
 
-        // Bonus for tool type match (no allocation)
-        if contains_ignore_ascii_case(&scriptlet.tool, &query_lower) {
-            score += 10;
+        // Bonus for tool type match
+        // Tool types are ASCII (snippet, template, etc.)
+        if query_is_ascii && scriptlet.tool.is_ascii() {
+            if contains_ignore_ascii_case(&scriptlet.tool, &query_lower) {
+                score += 10;
+            }
         }
 
         if score > 0 {
@@ -570,36 +619,48 @@ pub fn fuzzy_search_builtins(entries: &[BuiltInEntry], query: &str) -> Vec<Built
 
     // Create nucleo context once for all entries - reuses buffer across calls
     let mut nucleo = NucleoCtx::new(&query_lower);
+    // Check if query is ASCII once for all items
+    // Note: Built-in names, descriptions, and keywords are typically ASCII
+    let query_is_ascii = query_lower.is_ascii();
 
     for entry in entries {
         let mut score = 0i32;
 
-        // Score by name match - highest priority (no allocation)
-        if let Some(pos) = find_ignore_ascii_case(&entry.name, &query_lower) {
-            // Bonus for exact substring match at start of name
-            score += if pos == 0 { 100 } else { 75 };
+        // Score by name match - highest priority
+        // Built-in names are ASCII
+        if query_is_ascii && entry.name.is_ascii() {
+            if let Some(pos) = find_ignore_ascii_case(&entry.name, &query_lower) {
+                // Bonus for exact substring match at start of name
+                score += if pos == 0 { 100 } else { 75 };
+            }
         }
 
-        // Fuzzy character matching in name using nucleo (reuses buffer)
+        // Fuzzy character matching in name using nucleo (handles Unicode)
         if let Some(nucleo_s) = nucleo.score(&entry.name) {
             // Scale nucleo score to match existing weights (~50 for fuzzy match)
             score += 50 + (nucleo_s / 20) as i32;
         }
 
-        // Score by description match - medium priority (no allocation)
-        if contains_ignore_ascii_case(&entry.description, &query_lower) {
-            score += 25;
-        }
-
-        // Score by keyword match - high priority (keywords are designed for matching)
-        for keyword in &entry.keywords {
-            if contains_ignore_ascii_case(keyword, &query_lower) {
-                score += 75; // Keywords are specifically meant for matching
-                break; // Only count once even if multiple keywords match
+        // Score by description match - medium priority
+        // Built-in descriptions are ASCII
+        if query_is_ascii && entry.description.is_ascii() {
+            if contains_ignore_ascii_case(&entry.description, &query_lower) {
+                score += 25;
             }
         }
 
-        // Fuzzy match on keywords using nucleo (reuses buffer)
+        // Score by keyword match - high priority (keywords are designed for matching)
+        // Keywords are ASCII
+        if query_is_ascii {
+            for keyword in &entry.keywords {
+                if keyword.is_ascii() && contains_ignore_ascii_case(keyword, &query_lower) {
+                    score += 75; // Keywords are specifically meant for matching
+                    break; // Only count once even if multiple keywords match
+                }
+            }
+        }
+
+        // Fuzzy match on keywords using nucleo (handles Unicode)
         for keyword in &entry.keywords {
             if let Some(nucleo_s) = nucleo.score(keyword) {
                 // Scale nucleo score to match existing weights (~30 for keyword fuzzy match)
@@ -645,33 +706,44 @@ pub fn fuzzy_search_apps(apps: &[AppInfo], query: &str) -> Vec<AppMatch> {
 
     // Create nucleo context once for all apps - reuses buffer across calls
     let mut nucleo = NucleoCtx::new(&query_lower);
+    // Check if query is ASCII once for all items
+    let query_is_ascii = query_lower.is_ascii();
 
     for app in apps {
         let mut score = 0i32;
 
-        // Score by name match - highest priority (no allocation)
-        if let Some(pos) = find_ignore_ascii_case(&app.name, &query_lower) {
-            // Bonus for exact substring match at start of name
-            score += if pos == 0 { 100 } else { 75 };
+        // Score by name match - highest priority
+        // App names can have Unicode (e.g., "日本語アプリ")
+        if query_is_ascii && app.name.is_ascii() {
+            if let Some(pos) = find_ignore_ascii_case(&app.name, &query_lower) {
+                // Bonus for exact substring match at start of name
+                score += if pos == 0 { 100 } else { 75 };
+            }
         }
 
-        // Fuzzy character matching in name using nucleo (reuses buffer)
+        // Fuzzy character matching in name using nucleo (handles Unicode)
         if let Some(nucleo_s) = nucleo.score(&app.name) {
             // Scale nucleo score to match existing weights (~50 for fuzzy match)
             score += 50 + (nucleo_s / 20) as i32;
         }
 
-        // Score by bundle_id match - lower priority (no allocation)
+        // Score by bundle_id match - lower priority
+        // Bundle IDs are always ASCII (e.g., "com.apple.Safari")
         if let Some(ref bundle_id) = app.bundle_id {
-            if contains_ignore_ascii_case(bundle_id, &query_lower) {
-                score += 15;
+            if query_is_ascii && bundle_id.is_ascii() {
+                if contains_ignore_ascii_case(bundle_id, &query_lower) {
+                    score += 15;
+                }
             }
         }
 
-        // Score by path match - lowest priority (no allocation for lowercase)
+        // Score by path match - lowest priority
+        // Paths are typically ASCII
         let path_str = app.path.to_string_lossy();
-        if contains_ignore_ascii_case(&path_str, &query_lower) {
-            score += 5;
+        if query_is_ascii && path_str.is_ascii() {
+            if contains_ignore_ascii_case(&path_str, &query_lower) {
+                score += 5;
+            }
         }
 
         if score > 0 {
@@ -724,29 +796,37 @@ pub fn fuzzy_search_windows(windows: &[WindowInfo], query: &str) -> Vec<WindowMa
 
     // Create nucleo context once for all windows - reuses buffer across calls
     let mut nucleo = NucleoCtx::new(&query_lower);
+    // Check if query is ASCII once for all items
+    let query_is_ascii = query_lower.is_ascii();
 
     for window in windows {
         let mut score = 0i32;
 
-        // Score by app name match - highest priority (no allocation)
-        if let Some(pos) = find_ignore_ascii_case(&window.app, &query_lower) {
-            // Bonus for exact substring match at start of app name
-            score += if pos == 0 { 100 } else { 75 };
+        // Score by app name match - highest priority
+        // App names can have Unicode
+        if query_is_ascii && window.app.is_ascii() {
+            if let Some(pos) = find_ignore_ascii_case(&window.app, &query_lower) {
+                // Bonus for exact substring match at start of app name
+                score += if pos == 0 { 100 } else { 75 };
+            }
         }
 
-        // Score by window title match - high priority (no allocation)
-        if let Some(pos) = find_ignore_ascii_case(&window.title, &query_lower) {
-            // Bonus for exact substring match at start of title
-            score += if pos == 0 { 90 } else { 65 };
+        // Score by window title match - high priority
+        // Window titles can have Unicode content
+        if query_is_ascii && window.title.is_ascii() {
+            if let Some(pos) = find_ignore_ascii_case(&window.title, &query_lower) {
+                // Bonus for exact substring match at start of title
+                score += if pos == 0 { 90 } else { 65 };
+            }
         }
 
-        // Fuzzy character matching in app name using nucleo (reuses buffer)
+        // Fuzzy character matching in app name using nucleo (handles Unicode)
         if let Some(nucleo_s) = nucleo.score(&window.app) {
             // Scale nucleo score to match existing weights (~50 for app name fuzzy match)
             score += 50 + (nucleo_s / 20) as i32;
         }
 
-        // Fuzzy character matching in window title using nucleo (reuses buffer)
+        // Fuzzy character matching in window title using nucleo (handles Unicode)
         if let Some(nucleo_s) = nucleo.score(&window.title) {
             // Scale nucleo score to match existing weights (~40 for title fuzzy match)
             score += 40 + (nucleo_s / 25) as i32;
