@@ -887,10 +887,9 @@ impl ScriptListApp {
                                             .items_center()
                                             .px(px(8.)) // Comfortable horizontal padding
                                             .rounded(px(4.)) // Match button border radius
-                                            // Use theme opacity for vibrancy support
+                                            // Use low opacity for frosted glass vibrancy effect
                                             .bg(rgba(
-                                                (theme.colors.background.search_box << 8)
-                                                    | ((opacity.input * 255.0) as u32),
+                                                (theme.colors.background.search_box << 8) | 0x15, // ~8% opacity to match actions popup
                                             ))
                                             .border_1()
                                             // ALWAYS show border - just vary intensity
