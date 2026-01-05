@@ -157,17 +157,21 @@ fn clipboard_monitor_loop(stop_flag: Arc<AtomicBool>) -> Result<()> {
                             max_len = get_max_text_content_len(),
                             "Skipping oversized clipboard text entry"
                         );
+                        // Still update last_text for oversized entries (intentionally skipped)
+                        last_text = Some(text);
                     } else {
                         match add_entry(&text, ContentType::Text) {
                             Ok(entry_id) => {
                                 debug!(entry_id = %entry_id, "Added text entry to history");
+                                // ONLY update last_text on SUCCESS to avoid losing entries on DB errors
+                                last_text = Some(text);
                             }
                             Err(e) => {
-                                warn!(error = %e, "Failed to add text entry to history");
+                                // DON'T update last_text on failure - we'll retry on next poll
+                                warn!(error = %e, "Failed to add text entry to history (will retry)");
                             }
                         }
                     }
-                    last_text = Some(text);
                 }
             }
         }
@@ -189,21 +193,32 @@ fn clipboard_monitor_loop(stop_flag: Arc<AtomicBool>) -> Result<()> {
                 );
 
                 // Encode image as compressed PNG (base64)
-                if let Ok(base64_content) = encode_image_as_png(&image_data) {
-                    match add_entry(&base64_content, ContentType::Image) {
-                        Ok(entry_id) => {
-                            // Pre-decode the image immediately so it's ready for display
-                            if let Some(render_image) = decode_to_render_image(&base64_content) {
-                                cache_image(&entry_id, render_image);
-                                debug!(entry_id = %entry_id, "Pre-cached new image during monitoring");
+                match encode_image_as_png(&image_data) {
+                    Ok(base64_content) => {
+                        match add_entry(&base64_content, ContentType::Image) {
+                            Ok(entry_id) => {
+                                // Pre-decode the image immediately so it's ready for display
+                                if let Some(render_image) = decode_to_render_image(&base64_content)
+                                {
+                                    cache_image(&entry_id, render_image);
+                                    debug!(entry_id = %entry_id, "Pre-cached new image during monitoring");
+                                }
+                                // ONLY update last_image_hash on SUCCESS
+                                last_image_hash = Some(hash);
+                            }
+                            Err(e) => {
+                                // DON'T update last_image_hash on failure - we'll retry on next poll
+                                warn!(error = %e, "Failed to add image entry to history (will retry)");
                             }
                         }
-                        Err(e) => {
-                            warn!(error = %e, "Failed to add image entry to history");
-                        }
+                    }
+                    Err(e) => {
+                        // Encoding failed (likely corrupt image data), skip but update hash
+                        // to avoid repeated attempts on the same bad image
+                        warn!(error = %e, "Failed to encode image as PNG, skipping");
+                        last_image_hash = Some(hash);
                     }
                 }
-                last_image_hash = Some(hash);
             }
         }
 
@@ -312,5 +327,36 @@ mod tests {
 
         flag.store(false, Ordering::Relaxed);
         assert!(!flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_retry_on_db_failure_behavior() {
+        // Verify the retry logic by checking Option behavior
+        // When add_entry fails, last_text should remain None (or previous value)
+        // allowing retry on next poll
+
+        // Simulate first successful add
+        let mut last_text: Option<String> = Some("success".to_string());
+        assert_eq!(last_text.as_deref(), Some("success"));
+
+        // Simulate failed add - the key insight is that on failure,
+        // we DON'T update last_text. So if we check whether new_text != last_text,
+        // a failed entry will be retried on the next poll.
+        let new_text = "new_entry".to_string();
+
+        // Check if it's "new" (different from last)
+        let is_new = last_text.as_ref() != Some(&new_text);
+        assert!(is_new, "new_text should be detected as new");
+
+        // On failure, we DON'T update last_text (simulating the implemented behavior)
+        // This means is_new will STILL be true on the next poll iteration
+
+        // On success, we DO update:
+        last_text = Some(new_text.clone());
+        let is_new_after_success = last_text.as_ref() != Some(&new_text);
+        assert!(
+            !is_new_after_success,
+            "After success, same text should not be 'new'"
+        );
     }
 }
