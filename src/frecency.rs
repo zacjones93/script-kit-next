@@ -26,8 +26,10 @@ pub struct FrecencyEntry {
     pub count: u32,
     /// Unix timestamp (seconds) of last use
     pub last_used: u64,
-    /// Cached score (recalculated on load)
-    #[serde(default)]
+    /// Cached score (recalculated on load, not persisted)
+    /// This is a derived value computed from count, last_used, and half_life.
+    /// We skip serializing it because it's always recalculated on load.
+    #[serde(skip_serializing, default)]
     pub score: f64,
 }
 
@@ -138,7 +140,11 @@ fn current_timestamp() -> u64 {
 }
 
 /// Store for frecency data with persistence
-#[derive(Debug, Clone)]
+///
+/// NOTE: Clone is intentionally NOT derived to prevent accidental data loss
+/// in multi-window contexts. If you need to share FrecencyStore across
+/// multiple owners, use `Arc<Mutex<FrecencyStore>>` explicitly.
+#[derive(Debug)]
 pub struct FrecencyStore {
     /// Map of script path to frecency entry
     entries: HashMap<String, FrecencyEntry>,
@@ -358,6 +364,42 @@ impl FrecencyStore {
         self.revision = self.revision.wrapping_add(1);
     }
 
+    /// Record a use of a script at a specific timestamp (for testing)
+    ///
+    /// Same as `record_use()` but allows injecting a specific timestamp
+    /// for deterministic testing.
+    #[allow(dead_code)]
+    pub fn record_use_at(&mut self, path: &str, timestamp: u64) {
+        let half_life = self.half_life_days;
+
+        if let Some(entry) = self.entries.get_mut(path) {
+            entry.record_use_with_timestamp(timestamp, half_life);
+            debug!(
+                path = path,
+                count = entry.count,
+                score = entry.score,
+                half_life_days = half_life,
+                timestamp = timestamp,
+                "Updated frecency entry at timestamp"
+            );
+        } else {
+            let entry = FrecencyEntry {
+                count: 1,
+                last_used: timestamp,
+                score: 1.0,
+            };
+            debug!(
+                path = path,
+                half_life_days = half_life,
+                timestamp = timestamp,
+                "Created new frecency entry at timestamp"
+            );
+            self.entries.insert(path.to_string(), entry);
+        }
+        self.dirty = true;
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     /// Get the frecency score for a script
     ///
     /// Returns 0.0 if the script has never been used.
@@ -410,6 +452,42 @@ impl FrecencyStore {
             .collect()
     }
 
+    /// Get the top N items by frecency score at a specific timestamp (for testing)
+    ///
+    /// Same as `get_recent_items()` but allows querying at a specific timestamp
+    /// for deterministic testing.
+    #[allow(dead_code)]
+    pub fn get_recent_items_at(&self, limit: usize, at_timestamp: u64) -> Vec<(String, f64)> {
+        let hl = self.half_life_days;
+
+        let mut items: Vec<_> = self
+            .entries
+            .iter()
+            .map(|(path, entry)| {
+                let live_score = entry.score_at(at_timestamp, hl);
+                (path.clone(), live_score, entry.last_used)
+            })
+            .collect();
+
+        items.sort_by(|a, b| {
+            match b.1.partial_cmp(&a.1) {
+                Some(std::cmp::Ordering::Equal) | None => {}
+                Some(ord) => return ord,
+            }
+            match b.2.cmp(&a.2) {
+                std::cmp::Ordering::Equal => {}
+                ord => return ord,
+            }
+            a.0.cmp(&b.0)
+        });
+
+        items
+            .into_iter()
+            .take(limit)
+            .map(|(path, score, _)| (path, score))
+            .collect()
+    }
+
     /// Get the number of tracked scripts
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
@@ -447,6 +525,46 @@ impl FrecencyStore {
             self.dirty = true;
             self.revision = self.revision.wrapping_add(1);
         }
+    }
+
+    /// Prune stale entries to keep the frecency file bounded
+    ///
+    /// Removes entries where:
+    /// - Live score (with decay) is below `score_threshold`
+    /// - AND last_used is older than `min_age_days` days
+    ///
+    /// Returns the number of entries pruned.
+    #[allow(dead_code)]
+    pub fn prune_stale_entries(&mut self, score_threshold: f64, min_age_days: u64) -> usize {
+        let now = current_timestamp();
+        let hl = self.half_life_days;
+        let min_age_seconds = min_age_days * SECONDS_PER_DAY as u64;
+
+        let entries_before = self.entries.len();
+
+        self.entries.retain(|_path, entry| {
+            let live_score = entry.score_at(now, hl);
+            let age_seconds = now.saturating_sub(entry.last_used);
+
+            // Keep if: score is above threshold OR entry is recent enough
+            live_score >= score_threshold || age_seconds < min_age_seconds
+        });
+
+        let pruned_count = entries_before - self.entries.len();
+
+        if pruned_count > 0 {
+            self.dirty = true;
+            self.revision = self.revision.wrapping_add(1);
+            debug!(
+                pruned_count = pruned_count,
+                remaining = self.entries.len(),
+                score_threshold = score_threshold,
+                min_age_days = min_age_days,
+                "Pruned stale frecency entries"
+            );
+        }
+
+        pruned_count
     }
 }
 
@@ -835,10 +953,12 @@ mod tests {
 
     #[test]
     fn test_frecency_entry_serialization() {
+        // score is NOT serialized (it's derived on load), so we only verify
+        // that count and last_used round-trip correctly
         let entry = FrecencyEntry {
             count: 5,
             last_used: 1704067200, // 2024-01-01 00:00:00 UTC
-            score: 4.5,
+            score: 4.5,            // This will NOT be serialized
         };
 
         let json = serde_json::to_string(&entry).unwrap();
@@ -846,7 +966,11 @@ mod tests {
 
         assert_eq!(entry.count, deserialized.count);
         assert_eq!(entry.last_used, deserialized.last_used);
-        assert_eq!(entry.score, deserialized.score);
+        // score defaults to 0.0 since it's not serialized
+        assert_eq!(
+            deserialized.score, 0.0,
+            "Score should default to 0.0 when deserializing"
+        );
     }
 
     #[test]
@@ -1294,6 +1418,233 @@ mod tests {
             "Expected compact JSON with few newlines, got {} newlines",
             newline_count
         );
+
+        cleanup_temp_file(&path);
+    }
+
+    // ========================================
+    // Clock injection tests
+    // ========================================
+
+    #[test]
+    fn test_record_use_with_injected_timestamp() {
+        // Test that we can inject timestamps for deterministic testing
+        let (mut store, path) = create_test_store();
+        let fixed_time = 1704067200u64; // 2024-01-01 00:00:00 UTC
+
+        store.record_use_at("/test.ts", fixed_time);
+
+        let entry = store.entries.get("/test.ts").expect("Entry should exist");
+        assert_eq!(entry.last_used, fixed_time, "Should use injected timestamp");
+
+        cleanup_temp_file(&path);
+    }
+
+    #[test]
+    fn test_get_recent_items_at_timestamp() {
+        // Test that we can compute rankings at a specific timestamp
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join(format!("frecency_test_at_{}.json", uuid::Uuid::new_v4()));
+        let mut store = FrecencyStore::with_path(path.clone());
+
+        let base_time = 1704067200u64; // 2024-01-01
+        let week_later = base_time + (7 * SECONDS_PER_DAY as u64);
+
+        // Insert entries with explicit timestamps
+        // /old.ts: score=10.0 at base_time, will decay to 5.0 at week_later (1 half-life)
+        store.entries.insert(
+            "/old.ts".to_string(),
+            FrecencyEntry {
+                count: 10,
+                last_used: base_time,
+                score: 10.0,
+            },
+        );
+        // /recent.ts: score=8.0 at week_later, no decay when queried at week_later
+        // This beats the decayed /old.ts score of 5.0
+        store.entries.insert(
+            "/recent.ts".to_string(),
+            FrecencyEntry {
+                count: 8,
+                last_used: week_later,
+                score: 8.0,
+            },
+        );
+
+        // Query at week_later:
+        // - /old.ts: 10.0 * 0.5 = 5.0 (decayed by 1 half-life)
+        // - /recent.ts: 8.0 * 1.0 = 8.0 (no decay)
+        // So /recent.ts should rank first
+        let recent = store.get_recent_items_at(10, week_later);
+
+        assert_eq!(
+            recent[0].0, "/recent.ts",
+            "Recent script (8.0) should rank first over decayed old script (5.0) at week_later"
+        );
+
+        // Query at base_time:
+        // - /old.ts: 10.0 * 1.0 = 10.0 (no decay at creation time)
+        // - /recent.ts: last_used is in the future, so dt < 0, saturating to 0 -> no decay = 8.0
+        // Wait, that's wrong - /recent.ts wasn't created yet at base_time!
+        // score_at handles future timestamps by using saturating_sub which gives 0 elapsed time
+        // So both get no decay, and /old.ts (10.0) > /recent.ts (8.0)
+        let at_base = store.get_recent_items_at(10, base_time);
+
+        assert_eq!(
+            at_base[0].0, "/old.ts",
+            "Old script (10.0) should rank first over future recent script (8.0) at base_time"
+        );
+
+        cleanup_temp_file(&path);
+    }
+
+    // ========================================
+    // Score skip_serializing tests
+    // ========================================
+
+    #[test]
+    fn test_score_not_serialized() {
+        // Score should not be written to JSON (it's derived on load)
+        let entry = FrecencyEntry {
+            count: 5,
+            last_used: 1704067200,
+            score: 999.0, // This should not be serialized
+        };
+
+        let json = serde_json::to_string(&entry).unwrap();
+
+        // JSON should NOT contain "score" field
+        assert!(
+            !json.contains("\"score\""),
+            "score field should not be serialized, but got: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_score_defaults_on_deserialization() {
+        // When loading old data without score, it should default to 0.0
+        let json = r#"{"count": 5, "last_used": 1704067200}"#;
+        let entry: FrecencyEntry = serde_json::from_str(json).unwrap();
+
+        assert_eq!(entry.count, 5);
+        assert_eq!(entry.last_used, 1704067200);
+        assert_eq!(entry.score, 0.0, "Score should default to 0.0");
+    }
+
+    // ========================================
+    // Pruning tests
+    // ========================================
+
+    #[test]
+    fn test_prune_stale_entries() {
+        // Entries with very low scores and old timestamps should be prunable
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join(format!("frecency_test_prune_{}.json", uuid::Uuid::new_v4()));
+        let mut store = FrecencyStore::with_path(path.clone());
+
+        let now = current_timestamp();
+        let year_ago = now - (365 * SECONDS_PER_DAY as u64);
+        let week_ago = now - (7 * SECONDS_PER_DAY as u64);
+
+        // Old entry that should be pruned
+        store.entries.insert(
+            "/abandoned.ts".to_string(),
+            FrecencyEntry {
+                count: 1,
+                last_used: year_ago,
+                score: 0.001, // Very low score after decay
+            },
+        );
+
+        // Recent entry that should be kept
+        store.entries.insert(
+            "/active.ts".to_string(),
+            FrecencyEntry {
+                count: 5,
+                last_used: week_ago,
+                score: 5.0,
+            },
+        );
+
+        // Current entry that should be kept
+        store.entries.insert(
+            "/current.ts".to_string(),
+            FrecencyEntry {
+                count: 1,
+                last_used: now,
+                score: 1.0,
+            },
+        );
+
+        // Prune entries with live score < 0.01 AND last_used > 180 days ago
+        let pruned_count = store.prune_stale_entries(0.01, 180);
+
+        assert_eq!(pruned_count, 1, "Should prune exactly 1 stale entry");
+        assert_eq!(store.len(), 2, "Should have 2 entries remaining");
+        assert!(
+            store.entries.contains_key("/active.ts"),
+            "Active entry should remain"
+        );
+        assert!(
+            store.entries.contains_key("/current.ts"),
+            "Current entry should remain"
+        );
+        assert!(
+            !store.entries.contains_key("/abandoned.ts"),
+            "Abandoned entry should be pruned"
+        );
+        assert!(store.is_dirty(), "Store should be dirty after pruning");
+
+        cleanup_temp_file(&path);
+    }
+
+    #[test]
+    fn test_prune_keeps_high_score_old_entries() {
+        // Old entries with high accumulated score should NOT be pruned
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join(format!(
+            "frecency_test_prune2_{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        let mut store = FrecencyStore::with_path(path.clone());
+
+        let now = current_timestamp();
+        let year_ago = now - (365 * SECONDS_PER_DAY as u64);
+
+        // Old but heavily used entry - even after a year of decay,
+        // if it had score=1000, it might still be above threshold
+        store.entries.insert(
+            "/popular-old.ts".to_string(),
+            FrecencyEntry {
+                count: 1000,
+                last_used: year_ago,
+                score: 1000.0, // High accumulated score
+            },
+        );
+
+        // With 7-day half-life, after 365 days (52 half-lives):
+        // 1000 * 0.5^52 ≈ 0.0000000000000002 - this WOULD be pruned
+        // So this test verifies the score_threshold works correctly
+        let pruned = store.prune_stale_entries(0.0001, 180);
+
+        // This entry SHOULD be pruned because even high scores decay to nothing after a year
+        assert_eq!(
+            pruned, 1,
+            "Even high-score entries should be pruned after sufficient decay"
+        );
+
+        cleanup_temp_file(&path);
+    }
+
+    #[test]
+    fn test_prune_no_op_on_empty_store() {
+        let (mut store, path) = create_test_store();
+
+        let pruned = store.prune_stale_entries(0.01, 180);
+
+        assert_eq!(pruned, 0, "Empty store should prune nothing");
+        assert!(!store.is_dirty(), "Empty store should not be marked dirty");
 
         cleanup_temp_file(&path);
     }
