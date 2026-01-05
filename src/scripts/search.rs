@@ -443,20 +443,22 @@ pub fn fuzzy_search_scripts(scripts: &[Arc<Script>], query: &str) -> Vec<ScriptM
         // Score by description match - medium priority
         // Only use ASCII fast-path when both are ASCII
         if let Some(ref desc) = script.description {
-            if query_is_ascii && desc.is_ascii() {
-                if contains_ignore_ascii_case(desc, &query_lower) {
-                    score += 25;
-                }
+            if query_is_ascii
+                && desc.is_ascii()
+                && contains_ignore_ascii_case(desc, &query_lower)
+            {
+                score += 25;
             }
         }
 
         // Score by path match - lower priority
         // Paths are typically ASCII
         let path_str = script.path.to_string_lossy();
-        if query_is_ascii && path_str.is_ascii() {
-            if contains_ignore_ascii_case(&path_str, &query_lower) {
-                score += 10;
-            }
+        if query_is_ascii
+            && path_str.is_ascii()
+            && contains_ignore_ascii_case(&path_str, &query_lower)
+        {
+            score += 10;
         }
 
         if score > 0 {
@@ -552,10 +554,11 @@ pub fn fuzzy_search_scriptlets(scriptlets: &[Arc<Scriptlet>], query: &str) -> Ve
         // Score by description match - medium priority
         // Only use ASCII fast-path when both are ASCII
         if let Some(ref desc) = scriptlet.description {
-            if query_is_ascii && desc.is_ascii() {
-                if contains_ignore_ascii_case(desc, &query_lower) {
-                    score += 25;
-                }
+            if query_is_ascii
+                && desc.is_ascii()
+                && contains_ignore_ascii_case(desc, &query_lower)
+            {
+                score += 25;
             }
         }
 
@@ -574,10 +577,11 @@ pub fn fuzzy_search_scriptlets(scriptlets: &[Arc<Scriptlet>], query: &str) -> Ve
 
         // Bonus for tool type match
         // Tool types are ASCII (snippet, template, etc.)
-        if query_is_ascii && scriptlet.tool.is_ascii() {
-            if contains_ignore_ascii_case(&scriptlet.tool, &query_lower) {
-                score += 10;
-            }
+        if query_is_ascii
+            && scriptlet.tool.is_ascii()
+            && contains_ignore_ascii_case(&scriptlet.tool, &query_lower)
+        {
+            score += 10;
         }
 
         if score > 0 {
@@ -643,10 +647,11 @@ pub fn fuzzy_search_builtins(entries: &[BuiltInEntry], query: &str) -> Vec<Built
 
         // Score by description match - medium priority
         // Built-in descriptions are ASCII
-        if query_is_ascii && entry.description.is_ascii() {
-            if contains_ignore_ascii_case(&entry.description, &query_lower) {
-                score += 25;
-            }
+        if query_is_ascii
+            && entry.description.is_ascii()
+            && contains_ignore_ascii_case(&entry.description, &query_lower)
+        {
+            score += 25;
         }
 
         // Score by keyword match - high priority (keywords are designed for matching)
@@ -730,20 +735,22 @@ pub fn fuzzy_search_apps(apps: &[AppInfo], query: &str) -> Vec<AppMatch> {
         // Score by bundle_id match - lower priority
         // Bundle IDs are always ASCII (e.g., "com.apple.Safari")
         if let Some(ref bundle_id) = app.bundle_id {
-            if query_is_ascii && bundle_id.is_ascii() {
-                if contains_ignore_ascii_case(bundle_id, &query_lower) {
-                    score += 15;
-                }
+            if query_is_ascii
+                && bundle_id.is_ascii()
+                && contains_ignore_ascii_case(bundle_id, &query_lower)
+            {
+                score += 15;
             }
         }
 
         // Score by path match - lowest priority
         // Paths are typically ASCII
         let path_str = app.path.to_string_lossy();
-        if query_is_ascii && path_str.is_ascii() {
-            if contains_ignore_ascii_case(&path_str, &query_lower) {
-                score += 5;
-            }
+        if query_is_ascii
+            && path_str.is_ascii()
+            && contains_ignore_ascii_case(&path_str, &query_lower)
+        {
+            score += 5;
         }
 
         if score > 0 {

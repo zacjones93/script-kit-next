@@ -42,14 +42,22 @@ impl FrecencyEntry {
         }
     }
 
-    /// Record a new use of this script
+    /// Record a new use of this script using the default half-life
+    ///
+    /// NOTE: Prefer using FrecencyStore::record_use() which uses the store's
+    /// configured half-life instead of the default.
+    #[allow(dead_code)]
     pub fn record_use(&mut self) {
         self.count += 1;
         self.last_used = current_timestamp();
         self.recalculate_score();
     }
 
-    /// Recalculate the frecency score based on current time
+    /// Recalculate the frecency score based on current time using default half-life
+    ///
+    /// NOTE: Prefer using recalculate_score_with_half_life() with the store's
+    /// configured half-life.
+    #[allow(dead_code)]
     pub fn recalculate_score(&mut self) {
         self.score = calculate_score(self.count, self.last_used, DEFAULT_SUGGESTED_HALF_LIFE_DAYS);
     }
