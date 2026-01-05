@@ -343,6 +343,8 @@ impl ScriptListApp {
         clipboard_history::set_max_text_content_len(
             self.config.get_clipboard_history_max_text_length(),
         );
+        // Hot-reload hotkeys from updated config
+        hotkeys::update_hotkeys(&self.config);
         logging::log(
             "APP",
             &format!("Config reloaded: padding={:?}", self.config.get_padding()),

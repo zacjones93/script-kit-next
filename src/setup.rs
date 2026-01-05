@@ -1906,7 +1906,9 @@ mod tests {
 
         let result = ensure_kit_setup();
         // Don't assert is_fresh_install - just verify the structure is correct
-        assert!(result.warnings.is_empty() || !result.warnings.iter().any(|w| w.contains("Failed")));
+        assert!(
+            result.warnings.is_empty() || !result.warnings.iter().any(|w| w.contains("Failed"))
+        );
 
         // Verify kit/ subdirectory structure
         let kit_dir = kit_root.join("kit");
@@ -1914,52 +1916,118 @@ mod tests {
 
         // Verify main kit directories
         let main_dir = kit_dir.join("main");
-        assert!(main_dir.join("scripts").exists(), "kit/main/scripts/ should exist");
-        assert!(main_dir.join("extensions").exists(), "kit/main/extensions/ should exist");
-        assert!(main_dir.join("agents").exists(), "kit/main/agents/ should exist");
+        assert!(
+            main_dir.join("scripts").exists(),
+            "kit/main/scripts/ should exist"
+        );
+        assert!(
+            main_dir.join("extensions").exists(),
+            "kit/main/extensions/ should exist"
+        );
+        assert!(
+            main_dir.join("agents").exists(),
+            "kit/main/agents/ should exist"
+        );
 
         // Verify user config files in kit/
-        assert!(kit_dir.join("config.ts").exists(), "kit/config.ts should exist");
-        assert!(kit_dir.join("theme.json").exists(), "kit/theme.json should exist");
-        assert!(kit_dir.join("package.json").exists(), "kit/package.json should exist");
-        assert!(kit_dir.join("tsconfig.json").exists(), "kit/tsconfig.json should exist");
-        assert!(kit_dir.join("AGENTS.md").exists(), "kit/AGENTS.md should exist");
-        assert!(kit_dir.join("CLAUDE.md").exists(), "kit/CLAUDE.md should exist");
+        assert!(
+            kit_dir.join("config.ts").exists(),
+            "kit/config.ts should exist"
+        );
+        assert!(
+            kit_dir.join("theme.json").exists(),
+            "kit/theme.json should exist"
+        );
+        assert!(
+            kit_dir.join("package.json").exists(),
+            "kit/package.json should exist"
+        );
+        assert!(
+            kit_dir.join("tsconfig.json").exists(),
+            "kit/tsconfig.json should exist"
+        );
+        assert!(
+            kit_dir.join("AGENTS.md").exists(),
+            "kit/AGENTS.md should exist"
+        );
+        assert!(
+            kit_dir.join("CLAUDE.md").exists(),
+            "kit/CLAUDE.md should exist"
+        );
 
         // Verify SDK directory
-        assert!(kit_root.join("sdk").join("kit-sdk.ts").exists(), "sdk/kit-sdk.ts should exist");
+        assert!(
+            kit_root.join("sdk").join("kit-sdk.ts").exists(),
+            "sdk/kit-sdk.ts should exist"
+        );
 
         // Verify other directories
         assert!(kit_root.join("db").exists(), "db/ directory should exist");
-        assert!(kit_root.join("logs").exists(), "logs/ directory should exist");
-        assert!(kit_root.join("cache").exists(), "cache/ directory should exist");
+        assert!(
+            kit_root.join("logs").exists(),
+            "logs/ directory should exist"
+        );
+        assert!(
+            kit_root.join("cache").exists(),
+            "cache/ directory should exist"
+        );
 
         // Verify GUIDE.md at root
-        assert!(kit_root.join("GUIDE.md").exists(), "GUIDE.md should exist at root");
+        assert!(
+            kit_root.join("GUIDE.md").exists(),
+            "GUIDE.md should exist at root"
+        );
 
         // Verify sample script on fresh install
         let hello_script = main_dir.join("scripts").join("hello-world.ts");
-        assert!(hello_script.exists(), "hello-world.ts sample script should exist");
+        assert!(
+            hello_script.exists(),
+            "hello-world.ts sample script should exist"
+        );
 
         // Verify config.ts content
         let config_content = fs::read_to_string(kit_dir.join("config.ts")).unwrap();
-        assert!(config_content.contains("@scriptkit/sdk"), "config.ts should import @scriptkit/sdk");
-        assert!(config_content.contains("hotkey"), "config.ts should have hotkey config");
+        assert!(
+            config_content.contains("@scriptkit/sdk"),
+            "config.ts should import @scriptkit/sdk"
+        );
+        assert!(
+            config_content.contains("hotkey"),
+            "config.ts should have hotkey config"
+        );
 
         // Verify package.json has correct name and type
         let package_content = fs::read_to_string(kit_dir.join("package.json")).unwrap();
-        assert!(package_content.contains("@scriptkit/kit"), "package.json should have @scriptkit/kit name");
-        assert!(package_content.contains("\"type\": \"module\""), "package.json should enable ESM");
+        assert!(
+            package_content.contains("@scriptkit/kit"),
+            "package.json should have @scriptkit/kit name"
+        );
+        assert!(
+            package_content.contains("\"type\": \"module\""),
+            "package.json should enable ESM"
+        );
 
         // Verify AGENTS.md content
         let agents_content = fs::read_to_string(kit_dir.join("AGENTS.md")).unwrap();
-        assert!(agents_content.contains("Script Kit"), "AGENTS.md should mention Script Kit");
-        assert!(agents_content.contains("~/.scriptkit/kit/config.ts"), "AGENTS.md should have correct config path");
+        assert!(
+            agents_content.contains("Script Kit"),
+            "AGENTS.md should mention Script Kit"
+        );
+        assert!(
+            agents_content.contains("~/.scriptkit/kit/config.ts"),
+            "AGENTS.md should have correct config path"
+        );
 
         // Verify CLAUDE.md content
         let claude_content = fs::read_to_string(kit_dir.join("CLAUDE.md")).unwrap();
-        assert!(claude_content.contains("Script Kit GPUI"), "CLAUDE.md should mention Script Kit GPUI");
-        assert!(claude_content.contains("NOT the original Script Kit"), "CLAUDE.md should warn about v1 vs v2");
+        assert!(
+            claude_content.contains("Script Kit GPUI"),
+            "CLAUDE.md should mention Script Kit GPUI"
+        );
+        assert!(
+            claude_content.contains("NOT the original Script Kit"),
+            "CLAUDE.md should warn about v1 vs v2"
+        );
 
         std::env::remove_var(SK_PATH_ENV);
     }

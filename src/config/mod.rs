@@ -19,7 +19,7 @@ mod types;
 pub use defaults::DEFAULT_SUGGESTED_HALF_LIFE_DAYS;
 
 // Re-export types that are used externally
-pub use types::{BuiltInConfig, Config, SuggestedConfig};
+pub use types::{BuiltInConfig, Config, HotkeyConfig, SuggestedConfig};
 
 // Re-export loader
 pub use loader::load_config;
@@ -33,7 +33,7 @@ pub use defaults::{
 };
 
 #[cfg(test)]
-pub use types::{CommandConfig, ContentPadding, HotkeyConfig, ProcessLimits};
+pub use types::{CommandConfig, ContentPadding, ProcessLimits};
 
 #[cfg(test)]
 #[path = "config_tests.rs"]

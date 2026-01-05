@@ -3,10 +3,269 @@ use global_hotkey::{
     Error as HotkeyError, GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use crate::{config, logging, scripts, shortcuts};
+
+// =============================================================================
+// Global state for hotkey hot-reload
+// =============================================================================
+
+/// The main GlobalHotKeyManager - stored globally so update_hotkeys can access it
+static MAIN_MANAGER: OnceLock<Mutex<GlobalHotKeyManager>> = OnceLock::new();
+
+/// Current hotkey IDs - read by the event loop via atomics
+static MAIN_HOTKEY_ID: AtomicU32 = AtomicU32::new(0);
+static NOTES_HOTKEY_ID: AtomicU32 = AtomicU32::new(0);
+static AI_HOTKEY_ID: AtomicU32 = AtomicU32::new(0);
+
+/// Stores the actual HotKey objects (needed for unregistration)
+struct CurrentHotkeys {
+    main: Option<HotKey>,
+    notes: Option<HotKey>,
+    ai: Option<HotKey>,
+}
+
+static CURRENT_HOTKEYS: OnceLock<Mutex<CurrentHotkeys>> = OnceLock::new();
+
+fn get_current_hotkeys() -> &'static Mutex<CurrentHotkeys> {
+    CURRENT_HOTKEYS.get_or_init(|| {
+        Mutex::new(CurrentHotkeys {
+            main: None,
+            notes: None,
+            ai: None,
+        })
+    })
+}
+
+/// Parse a HotkeyConfig into (Modifiers, Code)
+fn parse_hotkey_config(hk: &config::HotkeyConfig) -> Option<(Modifiers, Code)> {
+    let code = match hk.key.as_str() {
+        "Semicolon" => Code::Semicolon,
+        "KeyK" => Code::KeyK,
+        "KeyP" => Code::KeyP,
+        "Space" => Code::Space,
+        "Enter" => Code::Enter,
+        "Digit0" => Code::Digit0,
+        "Digit1" => Code::Digit1,
+        "Digit2" => Code::Digit2,
+        "Digit3" => Code::Digit3,
+        "Digit4" => Code::Digit4,
+        "Digit5" => Code::Digit5,
+        "Digit6" => Code::Digit6,
+        "Digit7" => Code::Digit7,
+        "Digit8" => Code::Digit8,
+        "Digit9" => Code::Digit9,
+        "KeyA" => Code::KeyA,
+        "KeyB" => Code::KeyB,
+        "KeyC" => Code::KeyC,
+        "KeyD" => Code::KeyD,
+        "KeyE" => Code::KeyE,
+        "KeyF" => Code::KeyF,
+        "KeyG" => Code::KeyG,
+        "KeyH" => Code::KeyH,
+        "KeyI" => Code::KeyI,
+        "KeyJ" => Code::KeyJ,
+        "KeyL" => Code::KeyL,
+        "KeyM" => Code::KeyM,
+        "KeyN" => Code::KeyN,
+        "KeyO" => Code::KeyO,
+        "KeyQ" => Code::KeyQ,
+        "KeyR" => Code::KeyR,
+        "KeyS" => Code::KeyS,
+        "KeyT" => Code::KeyT,
+        "KeyU" => Code::KeyU,
+        "KeyV" => Code::KeyV,
+        "KeyW" => Code::KeyW,
+        "KeyX" => Code::KeyX,
+        "KeyY" => Code::KeyY,
+        "KeyZ" => Code::KeyZ,
+        "F1" => Code::F1,
+        "F2" => Code::F2,
+        "F3" => Code::F3,
+        "F4" => Code::F4,
+        "F5" => Code::F5,
+        "F6" => Code::F6,
+        "F7" => Code::F7,
+        "F8" => Code::F8,
+        "F9" => Code::F9,
+        "F10" => Code::F10,
+        "F11" => Code::F11,
+        "F12" => Code::F12,
+        _ => return None,
+    };
+
+    let mut modifiers = Modifiers::empty();
+    for modifier in &hk.modifiers {
+        match modifier.as_str() {
+            "meta" => modifiers |= Modifiers::META,
+            "ctrl" => modifiers |= Modifiers::CONTROL,
+            "alt" => modifiers |= Modifiers::ALT,
+            "shift" => modifiers |= Modifiers::SHIFT,
+            _ => {}
+        }
+    }
+
+    Some((modifiers, code))
+}
+
+/// Convert a HotkeyConfig to a display string (e.g., "meta+shift+N")
+fn hotkey_config_to_display(hk: &config::HotkeyConfig) -> String {
+    format!(
+        "{}{}{}",
+        hk.modifiers.join("+"),
+        if hk.modifiers.is_empty() { "" } else { "+" },
+        hk.key
+    )
+}
+
+/// Update hotkeys from config - call this when config changes
+pub fn update_hotkeys(cfg: &config::Config) {
+    let manager_guard = match MAIN_MANAGER.get() {
+        Some(m) => match m.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                logging::log("HOTKEY", &format!("Failed to lock manager: {}", e));
+                return;
+            }
+        },
+        None => {
+            logging::log("HOTKEY", "Manager not initialized - hotkeys not updated");
+            return;
+        }
+    };
+
+    let mut hotkeys_guard = match get_current_hotkeys().lock() {
+        Ok(g) => g,
+        Err(e) => {
+            logging::log("HOTKEY", &format!("Failed to lock current hotkeys: {}", e));
+            return;
+        }
+    };
+
+    // Update main hotkey
+    let main_config = &cfg.hotkey;
+    if let Some((mods, code)) = parse_hotkey_config(main_config) {
+        let new_hotkey = HotKey::new(Some(mods), code);
+        let new_id = new_hotkey.id();
+        let current_id = MAIN_HOTKEY_ID.load(Ordering::SeqCst);
+
+        if new_id != current_id {
+            let display = hotkey_config_to_display(main_config);
+
+            // Unregister old
+            if let Some(old_hotkey) = hotkeys_guard.main.take() {
+                if let Err(e) = manager_guard.unregister(old_hotkey) {
+                    logging::log(
+                        "HOTKEY",
+                        &format!("Failed to unregister old main hotkey: {}", e),
+                    );
+                }
+            }
+
+            // Register new
+            match manager_guard.register(new_hotkey) {
+                Ok(()) => {
+                    MAIN_HOTKEY_ID.store(new_id, Ordering::SeqCst);
+                    hotkeys_guard.main = Some(HotKey::new(Some(mods), code));
+                    MAIN_HOTKEY_REGISTERED.store(true, Ordering::SeqCst);
+                    logging::log(
+                        "HOTKEY",
+                        &format!("Hot-reloaded main hotkey: {} (id: {})", display, new_id),
+                    );
+                }
+                Err(e) => {
+                    MAIN_HOTKEY_REGISTERED.store(false, Ordering::SeqCst);
+                    logging::log(
+                        "HOTKEY",
+                        &format!("Failed to register main hotkey {}: {}", display, e),
+                    );
+                }
+            }
+        }
+    }
+
+    // Update notes hotkey
+    let notes_config = cfg.get_notes_hotkey();
+    if let Some((mods, code)) = parse_hotkey_config(&notes_config) {
+        let new_hotkey = HotKey::new(Some(mods), code);
+        let new_id = new_hotkey.id();
+        let current_id = NOTES_HOTKEY_ID.load(Ordering::SeqCst);
+
+        if new_id != current_id {
+            let display = hotkey_config_to_display(&notes_config);
+
+            // Unregister old
+            if let Some(old_hotkey) = hotkeys_guard.notes.take() {
+                if let Err(e) = manager_guard.unregister(old_hotkey) {
+                    logging::log(
+                        "HOTKEY",
+                        &format!("Failed to unregister old notes hotkey: {}", e),
+                    );
+                }
+            }
+
+            // Register new
+            match manager_guard.register(new_hotkey) {
+                Ok(()) => {
+                    NOTES_HOTKEY_ID.store(new_id, Ordering::SeqCst);
+                    hotkeys_guard.notes = Some(HotKey::new(Some(mods), code));
+                    logging::log(
+                        "HOTKEY",
+                        &format!("Hot-reloaded notes hotkey: {} (id: {})", display, new_id),
+                    );
+                }
+                Err(e) => {
+                    logging::log(
+                        "HOTKEY",
+                        &format!("Failed to register notes hotkey {}: {}", display, e),
+                    );
+                }
+            }
+        }
+    }
+
+    // Update AI hotkey
+    let ai_config = cfg.get_ai_hotkey();
+    if let Some((mods, code)) = parse_hotkey_config(&ai_config) {
+        let new_hotkey = HotKey::new(Some(mods), code);
+        let new_id = new_hotkey.id();
+        let current_id = AI_HOTKEY_ID.load(Ordering::SeqCst);
+
+        if new_id != current_id {
+            let display = hotkey_config_to_display(&ai_config);
+
+            // Unregister old
+            if let Some(old_hotkey) = hotkeys_guard.ai.take() {
+                if let Err(e) = manager_guard.unregister(old_hotkey) {
+                    logging::log(
+                        "HOTKEY",
+                        &format!("Failed to unregister old AI hotkey: {}", e),
+                    );
+                }
+            }
+
+            // Register new
+            match manager_guard.register(new_hotkey) {
+                Ok(()) => {
+                    AI_HOTKEY_ID.store(new_id, Ordering::SeqCst);
+                    hotkeys_guard.ai = Some(HotKey::new(Some(mods), code));
+                    logging::log(
+                        "HOTKEY",
+                        &format!("Hot-reloaded AI hotkey: {} (id: {})", display, new_id),
+                    );
+                }
+                Err(e) => {
+                    logging::log(
+                        "HOTKEY",
+                        &format!("Failed to register AI hotkey {}: {}", display, e),
+                    );
+                }
+            }
+        }
+    }
+}
 
 // =============================================================================
 // Dynamic Script Hotkey Manager
@@ -495,6 +754,21 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
             }
         };
 
+        // Store manager globally for hot-reload access
+        if MAIN_MANAGER.set(Mutex::new(manager)).is_err() {
+            logging::log("HOTKEY", "Manager already initialized (unexpected)");
+            return;
+        }
+
+        // Get a reference to the manager for initial registration
+        let manager_guard = match MAIN_MANAGER.get().unwrap().lock() {
+            Ok(g) => g,
+            Err(e) => {
+                logging::log("HOTKEY", &format!("Failed to lock manager: {}", e));
+                return;
+            }
+        };
+
         // Convert config hotkey to global_hotkey::Code
         let code = match config.hotkey.key.as_str() {
             "Semicolon" => Code::Semicolon,
@@ -588,10 +862,17 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
             }
         ) + &config.hotkey.key;
 
-        if let Err(e) = manager.register(hotkey) {
+        if let Err(e) = manager_guard.register(hotkey) {
             logging::log("HOTKEY", &format_hotkey_error(&e, &hotkey_display));
             // Main hotkey registration failed - flag stays false
             return;
+        }
+
+        // Store ID in atomic for event loop and HotKey for unregistration
+        MAIN_HOTKEY_ID.store(main_hotkey_id, Ordering::SeqCst);
+        {
+            let mut hotkeys = get_current_hotkeys().lock().unwrap();
+            hotkeys.main = Some(HotKey::new(Some(modifiers), code));
         }
 
         // Mark main hotkey as successfully registered
@@ -639,9 +920,15 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
             }
         ) + &notes_config.key;
 
-        if let Err(e) = manager.register(notes_hotkey) {
+        if let Err(e) = manager_guard.register(notes_hotkey) {
             logging::log("HOTKEY", &format_hotkey_error(&e, &notes_display));
         } else {
+            // Store ID in atomic and HotKey for unregistration
+            NOTES_HOTKEY_ID.store(notes_hotkey_id, Ordering::SeqCst);
+            {
+                let mut hotkeys = get_current_hotkeys().lock().unwrap();
+                hotkeys.notes = Some(HotKey::new(Some(notes_modifiers), notes_code));
+            }
             logging::log(
                 "HOTKEY",
                 &format!(
@@ -684,9 +971,15 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
             }
         ) + &ai_config.key;
 
-        if let Err(e) = manager.register(ai_hotkey) {
+        if let Err(e) = manager_guard.register(ai_hotkey) {
             logging::log("HOTKEY", &format_hotkey_error(&e, &ai_display));
         } else {
+            // Store ID in atomic and HotKey for unregistration
+            AI_HOTKEY_ID.store(ai_hotkey_id, Ordering::SeqCst);
+            {
+                let mut hotkeys = get_current_hotkeys().lock().unwrap();
+                hotkeys.ai = Some(HotKey::new(Some(ai_modifiers), ai_code));
+            }
             logging::log(
                 "HOTKEY",
                 &format!("Registered AI hotkey {} (id: {})", ai_display, ai_hotkey_id),
@@ -706,7 +999,7 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
                     let script_hotkey = HotKey::new(Some(mods), key_code);
                     let script_hotkey_id = script_hotkey.id();
 
-                    match manager.register(script_hotkey) {
+                    match manager_guard.register(script_hotkey) {
                         Ok(()) => {
                             script_hotkey_map.insert(
                                 script_hotkey_id,
@@ -757,7 +1050,7 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
                         .clone()
                         .unwrap_or_else(|| scriptlet.name.clone());
 
-                    match manager.register(scriptlet_hotkey) {
+                    match manager_guard.register(scriptlet_hotkey) {
                         Ok(()) => {
                             script_hotkey_map.insert(scriptlet_hotkey_id, scriptlet_path.clone());
                             logging::log(
@@ -791,6 +1084,10 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
             ),
         );
 
+        // Drop the manager guard before entering event loop
+        // This allows update_hotkeys to acquire the lock for hot-reload
+        drop(manager_guard);
+
         let receiver = GlobalHotKeyEvent::receiver();
 
         // Log all registered hotkey IDs for debugging
@@ -809,17 +1106,22 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
                     continue;
                 }
 
+                // Read current IDs from atomics (support hot-reload)
+                let current_main_id = MAIN_HOTKEY_ID.load(Ordering::SeqCst);
+                let current_notes_id = NOTES_HOTKEY_ID.load(Ordering::SeqCst);
+                let current_ai_id = AI_HOTKEY_ID.load(Ordering::SeqCst);
+
                 // Log EVERY hotkey event with its ID for debugging
                 logging::log(
                     "HOTKEY",
                     &format!(
                         "Received event id={} (main={}, notes={}, ai={})",
-                        event.id, main_hotkey_id, notes_hotkey_id, ai_hotkey_id
+                        event.id, current_main_id, current_notes_id, current_ai_id
                     ),
                 );
 
                 // Check if it's the main app hotkey
-                if event.id == main_hotkey_id {
+                if event.id == current_main_id {
                     let count = HOTKEY_TRIGGER_COUNT.fetch_add(1, Ordering::SeqCst);
                     // Send via async_channel for immediate event-driven handling
                     if hotkey_channel().0.send_blocking(()).is_err() {
@@ -827,26 +1129,20 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
                     }
                     logging::log(
                         "HOTKEY",
-                        &format!("{} pressed (trigger #{})", hotkey_display, count + 1),
+                        &format!("Main hotkey pressed (trigger #{})", count + 1),
                     );
                 }
                 // Check if it's the notes hotkey - dispatch directly to main thread via GCD
-                else if event.id == notes_hotkey_id {
+                else if event.id == current_notes_id {
                     logging::log(
                         "HOTKEY",
-                        &format!(
-                            "{} pressed (notes) - dispatching to main thread",
-                            notes_display
-                        ),
+                        "Notes hotkey pressed - dispatching to main thread",
                     );
                     dispatch_notes_hotkey();
                 }
                 // Check if it's the AI hotkey - dispatch directly to main thread via GCD
-                else if event.id == ai_hotkey_id {
-                    logging::log(
-                        "HOTKEY",
-                        &format!("{} pressed (AI) - dispatching to main thread", ai_display),
-                    );
+                else if event.id == current_ai_id {
+                    logging::log("HOTKEY", "AI hotkey pressed - dispatching to main thread");
                     dispatch_ai_hotkey();
                 }
                 // Check if it's a script shortcut
