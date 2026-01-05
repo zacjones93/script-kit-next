@@ -21,6 +21,26 @@ use crate::logging;
 use crate::snippet::ParsedSnippet;
 use crate::theme::Theme;
 
+/// Convert a character offset to a byte offset.
+///
+/// CRITICAL: When char_offset equals or exceeds the character count of the text,
+/// this returns text.len() (the byte length), NOT 0. This is essential for
+/// correct cursor positioning at end-of-document (e.g., $0 tabstops).
+///
+/// # Arguments
+/// * `text` - The string to convert offsets in
+/// * `char_offset` - Character index (0-based)
+///
+/// # Returns
+/// The byte offset corresponding to the character offset, or text.len() if
+/// the char_offset is at or beyond the end of the string.
+fn char_offset_to_byte_offset(text: &str, char_offset: usize) -> usize {
+    text.char_indices()
+        .nth(char_offset)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len()) // CRITICAL: Use text.len(), not 0!
+}
+
 /// Convert a character offset to a Position (line, column)
 ///
 /// This is needed because gpui-component's InputState uses Position (line, column)
@@ -695,17 +715,10 @@ impl EditorPrompt {
             let start_clamped = start.min(text_len);
             let end_clamped = end.min(text_len);
 
-            // Convert char offsets to byte offsets
-            let start_bytes = text
-                .char_indices()
-                .nth(start_clamped)
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            let end_bytes = text
-                .char_indices()
-                .nth(end_clamped)
-                .map(|(i, _)| i)
-                .unwrap_or(text.len());
+            // Convert char offsets to byte offsets using the helper function
+            // CRITICAL: This correctly handles end-of-document positions (e.g., $0)
+            let start_bytes = char_offset_to_byte_offset(&text, start_clamped);
+            let end_bytes = char_offset_to_byte_offset(&text, end_clamped);
 
             // Log what text we're actually selecting
             let selected_text = if start_bytes < end_bytes && end_bytes <= text.len() {
@@ -1381,5 +1394,96 @@ mod tests {
         assert_eq!(state.snippet.tabstops.len(), 2);
         assert_eq!(state.snippet.tabstops[0].index, 1);
         assert_eq!(state.snippet.tabstops[1].index, 0);
+    }
+
+    // =========================================================================
+    // char_offset_to_byte_offset tests - CRITICAL for correct cursor placement
+    // =========================================================================
+
+    #[test]
+    fn test_char_to_byte_offset_basic() {
+        let text = "Hello";
+        assert_eq!(char_offset_to_byte_offset(text, 0), 0); // 'H'
+        assert_eq!(char_offset_to_byte_offset(text, 1), 1); // 'e'
+        assert_eq!(char_offset_to_byte_offset(text, 5), 5); // end of string (equals len)
+    }
+
+    #[test]
+    fn test_char_to_byte_offset_at_end_of_document() {
+        // CRITICAL: This is the bug fix - offset at end should NOT return 0
+        let text = "Hello";
+        // Char offset 5 (end of 5-char string) should return byte offset 5, not 0
+        assert_eq!(char_offset_to_byte_offset(text, 5), 5);
+
+        // Beyond end should also return text.len()
+        assert_eq!(char_offset_to_byte_offset(text, 100), 5);
+    }
+
+    #[test]
+    fn test_char_to_byte_offset_empty_string() {
+        let text = "";
+        // Empty string: any offset should return 0 (which equals text.len())
+        assert_eq!(char_offset_to_byte_offset(text, 0), 0);
+        assert_eq!(char_offset_to_byte_offset(text, 1), 0);
+    }
+
+    #[test]
+    fn test_char_to_byte_offset_unicode() {
+        // "你好" = 2 chars, 6 bytes (3 bytes per CJK char)
+        let text = "你好";
+        assert_eq!(text.len(), 6); // 6 bytes
+        assert_eq!(text.chars().count(), 2); // 2 chars
+
+        assert_eq!(char_offset_to_byte_offset(text, 0), 0); // '你' at byte 0
+        assert_eq!(char_offset_to_byte_offset(text, 1), 3); // '好' at byte 3
+        assert_eq!(char_offset_to_byte_offset(text, 2), 6); // end = byte length
+    }
+
+    #[test]
+    fn test_char_to_byte_offset_mixed_unicode() {
+        // "Hi你好" = 4 chars, 8 bytes
+        let text = "Hi你好";
+        assert_eq!(text.len(), 8); // 2 + 3 + 3 = 8 bytes
+        assert_eq!(text.chars().count(), 4); // 4 chars
+
+        assert_eq!(char_offset_to_byte_offset(text, 0), 0); // 'H'
+        assert_eq!(char_offset_to_byte_offset(text, 1), 1); // 'i'
+        assert_eq!(char_offset_to_byte_offset(text, 2), 2); // '你'
+        assert_eq!(char_offset_to_byte_offset(text, 3), 5); // '好'
+        assert_eq!(char_offset_to_byte_offset(text, 4), 8); // end
+    }
+
+    #[test]
+    fn test_char_to_byte_offset_emoji() {
+        // "Hello 🌍" = 7 chars, but 🌍 is 4 bytes
+        let text = "Hello 🌍";
+        assert_eq!(text.chars().count(), 7);
+        assert!(text.len() > 7); // bytes > chars
+
+        assert_eq!(char_offset_to_byte_offset(text, 0), 0); // 'H'
+        assert_eq!(char_offset_to_byte_offset(text, 6), 6); // '🌍' starts at byte 6
+        assert_eq!(char_offset_to_byte_offset(text, 7), text.len()); // end
+    }
+
+    #[test]
+    fn test_char_to_byte_offset_snippet_final_cursor() {
+        // Simulate $0 at end of "Hello name!"
+        // This is the exact scenario that was broken before the fix
+        let text = "Hello name!";
+        let text_len = text.chars().count(); // 11
+
+        // $0 range is (11, 11) - cursor at very end
+        let start_clamped = 11_usize.min(text_len);
+        let end_clamped = 11_usize.min(text_len);
+
+        // Both should be 11 (byte length), NOT 0
+        let start_bytes = char_offset_to_byte_offset(text, start_clamped);
+        let end_bytes = char_offset_to_byte_offset(text, end_clamped);
+
+        assert_eq!(start_bytes, 11, "start_bytes should be 11, not 0!");
+        assert_eq!(end_bytes, 11, "end_bytes should be 11");
+
+        // This is a zero-length selection at the end (cursor, not selection)
+        assert_eq!(start_bytes, end_bytes);
     }
 }
