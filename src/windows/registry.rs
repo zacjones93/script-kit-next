@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Unified Window Registry
 //!
 //! Provides a single registry for all application windows, replacing separate

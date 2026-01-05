@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 //! Window management module
 //!
 //! This module provides a unified window registry for managing multiple windows

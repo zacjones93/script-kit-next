@@ -6,6 +6,7 @@
 //! - Focus-aware color variations
 //! - Terminal ANSI color palette
 //! - gpui-component theme integration
+//! - Global theme service for multi-window theme sync
 //!
 //! # Module Structure
 //!
@@ -13,10 +14,12 @@
 //! - `types` - Theme struct definitions
 //! - `helpers` - Lightweight color extraction for render closures
 //! - `gpui_integration` - gpui-component theme mapping
+//! - `service` - Global theme watcher service
 
 mod gpui_integration;
 mod helpers;
 pub mod hex_color;
+pub mod service;
 mod types;
 
 // Re-export types used externally

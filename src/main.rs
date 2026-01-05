@@ -67,6 +67,7 @@ mod warning_banner;
 mod watcher;
 mod window_manager;
 mod window_resize;
+mod windows;
 
 // Phase 1 system API modules
 mod clipboard_history;
