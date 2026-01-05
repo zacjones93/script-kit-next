@@ -301,9 +301,8 @@ pub fn brightness_down() -> Result<(), String> {
 
 /// Set display brightness to a specific level
 ///
-/// Uses AppleScript to set brightness. Note that this requires
-/// the brightness scripting addition or may use key simulation
-/// to reach the target level.
+/// Uses the `brightness` CLI tool or falls back to reading current brightness
+/// and using delta key presses to reach the target level.
 ///
 /// # Arguments
 /// * `level` - Brightness level from 0 to 100
@@ -312,36 +311,102 @@ pub fn set_brightness(level: u8) -> Result<(), String> {
     info!(level = level, "Setting brightness");
 
     // Try using the brightness command line tool if available
-    // This is the cleanest approach when the tool is installed
-    let result = std::process::Command::new("brightness")
-        .arg(format!("{:.2}", level as f32 / 100.0))
-        .output();
+    // Check common Homebrew paths since GUI apps don't inherit shell PATH
+    let brightness_paths = [
+        "brightness",                    // In PATH
+        "/opt/homebrew/bin/brightness",  // Apple Silicon Homebrew
+        "/usr/local/bin/brightness",     // Intel Homebrew
+    ];
 
-    match result {
-        Ok(output) if output.status.success() => {
-            debug!("Brightness set via brightness command");
-            Ok(())
-        }
-        _ => {
-            // Fallback: Try using AppleScript with System Events
-            // This sets approximate brightness by simulating key presses
-            debug!("brightness command not available, using key simulation");
+    for path in brightness_paths {
+        let result = std::process::Command::new(path)
+            .arg(format!("{:.2}", level as f32 / 100.0))
+            .output();
 
-            // First, set to minimum by pressing brightness down many times
-            for _ in 0..16 {
-                let _ = run_applescript(r#"tell application "System Events" to key code 145"#);
+        if let Ok(output) = result {
+            if output.status.success() {
+                debug!(path = path, "Brightness set via brightness command");
+                return Ok(());
             }
-
-            // Then press brightness up the appropriate number of times
-            // 16 steps total, so level/6.25 gives us the number of presses
-            let presses = (level as f32 / 6.25).round() as u8;
-            for _ in 0..presses {
-                let _ = run_applescript(r#"tell application "System Events" to key code 144"#);
-            }
-
-            Ok(())
         }
     }
+
+    // Fallback: Read current brightness and use delta key presses
+    // This avoids the jarring "go to 0% first" behavior
+    debug!("brightness command not available, using delta key simulation");
+
+    // Try to read current brightness from IOKit via ioreg
+    let current_level = read_current_brightness().unwrap_or(50); // Default to 50% if unknown
+    debug!(current = current_level, target = level, "Calculating brightness delta");
+
+    // Calculate delta in terms of key presses (16 steps total)
+    let current_steps = (current_level as f32 / 6.25).round() as i32;
+    let target_steps = (level as f32 / 6.25).round() as i32;
+    let delta = target_steps - current_steps;
+
+    if delta > 0 {
+        // Press brightness up
+        for _ in 0..delta {
+            let _ = run_applescript(r#"tell application "System Events" to key code 144"#);
+        }
+    } else if delta < 0 {
+        // Press brightness down
+        for _ in 0..(-delta) {
+            let _ = run_applescript(r#"tell application "System Events" to key code 145"#);
+        }
+    }
+    // If delta == 0, we're already at the target
+
+    Ok(())
+}
+
+/// Read current display brightness from IOKit
+///
+/// Returns brightness as a percentage (0-100), or None if unable to read.
+fn read_current_brightness() -> Option<u8> {
+    // Use ioreg to query the display brightness
+    // The brightness is typically stored in IODisplayParameters
+    let output = std::process::Command::new("ioreg")
+        .args(["-rc", "AppleBacklightDisplay"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Parse the brightness value from ioreg output
+    // Looking for: "brightness" = {"min"=0,"max"=1024,"value"=512}
+    // or similar patterns
+    for line in stdout.lines() {
+        if line.contains("\"brightness\"") {
+            // Try to extract the value
+            if let Some(value_start) = line.find("\"value\"=") {
+                let rest = &line[value_start + 8..];
+                if let Some(end) = rest.find(|c: char| !c.is_ascii_digit()) {
+                    if let Ok(value) = rest[..end].parse::<u32>() {
+                        // Also try to find max to calculate percentage
+                        if let Some(max_start) = line.find("\"max\"=") {
+                            let max_rest = &line[max_start + 6..];
+                            if let Some(max_end) = max_rest.find(|c: char| !c.is_ascii_digit()) {
+                                if let Ok(max) = max_rest[..max_end].parse::<u32>() {
+                                    if max > 0 {
+                                        let percentage = (value * 100 / max) as u8;
+                                        debug!(value = value, max = max, percentage = percentage, "Read brightness from IOKit");
+                                        return Some(percentage);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 // ============================================================================
