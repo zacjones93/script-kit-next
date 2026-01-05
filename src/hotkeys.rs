@@ -1,6 +1,6 @@
 use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
-    GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
+    Error as HotkeyError, GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -47,10 +47,35 @@ impl ScriptHotkeyManager {
         let hotkey = HotKey::new(Some(mods), code);
         let hotkey_id = hotkey.id();
 
-        // Register with the OS
-        self.manager
-            .register(hotkey)
-            .map_err(|e| anyhow::anyhow!("Failed to register hotkey: {}", e))?;
+        // Register with the OS - provide specific error messages based on error type
+        if let Err(e) = self.manager.register(hotkey) {
+            return Err(match e {
+                HotkeyError::AlreadyRegistered(hk) => {
+                    anyhow::anyhow!(
+                        "Hotkey '{}' is already registered (conflict with another app or script). Hotkey ID: {}",
+                        shortcut,
+                        hk.id()
+                    )
+                }
+                HotkeyError::FailedToRegister(msg) => {
+                    anyhow::anyhow!(
+                        "System rejected hotkey '{}': {}. This may be reserved by macOS or another app.",
+                        shortcut,
+                        msg
+                    )
+                }
+                HotkeyError::OsError(os_err) => {
+                    anyhow::anyhow!(
+                        "OS error registering hotkey '{}': {}",
+                        shortcut,
+                        os_err
+                    )
+                }
+                other => {
+                    anyhow::anyhow!("Failed to register hotkey '{}': {}", shortcut, other)
+                }
+            });
+        }
 
         // Track the mapping
         self.hotkey_map.insert(hotkey_id, path.to_string());
@@ -430,6 +455,33 @@ pub fn is_main_hotkey_registered() -> bool {
 #[allow(dead_code)]
 static HOTKEY_TRIGGER_COUNT: AtomicU64 = AtomicU64::new(0);
 
+/// Format a hotkey registration error with helpful context
+fn format_hotkey_error(e: &HotkeyError, shortcut_display: &str) -> String {
+    match e {
+        HotkeyError::AlreadyRegistered(hk) => {
+            format!(
+                "Hotkey '{}' is already registered by another application or script (ID: {}). \
+                 Try a different shortcut or close the conflicting app.",
+                shortcut_display,
+                hk.id()
+            )
+        }
+        HotkeyError::FailedToRegister(msg) => {
+            format!(
+                "System rejected hotkey '{}': {}. This shortcut may be reserved by macOS.",
+                shortcut_display, msg
+            )
+        }
+        HotkeyError::OsError(os_err) => {
+            format!(
+                "OS error registering '{}': {}. Check system hotkey settings.",
+                shortcut_display, os_err
+            )
+        }
+        other => format!("Failed to register hotkey '{}': {}", shortcut_display, other),
+    }
+}
+
 #[allow(dead_code)]
 pub(crate) fn start_hotkey_listener(config: config::Config) {
     std::thread::spawn(move || {
@@ -535,10 +587,7 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
         ) + &config.hotkey.key;
 
         if let Err(e) = manager.register(hotkey) {
-            logging::log(
-                "HOTKEY",
-                &format!("Failed to register {}: {}", hotkey_display, e),
-            );
+            logging::log("HOTKEY", &format_hotkey_error(&e, &hotkey_display));
             // Main hotkey registration failed - flag stays false
             return;
         }
@@ -589,10 +638,7 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
         ) + &notes_config.key;
 
         if let Err(e) = manager.register(notes_hotkey) {
-            logging::log(
-                "HOTKEY",
-                &format!("Failed to register notes hotkey {}: {}", notes_display, e),
-            );
+            logging::log("HOTKEY", &format_hotkey_error(&e, &notes_display));
         } else {
             logging::log(
                 "HOTKEY",
@@ -637,10 +683,7 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
         ) + &ai_config.key;
 
         if let Err(e) = manager.register(ai_hotkey) {
-            logging::log(
-                "HOTKEY",
-                &format!("Failed to register AI hotkey {}: {}", ai_display, e),
-            );
+            logging::log("HOTKEY", &format_hotkey_error(&e, &ai_display));
         } else {
             logging::log(
                 "HOTKEY",
@@ -679,8 +722,9 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
                             logging::log(
                                 "HOTKEY",
                                 &format!(
-                                    "Failed to register shortcut '{}' for {}: {}",
-                                    shortcut, script.name, e
+                                    "{} (script: {})",
+                                    format_hotkey_error(&e, shortcut),
+                                    script.name
                                 ),
                             );
                         }
@@ -726,8 +770,9 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
                             logging::log(
                                 "HOTKEY",
                                 &format!(
-                                    "Failed to register shortcut '{}' for {}: {}",
-                                    shortcut, scriptlet.name, e
+                                    "{} (scriptlet: {})",
+                                    format_hotkey_error(&e, shortcut),
+                                    scriptlet.name
                                 ),
                             );
                         }
