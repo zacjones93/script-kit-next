@@ -824,4 +824,120 @@ export default function ${1:Component}() {
         // Order should be 1, 2, 0
         assert_eq!(snippet.tabstop_order(), vec![1, 2, 0]);
     }
+
+    // =========================================================================
+    // $0 (final cursor) edge case tests - CRITICAL for correct positioning
+    // =========================================================================
+
+    #[test]
+    fn test_final_cursor_at_end_of_text() {
+        // Common pattern: $0 at the very end
+        let snippet = ParsedSnippet::parse("Hello ${1:name}!$0");
+
+        // The expanded text should be "Hello name!"
+        assert_eq!(snippet.text, "Hello name!");
+        assert_eq!(snippet.text.chars().count(), 11);
+
+        // $0 should be at position (11, 11) - a zero-length range at the end
+        let t0 = snippet.get_tabstop(0).unwrap();
+        assert_eq!(t0.ranges, vec![(11, 11)], "$0 should be at end of text");
+
+        // Verify $0 is last in navigation order
+        let order = snippet.tabstop_order();
+        assert_eq!(order, vec![1, 0]);
+        assert_eq!(order.last(), Some(&0), "$0 must be last");
+    }
+
+    #[test]
+    fn test_final_cursor_empty_range() {
+        // $0 without placeholder has zero-length range
+        let snippet = ParsedSnippet::parse("$0");
+
+        let t0 = snippet.get_tabstop(0).unwrap();
+        assert_eq!(t0.ranges, vec![(0, 0)], "$0 should have zero-length range");
+        assert!(t0.placeholder.is_none());
+    }
+
+    #[test]
+    fn test_final_cursor_with_placeholder() {
+        // ${0:done} - $0 with placeholder text
+        let snippet = ParsedSnippet::parse("${1:hello} ${0:cursor here}");
+
+        assert_eq!(snippet.text, "hello cursor here");
+
+        let t0 = snippet.get_tabstop(0).unwrap();
+        assert_eq!(t0.placeholder.as_deref(), Some("cursor here"));
+        // Range should span "cursor here" (6, 17)
+        assert_eq!(t0.ranges, vec![(6, 17)]);
+    }
+
+    #[test]
+    fn test_multiple_tabstops_then_final_cursor() {
+        // Real-world pattern: function template
+        let snippet = ParsedSnippet::parse("fn ${1:name}(${2:args}) { $0 }");
+
+        assert_eq!(snippet.text, "fn name(args) {  }");
+
+        // Verify tabstop order: 1, 2, then 0
+        let order = snippet.tabstop_order();
+        assert_eq!(order, vec![1, 2, 0]);
+
+        // $0 should be at position between "{" and "}"
+        let t0 = snippet.get_tabstop(0).unwrap();
+        // "fn name(args) { " = 16 chars, then $0 is at (16, 16)
+        assert_eq!(t0.ranges, vec![(16, 16)]);
+    }
+
+    #[test]
+    fn test_only_final_cursor() {
+        // Edge case: only $0 in template
+        let snippet = ParsedSnippet::parse("$0");
+
+        assert_eq!(snippet.tabstops.len(), 1);
+        assert_eq!(snippet.tabstop_order(), vec![0]);
+    }
+
+    #[test]
+    fn test_final_cursor_unicode() {
+        // $0 after unicode text - uses char count, not byte count
+        let snippet = ParsedSnippet::parse("你好$0");
+
+        assert_eq!(snippet.text, "你好");
+        assert_eq!(snippet.text.chars().count(), 2); // 2 chars
+        assert_eq!(snippet.text.len(), 6); // 6 bytes
+
+        let t0 = snippet.get_tabstop(0).unwrap();
+        // IMPORTANT: ranges use CHAR indices (2), not byte indices (6)
+        assert_eq!(t0.ranges, vec![(2, 2)]);
+    }
+
+    #[test]
+    fn test_tabstop_navigation_order_with_gaps() {
+        // Tabstop numbers can have gaps: $1, $3, $5, $0
+        let snippet = ParsedSnippet::parse("$5 $1 $3 $0");
+
+        // Order should sort numerically: 1, 3, 5, then 0 at end
+        let order = snippet.tabstop_order();
+        assert_eq!(order, vec![1, 3, 5, 0]);
+    }
+
+    #[test]
+    fn test_tabstop_navigation_order_reverse_in_template() {
+        // Template has tabstops in reverse order
+        let snippet = ParsedSnippet::parse("$3 $2 $1 $0");
+
+        // Navigation order should still be 1, 2, 3, 0
+        let order = snippet.tabstop_order();
+        assert_eq!(order, vec![1, 2, 3, 0]);
+    }
+
+    #[test]
+    fn test_tabstop_without_zero() {
+        // Template without $0 - navigation ends after last numbered tabstop
+        let snippet = ParsedSnippet::parse("${1:first} ${2:second}");
+
+        let order = snippet.tabstop_order();
+        assert_eq!(order, vec![1, 2]); // No 0
+        assert_eq!(snippet.get_tabstop(0), None);
+    }
 }
