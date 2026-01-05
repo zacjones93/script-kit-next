@@ -357,11 +357,12 @@ pub fn show_hud(text: String, duration_ms: Option<u64>, cx: &mut App) {
             cx.spawn(async move |cx: &mut gpui::AsyncApp| {
                 Timer::after(duration_duration).await;
 
-                // Close the NSWindow directly (don't use window_handle to avoid borrow issues)
-                close_hud_window_by_bounds(cleanup_bounds);
-
-                // Then clean up the tracking state
+                // IMPORTANT: All AppKit calls must happen on the main thread.
+                // cx.update() ensures we're on the main thread.
                 let _ = cx.update(|cx| {
+                    // Close the NSWindow directly (don't use window_handle to avoid borrow issues)
+                    close_hud_window_by_bounds(cleanup_bounds);
+                    // Then clean up the tracking state
                     cleanup_expired_huds(cx);
                 });
 
@@ -496,11 +497,12 @@ pub fn show_hud_with_action(
             cx.spawn(async move |cx: &mut gpui::AsyncApp| {
                 Timer::after(duration_duration).await;
 
-                // Close the NSWindow directly
-                close_hud_window_by_bounds(cleanup_bounds);
-
-                // Then clean up the tracking state
+                // IMPORTANT: All AppKit calls must happen on the main thread.
+                // cx.update() ensures we're on the main thread.
                 let _ = cx.update(|cx| {
+                    // Close the NSWindow directly
+                    close_hud_window_by_bounds(cleanup_bounds);
+                    // Then clean up the tracking state
                     cleanup_expired_huds(cx);
                 });
 
