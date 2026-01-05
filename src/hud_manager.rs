@@ -20,6 +20,88 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::logging;
+use crate::theme;
+
+// =============================================================================
+// Theme Integration - HUD colors from theme system
+// =============================================================================
+
+/// Colors used by HUD rendering, extracted from theme for closure compatibility.
+/// This struct is Copy so it can be safely used in closures without borrow issues.
+#[derive(Clone, Copy, Debug)]
+struct HudColors {
+    /// Background color for the HUD pill
+    background: u32,
+    /// Primary text color
+    text_primary: u32,
+    /// Accent color for action buttons
+    accent: u32,
+    /// Accent hover color (lighter)
+    accent_hover: u32,
+    /// Accent active/pressed color (darker)
+    accent_active: u32,
+}
+
+impl HudColors {
+    /// Load HUD colors from the current theme
+    fn from_theme() -> Self {
+        let theme = theme::load_theme();
+        let colors = &theme.colors;
+
+        // Calculate hover/active variants from accent
+        // For hover: lighten by ~10%
+        // For active: darken by ~10%
+        let accent = colors.ui.info; // Use info color (blue) for action buttons
+        let accent_hover = lighten_color(accent, 0.1);
+        let accent_active = darken_color(accent, 0.1);
+
+        Self {
+            background: colors.background.main,
+            text_primary: colors.text.primary,
+            accent,
+            accent_hover,
+            accent_active,
+        }
+    }
+
+    /// Create default dark theme colors (fallback)
+    #[cfg(test)]
+    fn dark_default() -> Self {
+        Self {
+            background: 0x1e1e1e,
+            text_primary: 0xffffff,
+            accent: 0x3b82f6,        // blue-500
+            accent_hover: 0x60a5fa,  // blue-400
+            accent_active: 0x2563eb, // blue-600
+        }
+    }
+}
+
+/// Lighten a color by a percentage (0.0 - 1.0)
+fn lighten_color(color: u32, amount: f32) -> u32 {
+    let r = ((color >> 16) & 0xff) as f32;
+    let g = ((color >> 8) & 0xff) as f32;
+    let b = (color & 0xff) as f32;
+
+    let r = (r + (255.0 - r) * amount).min(255.0) as u32;
+    let g = (g + (255.0 - g) * amount).min(255.0) as u32;
+    let b = (b + (255.0 - b) * amount).min(255.0) as u32;
+
+    (r << 16) | (g << 8) | b
+}
+
+/// Darken a color by a percentage (0.0 - 1.0)
+fn darken_color(color: u32, amount: f32) -> u32 {
+    let r = ((color >> 16) & 0xff) as f32;
+    let g = ((color >> 8) & 0xff) as f32;
+    let b = (color & 0xff) as f32;
+
+    let r = (r * (1.0 - amount)).max(0.0) as u32;
+    let g = (g * (1.0 - amount)).max(0.0) as u32;
+    let b = (b * (1.0 - amount)).max(0.0) as u32;
+
+    (r << 16) | (g << 8) | b
+}
 
 /// Counter for generating unique HUD IDs
 static NEXT_HUD_ID: AtomicU64 = AtomicU64::new(1);
@@ -128,6 +210,8 @@ struct HudView {
     action_label: Option<String>,
     #[allow(dead_code)]
     action: Option<HudAction>,
+    /// Theme colors for rendering
+    colors: HudColors,
 }
 
 impl HudView {
@@ -136,6 +220,7 @@ impl HudView {
             text,
             action_label: None,
             action: None,
+            colors: HudColors::from_theme(),
         }
     }
 
@@ -145,6 +230,18 @@ impl HudView {
             text,
             action_label: Some(action_label),
             action: Some(action),
+            colors: HudColors::from_theme(),
+        }
+    }
+
+    /// Create a HudView with specific colors (for testing)
+    #[cfg(test)]
+    fn with_colors(text: String, colors: HudColors) -> Self {
+        Self {
+            text,
+            action_label: None,
+            action: None,
+            colors,
         }
     }
 
@@ -158,6 +255,9 @@ impl Render for HudView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let has_action = self.has_action();
 
+        // Extract colors for use in closures (Copy trait)
+        let colors = self.colors;
+
         // HUD pill styling: matches main window theme, minimal and clean
         // Similar to Raycast's HUD - simple, elegant, non-intrusive
         div()
@@ -170,14 +270,14 @@ impl Render for HudView {
             .px(px(16.))
             .py(px(8.))
             .gap(px(12.))
-            // Use theme-matching dark background (0x1e1e1e with full opacity)
-            .bg(rgb(0x1e1e1e))
+            // Use theme background color
+            .bg(rgb(colors.background))
             .rounded(px(8.)) // Rounded corners matching main window
-            // Text styling - system font, smaller size, white text, centered
+            // Text styling - system font, smaller size, theme text color, centered
             .child(
                 div()
                     .text_sm()
-                    .text_color(rgb(0xFFFFFF))
+                    .text_color(rgb(colors.text_primary))
                     .overflow_hidden()
                     .text_ellipsis()
                     .child(self.text.clone()),
@@ -191,12 +291,17 @@ impl Render for HudView {
                         .id("hud-action-button")
                         .px(px(10.))
                         .py(px(4.))
-                        .bg(rgb(0x0078d4)) // Accent blue
+                        .bg(rgb(colors.accent))
                         .rounded(px(4.))
                         .cursor_pointer()
-                        .hover(|s| s.bg(rgb(0x1084d8))) // Lighter on hover
-                        .active(|s| s.bg(rgb(0x006cbe))) // Darker on press
-                        .child(div().text_xs().text_color(rgb(0xFFFFFF)).child(label))
+                        .hover(|s| s.bg(rgb(colors.accent_hover)))
+                        .active(|s| s.bg(rgb(colors.accent_active)))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(colors.text_primary))
+                                .child(label),
+                        )
                         .on_click(cx.listener(move |_this, _event, _window, _cx| {
                             if let Some(ref action) = action {
                                 action.execute(None); // TODO: Get editor from config
@@ -985,5 +1090,101 @@ mod tests {
             HudAction::RunCommand(cmd) => assert_eq!(cmd, "echo hello"),
             _ => panic!("Expected RunCommand variant"),
         }
+    }
+
+    // =============================================================================
+    // Theme Integration Tests
+    // =============================================================================
+
+    #[test]
+    fn test_lighten_color() {
+        // Test lightening pure black by 50%
+        let black = 0x000000;
+        let lightened = lighten_color(black, 0.5);
+        // Should be ~0x7f7f7f (half way to white)
+        assert_eq!(lightened, 0x7f7f7f);
+
+        // Test lightening pure red by 10%
+        let red = 0xff0000;
+        let lightened_red = lighten_color(red, 0.1);
+        // Red channel is already max, green/blue should be ~0x19 (25)
+        assert_eq!(lightened_red >> 16, 0xff); // Red stays at max
+        assert!((lightened_red >> 8) & 0xff >= 0x19); // Green increased
+        assert!(lightened_red & 0xff >= 0x19); // Blue increased
+    }
+
+    #[test]
+    fn test_darken_color() {
+        // Test darkening pure white by 50%
+        let white = 0xffffff;
+        let darkened = darken_color(white, 0.5);
+        // Should be ~0x7f7f7f (half way to black)
+        assert_eq!(darkened, 0x7f7f7f);
+
+        // Test darkening a color by 10%
+        let color = 0x646464; // RGB(100, 100, 100)
+        let darkened_color = darken_color(color, 0.1);
+        // Each component should be 90% of original: 100 * 0.9 = 90 = 0x5a
+        assert_eq!(darkened_color, 0x5a5a5a);
+    }
+
+    #[test]
+    fn test_lighten_darken_boundary_conditions() {
+        // Lightening white should stay white
+        let white = 0xffffff;
+        assert_eq!(lighten_color(white, 0.5), 0xffffff);
+
+        // Darkening black should stay black
+        let black = 0x000000;
+        assert_eq!(darken_color(black, 0.5), 0x000000);
+    }
+
+    #[test]
+    fn test_hud_colors_default() {
+        // Test that default colors are valid (non-zero)
+        let colors = HudColors::dark_default();
+        assert_ne!(colors.background, 0);
+        assert_ne!(colors.text_primary, 0);
+        assert_ne!(colors.accent, 0);
+        assert_ne!(colors.accent_hover, 0);
+        assert_ne!(colors.accent_active, 0);
+    }
+
+    #[test]
+    fn test_hud_colors_accent_variants() {
+        // Test that hover is lighter than accent, and active is darker
+        let colors = HudColors::dark_default();
+
+        // Extract brightness (simple sum of components)
+        let brightness = |c: u32| ((c >> 16) & 0xff) + ((c >> 8) & 0xff) + (c & 0xff);
+
+        // Hover should be brighter than base accent
+        assert!(
+            brightness(colors.accent_hover) >= brightness(colors.accent),
+            "Hover should be at least as bright as accent"
+        );
+
+        // Active should be darker than base accent
+        assert!(
+            brightness(colors.accent_active) <= brightness(colors.accent),
+            "Active should be at most as bright as accent"
+        );
+    }
+
+    #[test]
+    fn test_hud_view_with_custom_colors() {
+        // Test that HudView can be created with custom colors
+        let custom_colors = HudColors {
+            background: 0x2a2a2a,
+            text_primary: 0xeeeeee,
+            accent: 0x00ff00,
+            accent_hover: 0x33ff33,
+            accent_active: 0x00cc00,
+        };
+
+        let view = HudView::with_colors("Custom themed HUD".to_string(), custom_colors);
+        assert_eq!(view.colors.background, 0x2a2a2a);
+        assert_eq!(view.colors.text_primary, 0xeeeeee);
+        assert_eq!(view.colors.accent, 0x00ff00);
     }
 }
