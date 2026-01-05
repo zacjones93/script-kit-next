@@ -440,6 +440,13 @@ impl EditorPrompt {
     fn next_tabstop(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         logging::log("EDITOR", "next_tabstop called");
 
+        // Guard: don't mutate snippet state until editor is ready
+        // This prevents advancing tabstop index before we can actually select the text
+        if self.editor_state.is_none() {
+            logging::log("EDITOR", "next_tabstop: editor not initialized yet");
+            return false;
+        }
+
         // First, capture what the user typed at the current tabstop
         self.capture_current_tabstop_value(cx);
 
@@ -496,6 +503,12 @@ impl EditorPrompt {
 
     /// Move to the previous tabstop. Returns true if we moved, false if we're at the start.
     fn prev_tabstop(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        // Guard: don't mutate snippet state until editor is ready
+        if self.editor_state.is_none() {
+            logging::log("EDITOR", "prev_tabstop: editor not initialized yet");
+            return false;
+        }
+
         // First, capture what the user typed at the current tabstop
         self.capture_current_tabstop_value(cx);
 
@@ -687,6 +700,10 @@ impl EditorPrompt {
     /// This method calculates the correct offset based on any edits the user has made
     /// to previous tabstops.
     fn select_current_tabstop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Always clear any existing choice popup before moving to a new tabstop
+        // This prevents stale popups from persisting when navigating tabstops
+        self.choices_popup = None;
+
         // First, calculate the adjusted offset (needs immutable borrow)
         let adjusted_range = self.calculate_adjusted_offset_for_current();
         let Some((start, end, tabstop_index)) = adjusted_range else {
@@ -793,6 +810,8 @@ impl EditorPrompt {
         if self.snippet_state.is_some() {
             logging::log("EDITOR", "Exiting snippet mode");
             self.snippet_state = None;
+            // Always clear choice popup when exiting snippet mode
+            self.choices_popup = None;
 
             // Disable tab navigation mode so Tab inserts tabs again
             if let Some(ref editor_state) = self.editor_state {
@@ -894,7 +913,7 @@ impl EditorPrompt {
             return;
         };
 
-        let Some(chosen) = popup.choices.get(popup.selected_index) else {
+        let Some(chosen) = popup.choices.get(popup.selected_index).cloned() else {
             return;
         };
 
@@ -907,12 +926,13 @@ impl EditorPrompt {
         );
 
         // Replace the current selection with the chosen text
+        // CRITICAL: Use replace() not insert() - insert() only inserts at cursor position
+        // (cursor..cursor range), while replace() replaces the current selection (None = use selection)
         if let Some(ref editor_state) = self.editor_state {
-            let chosen_clone = chosen.clone();
             editor_state.update(cx, |input_state, cx| {
                 // The current tabstop text should be selected
-                // Replace it with the chosen value
-                input_state.insert(&chosen_clone, window, cx);
+                // replace() uses the current selection, insert() only inserts at cursor
+                input_state.replace(chosen.clone(), window, cx);
             });
         }
 
