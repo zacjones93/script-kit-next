@@ -532,6 +532,7 @@ fn close_hud_window_by_bounds(expected_bounds: gpui::Bounds<Pixels>) {
     use cocoa::foundation::NSRect;
 
     let expected_x: f32 = expected_bounds.origin.x.into();
+    let expected_y: f32 = expected_bounds.origin.y.into();
     let expected_w: f32 = expected_bounds.size.width.into();
     let expected_h: f32 = expected_bounds.size.height.into();
 
@@ -544,12 +545,13 @@ fn close_hud_window_by_bounds(expected_bounds: gpui::Bounds<Pixels>) {
             let ns_window: id = msg_send![windows, objectAtIndex: i];
             let frame: NSRect = msg_send![ns_window, frame];
 
-            // Match by size and x position (HUD windows have distinctive dimensions)
+            // Match by size AND position (x, y) to distinguish stacked HUDs
             let w_match = (frame.size.width - expected_w as f64).abs() < 5.0;
             let h_match = (frame.size.height - expected_h as f64).abs() < 5.0;
             let x_match = (frame.origin.x - expected_x as f64).abs() < 5.0;
+            let y_match = (frame.origin.y - expected_y as f64).abs() < 5.0;
 
-            if w_match && h_match && x_match {
+            if w_match && h_match && x_match && y_match {
                 logging::log(
                     "HUD",
                     &format!(
@@ -561,6 +563,14 @@ fn close_hud_window_by_bounds(expected_bounds: gpui::Bounds<Pixels>) {
                 return;
             }
         }
+
+        logging::log(
+            "HUD",
+            &format!(
+                "Could not find HUD window to close at ({:.0}, {:.0})",
+                expected_x, expected_y
+            ),
+        );
     }
 }
 
@@ -625,20 +635,22 @@ fn configure_hud_window_by_bounds(expected_bounds: gpui::Bounds<Pixels>) {
         let count: usize = msg_send![windows, count];
 
         let expected_x: f32 = expected_bounds.origin.x.into();
+        let expected_y: f32 = expected_bounds.origin.y.into();
         let expected_width: f32 = expected_bounds.size.width.into();
         let expected_height: f32 = expected_bounds.size.height.into();
 
-        // Find the window with matching dimensions (HUD-sized windows)
+        // Find the window with matching dimensions AND position
         for i in 0..count {
             let window: id = msg_send![windows, objectAtIndex: i];
             let frame: NSRect = msg_send![window, frame];
 
-            // Check if this looks like our HUD window (by size)
+            // Check if this looks like our HUD window (by size AND position)
             let width_matches = (frame.size.width - expected_width as f64).abs() < 5.0;
             let height_matches = (frame.size.height - expected_height as f64).abs() < 5.0;
             let x_matches = (frame.origin.x - expected_x as f64).abs() < 5.0;
+            let y_matches = (frame.origin.y - expected_y as f64).abs() < 5.0;
 
-            if width_matches && height_matches && x_matches {
+            if width_matches && height_matches && x_matches && y_matches {
                 // Found it! Configure as HUD overlay
 
                 // Set window level very high (NSPopUpMenuWindowLevel = 101)
@@ -673,7 +685,6 @@ fn configure_hud_window_by_bounds(expected_bounds: gpui::Bounds<Pixels>) {
             }
         }
 
-        let expected_y: f32 = expected_bounds.origin.y.into();
         logging::log(
             "HUD",
             &format!(
