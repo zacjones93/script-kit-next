@@ -151,6 +151,13 @@ pub struct NotesApp {
 
     /// Debounce: Last time we saved (to avoid too-frequent saves)
     last_save_time: Option<Instant>,
+
+    /// Track last persisted bounds for debounced save on close paths
+    /// (traffic light, Cmd+W, toggle) that don't go through close_notes_window
+    last_persisted_bounds: Option<gpui::WindowBounds>,
+
+    /// Last time we saved bounds (debounce to avoid too-frequent saves)
+    last_bounds_save: Instant,
 }
 
 impl NotesApp {
@@ -249,11 +256,41 @@ impl NotesApp {
             pending_browse_action: Arc::new(Mutex::new(None)),
             has_unsaved_changes: false,
             last_save_time: None,
+            last_persisted_bounds: None,
+            last_bounds_save: Instant::now(),
         }
     }
 
     /// Debounce interval for saves (in milliseconds)
     const SAVE_DEBOUNCE_MS: u64 = 300;
+
+    /// Debounce interval for bounds persistence (in milliseconds)
+    const BOUNDS_DEBOUNCE_MS: u64 = 250;
+
+    /// Persist window bounds if they've changed (debounced).
+    ///
+    /// This ensures bounds are saved even when the window is closed via traffic light
+    /// (red close button) which doesn't go through our close handlers.
+    fn maybe_persist_bounds(&mut self, window: &gpui::Window) {
+        let wb = window.window_bounds();
+
+        // Skip if bounds haven't changed
+        if self.last_persisted_bounds.as_ref() == Some(&wb) {
+            return;
+        }
+
+        // Debounce to avoid too-frequent saves
+        if self.last_bounds_save.elapsed()
+            < std::time::Duration::from_millis(Self::BOUNDS_DEBOUNCE_MS)
+        {
+            return;
+        }
+
+        // Save bounds
+        self.last_persisted_bounds = Some(wb);
+        self.last_bounds_save = Instant::now();
+        crate::window_state::save_window_from_gpui(crate::window_state::WindowRole::Notes, wb);
+    }
 
     /// Save the current note if it has unsaved changes
     fn save_current_note(&mut self) {
@@ -1617,6 +1654,9 @@ impl Render for NotesApp {
         self.drain_pending_action(window, cx);
         self.drain_pending_browse_actions(window, cx);
 
+        // Persist bounds on change (ensures bounds saved even on traffic light close)
+        self.maybe_persist_bounds(window);
+
         // Debounced save: check if we should save now
         if self.should_save_now() {
             self.save_current_note();
@@ -1758,6 +1798,12 @@ impl Render for NotesApp {
                         "n" => this.create_note(window, cx),
                         "w" => {
                             // Close the notes window (standard macOS pattern)
+                            // Save bounds before closing
+                            let wb = window.window_bounds();
+                            crate::window_state::save_window_from_gpui(
+                                crate::window_state::WindowRole::Notes,
+                                wb,
+                            );
                             window.remove_window();
                         }
                         "d" => this.duplicate_selected_note(window, cx),
@@ -1854,6 +1900,12 @@ pub fn open_notes_window(cx: &mut App) -> Result<()> {
         // Lock is released, safe to call handle.update()
         if handle
             .update(cx, |_, window, _cx| {
+                // Save bounds before closing (fixes bounds persistence on toggle close)
+                let wb = window.window_bounds();
+                crate::window_state::save_window_from_gpui(
+                    crate::window_state::WindowRole::Notes,
+                    wb,
+                );
                 window.remove_window();
             })
             .is_ok()

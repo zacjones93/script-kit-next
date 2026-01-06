@@ -65,7 +65,7 @@ impl WindowRole {
     ///
     /// This provides a clean bridge between the registry's WindowRole (used for handle management)
     /// and window_state::WindowRole (used for bounds persistence).
-    pub fn to_persist_role(&self) -> crate::window_state::WindowRole {
+    pub fn to_persist_role(self) -> crate::window_state::WindowRole {
         match self {
             WindowRole::Main => crate::window_state::WindowRole::Main,
             WindowRole::Notes => crate::window_state::WindowRole::Notes,

@@ -281,6 +281,13 @@ pub struct AiApp {
     /// This replaces the need for a global AI_APP_ENTITY reference.
     /// Set this flag via window.update() and AiApp will process it on render.
     needs_focus_input: bool,
+
+    /// Track last persisted bounds for debounced save on close paths
+    /// (traffic light, Cmd+W) that don't go through close_ai_window
+    last_persisted_bounds: Option<gpui::WindowBounds>,
+
+    /// Last time we saved bounds (debounce to avoid too-frequent saves)
+    last_bounds_save: std::time::Instant,
 }
 
 impl AiApp {
@@ -391,7 +398,37 @@ impl AiApp {
             messages_scroll_handle: ScrollHandle::new(),
             cached_box_shadows,
             needs_focus_input: false,
+            last_persisted_bounds: None,
+            last_bounds_save: std::time::Instant::now(),
         }
+    }
+
+    /// Debounce interval for bounds persistence (in milliseconds)
+    const BOUNDS_DEBOUNCE_MS: u64 = 250;
+
+    /// Persist window bounds if they've changed (debounced).
+    ///
+    /// This ensures bounds are saved even when the window is closed via traffic light
+    /// (red close button) which doesn't go through our close handlers.
+    fn maybe_persist_bounds(&mut self, window: &gpui::Window) {
+        let wb = window.window_bounds();
+
+        // Skip if bounds haven't changed
+        if self.last_persisted_bounds.as_ref() == Some(&wb) {
+            return;
+        }
+
+        // Debounce to avoid too-frequent saves
+        if self.last_bounds_save.elapsed()
+            < std::time::Duration::from_millis(Self::BOUNDS_DEBOUNCE_MS)
+        {
+            return;
+        }
+
+        // Save bounds
+        self.last_persisted_bounds = Some(wb);
+        self.last_bounds_save = std::time::Instant::now();
+        crate::window_state::save_window_from_gpui(crate::window_state::WindowRole::Ai, wb);
     }
 
     /// Handle input changes
@@ -1814,6 +1851,9 @@ impl Drop for AiApp {
 
 impl Render for AiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Persist bounds on change (ensures bounds saved even on traffic light close)
+        self.maybe_persist_bounds(window);
+
         // Process focus request flag (set by open_ai_window when bringing existing window to front)
         // Check both the instance flag and the global atomic flag
         if self.needs_focus_input
@@ -1874,6 +1914,12 @@ impl Render for AiApp {
                         "b" => this.toggle_sidebar(cx),
                         // Cmd+W closes the AI window (standard macOS pattern)
                         "w" => {
+                            // Save bounds before closing
+                            let wb = window.window_bounds();
+                            crate::window_state::save_window_from_gpui(
+                                crate::window_state::WindowRole::Ai,
+                                wb,
+                            );
                             window.remove_window();
                         }
                         _ => {}
