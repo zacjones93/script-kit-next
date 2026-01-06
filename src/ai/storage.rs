@@ -44,6 +44,27 @@ pub fn init_ai_db() -> Result<()> {
 
     let conn = Connection::open(&db_path).context("Failed to open AI chats database")?;
 
+    // Enable WAL mode for better write performance and concurrency
+    // This matches the pattern used in notes/storage.rs
+    conn.execute_batch("PRAGMA journal_mode=WAL;")
+        .context("Failed to enable WAL mode for AI database")?;
+
+    // Set synchronous=NORMAL for good performance with WAL safety
+    conn.execute_batch("PRAGMA synchronous=NORMAL;")
+        .context("Failed to set synchronous mode for AI database")?;
+
+    // Enable foreign keys enforcement - required for CASCADE to work
+    // Without this, FOREIGN KEY constraints are parsed but not enforced!
+    conn.execute_batch("PRAGMA foreign_keys=ON;")
+        .context("Failed to enable foreign_keys for AI database")?;
+
+    // Set busy timeout to avoid "database is locked" errors under concurrent access
+    // 1000ms is a reasonable default for a desktop app
+    conn.busy_timeout(std::time::Duration::from_millis(1000))
+        .context("Failed to set busy_timeout for AI database")?;
+
+    debug!(db_path = %db_path.display(), "AI database PRAGMAs configured: WAL, synchronous=NORMAL, foreign_keys=ON, busy_timeout=1000ms");
+
     // Create tables
     conn.execute_batch(
         r#"
@@ -90,39 +111,52 @@ pub fn init_ai_db() -> Result<()> {
             content_rowid='rowid'
         );
 
+        -- Drop old triggers first (IF NOT EXISTS won't update existing triggers)
+        -- This is needed to migrate from AFTER UPDATE to AFTER UPDATE OF column
+        DROP TRIGGER IF EXISTS chats_ai;
+        DROP TRIGGER IF EXISTS chats_ad;
+        DROP TRIGGER IF EXISTS chats_au;
+        DROP TRIGGER IF EXISTS messages_ai;
+        DROP TRIGGER IF EXISTS messages_ad;
+        DROP TRIGGER IF EXISTS messages_au;
+
         -- Triggers to keep chat FTS in sync
-        CREATE TRIGGER IF NOT EXISTS chats_ai AFTER INSERT ON chats BEGIN
-            INSERT INTO chats_fts(rowid, title) 
+        CREATE TRIGGER chats_ai AFTER INSERT ON chats BEGIN
+            INSERT INTO chats_fts(rowid, title)
             VALUES (NEW.rowid, NEW.title);
         END;
 
-        CREATE TRIGGER IF NOT EXISTS chats_ad AFTER DELETE ON chats BEGIN
-            INSERT INTO chats_fts(chats_fts, rowid, title) 
+        CREATE TRIGGER chats_ad AFTER DELETE ON chats BEGIN
+            INSERT INTO chats_fts(chats_fts, rowid, title)
             VALUES('delete', OLD.rowid, OLD.title);
         END;
 
-        CREATE TRIGGER IF NOT EXISTS chats_au AFTER UPDATE ON chats BEGIN
-            INSERT INTO chats_fts(chats_fts, rowid, title) 
+        -- CRITICAL: Only trigger on title changes (not updated_at changes)
+        -- save_message_internal updates chats.updated_at on every message,
+        -- which would cause unnecessary DELETE+INSERT into chats_fts without this fix
+        CREATE TRIGGER chats_au AFTER UPDATE OF title ON chats BEGIN
+            INSERT INTO chats_fts(chats_fts, rowid, title)
             VALUES('delete', OLD.rowid, OLD.title);
-            INSERT INTO chats_fts(rowid, title) 
+            INSERT INTO chats_fts(rowid, title)
             VALUES (NEW.rowid, NEW.title);
         END;
 
         -- Triggers to keep message FTS in sync
-        CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-            INSERT INTO messages_fts(rowid, content) 
+        CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
+            INSERT INTO messages_fts(rowid, content)
             VALUES (NEW.rowid, NEW.content);
         END;
 
-        CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-            INSERT INTO messages_fts(messages_fts, rowid, content) 
+        CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, content)
             VALUES('delete', OLD.rowid, OLD.content);
         END;
 
-        CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
-            INSERT INTO messages_fts(messages_fts, rowid, content) 
+        -- CRITICAL: Only trigger on content changes (not tokens_used changes etc.)
+        CREATE TRIGGER messages_au AFTER UPDATE OF content ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, content)
             VALUES('delete', OLD.rowid, OLD.content);
-            INSERT INTO messages_fts(rowid, content) 
+            INSERT INTO messages_fts(rowid, content)
             VALUES (NEW.rowid, NEW.content);
         END;
         "#,
@@ -470,13 +504,22 @@ fn save_message_without_update(message: &Message) -> Result<()> {
 }
 
 /// Internal message save with optional chat timestamp update
+///
+/// Uses a transaction to ensure atomicity - either both the message insert
+/// and chat timestamp update succeed, or both are rolled back.
+/// This also reduces fsync overhead by committing once instead of twice.
 fn save_message_internal(message: &Message, update_chat_timestamp: bool) -> Result<()> {
     let db = get_db()?;
-    let conn = db
+    let mut conn = db
         .lock()
         .map_err(|e| anyhow::anyhow!("DB lock error: {}", e))?;
 
-    conn.execute(
+    // Wrap both operations in a single transaction for:
+    // 1. Atomicity: both succeed or both fail
+    // 2. Performance: one fsync instead of two autocommit fsyncs
+    let tx = conn.transaction().context("Failed to start transaction")?;
+
+    tx.execute(
         r#"
         INSERT INTO messages (id, chat_id, role, content, created_at, tokens_used)
         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -498,12 +541,15 @@ fn save_message_internal(message: &Message, update_chat_timestamp: bool) -> Resu
     // Update the chat's updated_at timestamp (unless explicitly skipped for mock data)
     if update_chat_timestamp {
         let now = Utc::now().to_rfc3339();
-        conn.execute(
+        tx.execute(
             "UPDATE chats SET updated_at = ?2 WHERE id = ?1",
             params![message.chat_id.as_str(), now],
         )
         .context("Failed to update chat timestamp")?;
     }
+
+    tx.commit()
+        .context("Failed to commit message transaction")?;
 
     debug!(
         message_id = %message.id,
@@ -1309,6 +1355,86 @@ mod tests {
             result.is_ok(),
             "Search with * should not error: {:?}",
             result.err()
+        );
+    }
+
+    #[test]
+    fn test_fts_triggers_use_update_of_column() {
+        // Ensure DB is initialized
+        let _ = init_ai_db();
+
+        let db = get_db().expect("Should get db connection");
+        let conn = db.lock().expect("Should lock connection");
+
+        // Query the trigger SQL to verify it uses "UPDATE OF" syntax
+        let chat_trigger_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='chats_au'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("Should find chats_au trigger");
+
+        // The trigger should only fire on UPDATE OF title, not on all updates
+        assert!(
+            chat_trigger_sql.to_lowercase().contains("update of title"),
+            "chats_au trigger should use 'UPDATE OF title' to avoid FTS churn on updated_at changes. Got: {}",
+            chat_trigger_sql
+        );
+
+        let message_trigger_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='messages_au'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("Should find messages_au trigger");
+
+        // The trigger should only fire on UPDATE OF content, not on all updates
+        assert!(
+            message_trigger_sql
+                .to_lowercase()
+                .contains("update of content"),
+            "messages_au trigger should use 'UPDATE OF content' to avoid FTS churn. Got: {}",
+            message_trigger_sql
+        );
+    }
+
+    #[test]
+    fn test_ai_db_has_required_pragmas() {
+        // Ensure DB is initialized
+        let _ = init_ai_db();
+
+        let db = get_db().expect("Should get db connection");
+        let conn = db.lock().expect("Should lock connection");
+
+        // Verify WAL mode is enabled
+        let journal_mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .expect("Should query journal_mode");
+        assert_eq!(
+            journal_mode.to_lowercase(),
+            "wal",
+            "AI DB should use WAL mode for better concurrency"
+        );
+
+        // Verify foreign keys are enabled
+        let foreign_keys: i32 = conn
+            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+            .expect("Should query foreign_keys");
+        assert_eq!(
+            foreign_keys, 1,
+            "AI DB should have foreign_keys=ON for CASCADE to work"
+        );
+
+        // Verify busy_timeout is set (should be > 0)
+        let busy_timeout: i32 = conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .expect("Should query busy_timeout");
+        assert!(
+            busy_timeout >= 1000,
+            "AI DB should have busy_timeout >= 1000ms, got {}",
+            busy_timeout
         );
     }
 }

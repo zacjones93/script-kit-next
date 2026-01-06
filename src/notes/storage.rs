@@ -243,7 +243,19 @@ pub fn get_deleted_notes() -> Result<Vec<Note>> {
     Ok(notes)
 }
 
+/// Sanitize a query string for FTS5 MATCH
+///
+/// FTS5 special characters that need escaping: * " ' ( ) : - ^
+/// We wrap the query in double quotes for phrase matching and escape internal quotes.
+fn sanitize_fts_query(query: &str) -> String {
+    let escaped = query.replace('"', "\"\"");
+    format!("\"{}\"", escaped)
+}
+
 /// Search notes using full-text search
+///
+/// Uses FTS5 search when possible with a fallback to LIKE queries for robustness
+/// against special characters that break FTS5 MATCH syntax.
 pub fn search_notes(query: &str) -> Result<Vec<Note>> {
     if query.trim().is_empty() {
         return get_all_notes();
@@ -254,10 +266,12 @@ pub fn search_notes(query: &str) -> Result<Vec<Note>> {
         .lock()
         .map_err(|e| anyhow::anyhow!("DB lock error: {}", e))?;
 
+    // Try FTS search first with sanitized query
+    let sanitized_query = sanitize_fts_query(query);
+
     // FTS5 search with BM25 ranking
-    // Use bm25() function which returns a negative score (more negative = better match)
-    let mut stmt = conn
-        .prepare(
+    let fts_result: rusqlite::Result<Vec<Note>> = (|| {
+        let mut stmt = conn.prepare(
             r#"
             SELECT n.id, n.title, n.content, n.created_at, n.updated_at,
                    n.deleted_at, n.is_pinned, n.sort_order
@@ -266,17 +280,52 @@ pub fn search_notes(query: &str) -> Result<Vec<Note>> {
             WHERE notes_fts MATCH ?1 AND n.deleted_at IS NULL
             ORDER BY bm25(notes_fts)
             "#,
-        )
-        .context("Failed to prepare search query")?;
+        )?;
 
-    let notes = stmt
-        .query_map(params![query], row_to_note)
-        .context("Failed to search notes")?
-        .collect::<Result<Vec<_>, _>>()
-        .context("Failed to collect search results")?;
+        let notes = stmt
+            .query_map(params![sanitized_query], row_to_note)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(notes)
+    })();
 
-    debug!(query = %query, count = notes.len(), "Search completed");
-    Ok(notes)
+    match fts_result {
+        Ok(notes) => {
+            debug!(query = %query, count = notes.len(), method = "fts", "Note search completed");
+            Ok(notes)
+        }
+        Err(e) => {
+            // FTS failed (possibly due to special characters), fall back to LIKE search
+            debug!(
+                query = %query,
+                error = %e,
+                method = "like_fallback",
+                "FTS search failed, using LIKE fallback"
+            );
+
+            let like_pattern = format!("%{}%", query);
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT id, title, content, created_at, updated_at,
+                           deleted_at, is_pinned, sort_order
+                    FROM notes
+                    WHERE deleted_at IS NULL
+                      AND (title LIKE ?1 OR content LIKE ?1)
+                    ORDER BY updated_at DESC
+                    "#,
+                )
+                .context("Failed to prepare LIKE fallback query")?;
+
+            let notes = stmt
+                .query_map(params![like_pattern], row_to_note)
+                .context("Failed to execute LIKE fallback search")?
+                .collect::<Result<Vec<_>, _>>()
+                .context("Failed to collect LIKE fallback results")?;
+
+            debug!(query = %query, count = notes.len(), method = "like_fallback", "Note search completed");
+            Ok(notes)
+        }
+    }
 }
 
 /// Permanently delete a note
@@ -381,5 +430,35 @@ mod tests {
     fn test_db_path() {
         let path = get_notes_db_path();
         assert!(path.to_string_lossy().contains("notes.sqlite"));
+    }
+
+    #[test]
+    fn test_search_notes_handles_special_characters() {
+        // Ensure DB is initialized
+        let _ = init_notes_db();
+
+        // Search with special characters should not error (even if no results)
+        // These are FTS5 special characters that can break MATCH queries
+        let special_queries = [
+            "test@example.com", // @ symbol
+            "foo*bar",          // wildcard
+            "hello\"world",     // quote
+            "foo:bar",          // colon (FTS column prefix syntax)
+            "(test)",           // parentheses
+            "test^2",           // caret (boost syntax)
+            "test-query",       // hyphen (can be operator)
+            "'test'",           // single quotes
+            "test AND OR NOT",  // operators
+        ];
+
+        for query in special_queries {
+            let result = search_notes(query);
+            assert!(
+                result.is_ok(),
+                "Search with '{}' should not error: {:?}",
+                query,
+                result.err()
+            );
+        }
     }
 }
