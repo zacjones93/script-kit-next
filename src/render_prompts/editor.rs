@@ -40,82 +40,49 @@ impl ScriptListApp {
                   window: &mut Window,
                   cx: &mut Context<Self>| {
                 // Global shortcuts (Cmd+W only - editor is NOT dismissable with ESC)
-                if this.handle_global_shortcut_with_options(event, false, cx) {
+                // Note: When actions popup is open, ESC should close the popup
+                if !this.show_actions_popup
+                    && this.handle_global_shortcut_with_options(event, false, cx)
+                {
                     return;
                 }
 
-                let key_str = event.keystroke.key.to_lowercase();
+                let key = event.keystroke.key.as_str();
+                let key_char = event.keystroke.key_char.as_deref();
                 let has_cmd = event.keystroke.modifiers.platform;
 
                 // Check for Cmd+K to toggle actions popup (if actions are available)
-                if has_cmd && key_str == "k" && has_actions_for_handler {
+                if has_cmd && ui_foundation::is_key_k(key) && has_actions_for_handler {
                     logging::log("KEY", "Cmd+K in EditorPrompt - calling toggle_arg_actions");
                     this.toggle_arg_actions(cx, window);
                     return;
                 }
 
-                // If actions popup is open, route keyboard events to it
-                if this.show_actions_popup {
-                    if let Some(ref dialog) = this.actions_dialog {
-                        match key_str.as_str() {
-                            "up" | "arrowup" => {
-                                dialog.update(cx, |d, cx| d.move_up(cx));
-                                return;
-                            }
-                            "down" | "arrowdown" => {
-                                dialog.update(cx, |d, cx| d.move_down(cx));
-                                return;
-                            }
-                            "enter" => {
-                                let action_id = dialog.read(cx).get_selected_action_id();
-                                let should_close = dialog.read(cx).selected_action_should_close();
-                                if let Some(action_id) = action_id {
-                                    logging::log(
-                                        "ACTIONS",
-                                        &format!(
-                                            "EditorPrompt executing action: {} (close={})",
-                                            action_id, should_close
-                                        ),
-                                    );
-                                    if should_close {
-                                        this.show_actions_popup = false;
-                                        this.actions_dialog = None;
-                                        this.focused_input = FocusedInput::None;
-                                        window.focus(&this.focus_handle, cx);
-                                    }
-                                    this.trigger_action_by_name(&action_id, cx);
-                                }
-                                return;
-                            }
-                            "escape" => {
-                                this.show_actions_popup = false;
-                                this.actions_dialog = None;
-                                this.focused_input = FocusedInput::None;
-                                window.focus(&this.focus_handle, cx);
-                                cx.notify();
-                                return;
-                            }
-                            "backspace" => {
-                                dialog.update(cx, |d, cx| d.handle_backspace(cx));
-                                return;
-                            }
-                            _ => {
-                                if let Some(ref key_char) = event.keystroke.key_char {
-                                    if let Some(ch) = key_char.chars().next() {
-                                        if !ch.is_control() {
-                                            dialog.update(cx, |d, cx| d.handle_char(ch, cx));
-                                        }
-                                    }
-                                }
-                                return;
-                            }
-                        }
+                // Route to shared actions dialog handler (modal when open)
+                match this.route_key_to_actions_dialog(
+                    key,
+                    key_char,
+                    ActionsDialogHost::EditorPrompt,
+                    window,
+                    cx,
+                ) {
+                    ActionsRoute::Execute { action_id } => {
+                        this.trigger_action_by_name(&action_id, cx);
+                        return;
+                    }
+                    ActionsRoute::Handled => {
+                        // Key consumed by actions dialog
+                        return;
+                    }
+                    ActionsRoute::NotHandled => {
+                        // Actions popup not open - continue with normal handling
                     }
                 }
 
-                // Check for SDK action shortcuts
+                // Check for SDK action shortcuts (only when popup is NOT open)
+                let key_lower = key.to_lowercase();
                 let shortcut_key =
-                    shortcuts::keystroke_to_shortcut(&key_str, &event.keystroke.modifiers);
+                    shortcuts::keystroke_to_shortcut(&key_lower, &event.keystroke.modifiers);
                 if let Some(action_name) = this.action_shortcuts.get(&shortcut_key).cloned() {
                     logging::log(
                         "KEY",
@@ -299,11 +266,7 @@ impl ScriptListApp {
                                 "FOCUS",
                                 "Editor actions backdrop clicked - dismissing dialog",
                             );
-                            this.show_actions_popup = false;
-                            this.actions_dialog = None;
-                            this.focused_input = FocusedInput::None;
-                            window.focus(&this.focus_handle, cx);
-                            cx.notify();
+                            this.close_actions_popup(ActionsDialogHost::EditorPrompt, window, cx);
                         },
                     );
 

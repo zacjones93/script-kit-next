@@ -114,90 +114,50 @@ impl ScriptListApp {
                   window: &mut Window,
                   cx: &mut Context<Self>| {
                 // Global shortcuts (Cmd+W, ESC for dismissable prompts)
-                if this.handle_global_shortcut_with_options(event, true, cx) {
+                // Note: Escape when actions popup is open should close the popup, not dismiss prompt
+                if !this.show_actions_popup
+                    && this.handle_global_shortcut_with_options(event, true, cx)
+                {
                     return;
                 }
 
-                let key_str = event.keystroke.key.to_lowercase();
+                let key = event.keystroke.key.as_str();
+                let key_char = event.keystroke.key_char.as_deref();
                 let has_cmd = event.keystroke.modifiers.platform;
-                logging::log(
-                    "KEY",
-                    &format!("ArgPrompt key: '{}' cmd={}", key_str, has_cmd),
-                );
+                let modifiers = &event.keystroke.modifiers;
 
                 // Check for Cmd+K to toggle actions popup (if actions are available)
-                if has_cmd && key_str == "k" && has_actions_for_handler {
+                if has_cmd && ui_foundation::is_key_k(key) && has_actions_for_handler {
                     logging::log("KEY", "Cmd+K in ArgPrompt - calling toggle_arg_actions");
                     this.toggle_arg_actions(cx, window);
                     return;
                 }
 
-                // If actions popup is open, route keyboard events to it (same as main menu)
-                if this.show_actions_popup {
-                    if let Some(ref dialog) = this.actions_dialog {
-                        match key_str.as_str() {
-                            "up" | "arrowup" => {
-                                dialog.update(cx, |d, cx| d.move_up(cx));
-                                return;
-                            }
-                            "down" | "arrowdown" => {
-                                dialog.update(cx, |d, cx| d.move_down(cx));
-                                return;
-                            }
-                            "enter" => {
-                                // Get the selected action and execute it
-                                let action_id = dialog.read(cx).get_selected_action_id();
-                                let should_close = dialog.read(cx).selected_action_should_close();
-                                if let Some(action_id) = action_id {
-                                    logging::log(
-                                        "ACTIONS",
-                                        &format!(
-                                            "ArgPrompt executing action: {} (close={})",
-                                            action_id, should_close
-                                        ),
-                                    );
-                                    // Only close if action has close: true (default)
-                                    if should_close {
-                                        this.show_actions_popup = false;
-                                        this.actions_dialog = None;
-                                        this.focused_input = FocusedInput::ArgPrompt;
-                                        window.focus(&this.focus_handle, cx);
-                                    }
-                                    // Trigger the SDK action by name
-                                    this.trigger_action_by_name(&action_id, cx);
-                                }
-                                return;
-                            }
-                            "escape" => {
-                                this.show_actions_popup = false;
-                                this.actions_dialog = None;
-                                this.focused_input = FocusedInput::ArgPrompt;
-                                window.focus(&this.focus_handle, cx);
-                                cx.notify();
-                                return;
-                            }
-                            "backspace" => {
-                                dialog.update(cx, |d, cx| d.handle_backspace(cx));
-                                return;
-                            }
-                            _ => {
-                                // Route character input to the dialog for search
-                                if let Some(ref key_char) = event.keystroke.key_char {
-                                    if let Some(ch) = key_char.chars().next() {
-                                        if !ch.is_control() {
-                                            dialog.update(cx, |d, cx| d.handle_char(ch, cx));
-                                        }
-                                    }
-                                }
-                                return;
-                            }
-                        }
+                // Route to shared actions dialog handler (modal when open)
+                match this.route_key_to_actions_dialog(
+                    key,
+                    key_char,
+                    ActionsDialogHost::ArgPrompt,
+                    window,
+                    cx,
+                ) {
+                    ActionsRoute::Execute { action_id } => {
+                        this.trigger_action_by_name(&action_id, cx);
+                        return;
+                    }
+                    ActionsRoute::Handled => {
+                        // Key consumed by actions dialog
+                        return;
+                    }
+                    ActionsRoute::NotHandled => {
+                        // Actions popup not open - continue with normal handling
                     }
                 }
 
                 // Check for SDK action shortcuts (only when actions popup is NOT open)
+                let key_lower = key.to_lowercase();
                 let shortcut_key =
-                    shortcuts::keystroke_to_shortcut(&key_str, &event.keystroke.modifiers);
+                    shortcuts::keystroke_to_shortcut(&key_lower, &event.keystroke.modifiers);
                 if let Some(action_name) = this.action_shortcuts.get(&shortcut_key).cloned() {
                     logging::log(
                         "KEY",
@@ -207,66 +167,61 @@ impl ScriptListApp {
                     return;
                 }
 
-                let modifiers = &event.keystroke.modifiers;
+                // Arrow up/down: list navigation (use allocation-free helpers)
+                if ui_foundation::is_key_up(key) && !modifiers.shift {
+                    if this.arg_selected_index > 0 {
+                        this.arg_selected_index -= 1;
+                        // P0: Scroll to keep selection visible
+                        this.arg_list_scroll_handle
+                            .scroll_to_item(this.arg_selected_index, ScrollStrategy::Nearest);
+                        logging::log_debug(
+                            "SCROLL",
+                            &format!("P0: Arg up: selected_index={}", this.arg_selected_index),
+                        );
+                        cx.notify();
+                    }
+                    return;
+                }
 
-                // Arrow up/down: list navigation
-                match key_str.as_str() {
-                    "up" | "arrowup" if !modifiers.shift => {
-                        if this.arg_selected_index > 0 {
-                            this.arg_selected_index -= 1;
-                            // P0: Scroll to keep selection visible
-                            this.arg_list_scroll_handle
-                                .scroll_to_item(this.arg_selected_index, ScrollStrategy::Nearest);
-                            logging::log_debug(
-                                "SCROLL",
-                                &format!("P0: Arg up: selected_index={}", this.arg_selected_index),
-                            );
-                            cx.notify();
-                        }
-                        return;
+                if ui_foundation::is_key_down(key) && !modifiers.shift {
+                    let filtered = this.filtered_arg_choices();
+                    if this.arg_selected_index < filtered.len().saturating_sub(1) {
+                        this.arg_selected_index += 1;
+                        // P0: Scroll to keep selection visible
+                        this.arg_list_scroll_handle
+                            .scroll_to_item(this.arg_selected_index, ScrollStrategy::Nearest);
+                        logging::log_debug(
+                            "SCROLL",
+                            &format!(
+                                "P0: Arg down: selected_index={}",
+                                this.arg_selected_index
+                            ),
+                        );
+                        cx.notify();
                     }
-                    "down" | "arrowdown" if !modifiers.shift => {
-                        let filtered = this.filtered_arg_choices();
-                        if this.arg_selected_index < filtered.len().saturating_sub(1) {
-                            this.arg_selected_index += 1;
-                            // P0: Scroll to keep selection visible
-                            this.arg_list_scroll_handle
-                                .scroll_to_item(this.arg_selected_index, ScrollStrategy::Nearest);
-                            logging::log_debug(
-                                "SCROLL",
-                                &format!(
-                                    "P0: Arg down: selected_index={}",
-                                    this.arg_selected_index
-                                ),
-                            );
-                            cx.notify();
-                        }
-                        return;
+                    return;
+                }
+
+                if ui_foundation::is_key_enter(key) {
+                    let filtered = this.filtered_arg_choices();
+                    if let Some((_, choice)) = filtered.get(this.arg_selected_index) {
+                        // Case 1: There are filtered choices - submit the selected one
+                        let value = choice.value.clone();
+                        this.submit_prompt_response(prompt_id.clone(), Some(value), cx);
+                    } else if !this.arg_input.is_empty() {
+                        // Case 2: No choices but user typed something - submit input text
+                        let value = this.arg_input.text().to_string();
+                        this.submit_prompt_response(prompt_id.clone(), Some(value), cx);
                     }
-                    "enter" => {
-                        let filtered = this.filtered_arg_choices();
-                        if let Some((_, choice)) = filtered.get(this.arg_selected_index) {
-                            // Case 1: There are filtered choices - submit the selected one
-                            let value = choice.value.clone();
-                            this.submit_prompt_response(prompt_id.clone(), Some(value), cx);
-                        } else if !this.arg_input.is_empty() {
-                            // Case 2: No choices but user typed something - submit input text
-                            let value = this.arg_input.text().to_string();
-                            this.submit_prompt_response(prompt_id.clone(), Some(value), cx);
-                        }
-                        // Case 3: No choices and no input - do nothing (prevent empty submissions)
-                        return;
-                    }
-                    // Note: "escape" is handled by handle_global_shortcut_with_options above
-                    _ => {}
+                    // Case 3: No choices and no input - do nothing (prevent empty submissions)
+                    return;
                 }
 
                 // Delegate all other keys to TextInputState for editing, selection, clipboard
-                let key_char = event.keystroke.key_char.as_deref();
                 let old_text = this.arg_input.text().to_string();
 
                 let handled = this.arg_input.handle_key(
-                    &key_str,
+                    &key_lower,
                     key_char,
                     modifiers.platform, // Cmd key on macOS
                     modifiers.alt,
@@ -649,11 +604,7 @@ impl ScriptListApp {
                                 "FOCUS",
                                 "Arg actions backdrop clicked - dismissing dialog",
                             );
-                            this.show_actions_popup = false;
-                            this.actions_dialog = None;
-                            this.focused_input = FocusedInput::ArgPrompt;
-                            window.focus(&this.focus_handle, cx);
-                            cx.notify();
+                            this.close_actions_popup(ActionsDialogHost::ArgPrompt, window, cx);
                         },
                     );
 

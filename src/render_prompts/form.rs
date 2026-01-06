@@ -36,91 +36,50 @@ impl ScriptListApp {
                   window: &mut Window,
                   cx: &mut Context<Self>| {
                 // Global shortcuts (Cmd+W, ESC for dismissable prompts)
-                if this.handle_global_shortcut_with_options(event, true, cx) {
+                // Note: Escape when actions popup is open should close the popup, not dismiss prompt
+                if !this.show_actions_popup
+                    && this.handle_global_shortcut_with_options(event, true, cx)
+                {
                     return;
                 }
 
-                let key_str = event.keystroke.key.to_lowercase();
+                let key = event.keystroke.key.as_str();
+                let key_char = event.keystroke.key_char.as_deref();
                 let has_shift = event.keystroke.modifiers.shift;
                 let has_cmd = event.keystroke.modifiers.platform;
 
-                logging::log(
-                    "KEY",
-                    &format!(
-                        "FormPrompt key: '{}' (shift: {}, cmd: {}, key_char: {:?})",
-                        key_str, has_shift, has_cmd, event.keystroke.key_char
-                    ),
-                );
-
                 // Check for Cmd+K to toggle actions popup (if actions are available)
-                if has_cmd && key_str == "k" && has_actions_for_handler {
+                if has_cmd && ui_foundation::is_key_k(key) && has_actions_for_handler {
                     logging::log("KEY", "Cmd+K in FormPrompt - calling toggle_arg_actions");
                     this.toggle_arg_actions(cx, window);
                     return;
                 }
 
-                // If actions popup is open, route keyboard events to it
-                if this.show_actions_popup {
-                    if let Some(ref dialog) = this.actions_dialog {
-                        match key_str.as_str() {
-                            "up" | "arrowup" => {
-                                dialog.update(cx, |d, cx| d.move_up(cx));
-                                return;
-                            }
-                            "down" | "arrowdown" => {
-                                dialog.update(cx, |d, cx| d.move_down(cx));
-                                return;
-                            }
-                            "enter" => {
-                                let action_id = dialog.read(cx).get_selected_action_id();
-                                let should_close = dialog.read(cx).selected_action_should_close();
-                                if let Some(action_id) = action_id {
-                                    logging::log(
-                                        "ACTIONS",
-                                        &format!(
-                                            "FormPrompt executing action: {} (close={})",
-                                            action_id, should_close
-                                        ),
-                                    );
-                                    if should_close {
-                                        this.show_actions_popup = false;
-                                        this.actions_dialog = None;
-                                        this.focused_input = FocusedInput::None;
-                                        window.focus(&this.focus_handle, cx);
-                                    }
-                                    this.trigger_action_by_name(&action_id, cx);
-                                }
-                                return;
-                            }
-                            "escape" => {
-                                this.show_actions_popup = false;
-                                this.actions_dialog = None;
-                                this.focused_input = FocusedInput::None;
-                                window.focus(&this.focus_handle, cx);
-                                cx.notify();
-                                return;
-                            }
-                            "backspace" => {
-                                dialog.update(cx, |d, cx| d.handle_backspace(cx));
-                                return;
-                            }
-                            _ => {
-                                if let Some(ref key_char) = event.keystroke.key_char {
-                                    if let Some(ch) = key_char.chars().next() {
-                                        if !ch.is_control() {
-                                            dialog.update(cx, |d, cx| d.handle_char(ch, cx));
-                                        }
-                                    }
-                                }
-                                return;
-                            }
-                        }
+                // Route to shared actions dialog handler (modal when open)
+                match this.route_key_to_actions_dialog(
+                    key,
+                    key_char,
+                    ActionsDialogHost::FormPrompt,
+                    window,
+                    cx,
+                ) {
+                    ActionsRoute::Execute { action_id } => {
+                        this.trigger_action_by_name(&action_id, cx);
+                        return;
+                    }
+                    ActionsRoute::Handled => {
+                        // Key consumed by actions dialog
+                        return;
+                    }
+                    ActionsRoute::NotHandled => {
+                        // Actions popup not open - continue with normal handling
                     }
                 }
 
-                // Check for SDK action shortcuts
+                // Check for SDK action shortcuts (only when popup is NOT open)
+                let key_lower = key.to_lowercase();
                 let shortcut_key =
-                    shortcuts::keystroke_to_shortcut(&key_str, &event.keystroke.modifiers);
+                    shortcuts::keystroke_to_shortcut(&key_lower, &event.keystroke.modifiers);
                 if let Some(action_name) = this.action_shortcuts.get(&shortcut_key).cloned() {
                     logging::log(
                         "KEY",
@@ -132,37 +91,37 @@ impl ScriptListApp {
 
                 // Handle form-level keys (Enter, Escape, Tab) at this level
                 // Forward all other keys to the focused form field for text input
-                match key_str.as_str() {
-                    "enter" => {
-                        // Enter submits the form - collect all field values
-                        logging::log("KEY", "Enter in FormPrompt - submitting form");
-                        let values = entity_for_submit.read(cx).collect_values(cx);
-                        logging::log("FORM", &format!("Form values: {}", values));
-                        this.submit_prompt_response(prompt_id_for_key.clone(), Some(values), cx);
-                    }
-                    // Note: "escape" is handled by handle_global_shortcut_with_options above
-                    "tab" => {
-                        // Tab navigation between fields
-                        if has_shift {
-                            entity_for_shift_tab.update(cx, |form, cx| {
-                                form.focus_previous(cx);
-                            });
-                        } else {
-                            entity_for_tab.update(cx, |form, cx| {
-                                form.focus_next(cx);
-                            });
-                        }
-                    }
-                    _ => {
-                        // Forward all other keys (characters, backspace, arrows, etc.) to the focused field
-                        // This is necessary because GPUI requires track_focus() to receive key events,
-                        // and we need the parent to have focus to handle Enter/Escape/Tab.
-                        // The form fields' individual on_key_down handlers don't fire when parent has focus.
-                        entity_for_input.update(cx, |form, cx| {
-                            form.handle_key_input(event, cx);
+                if ui_foundation::is_key_enter(key) {
+                    // Enter submits the form - collect all field values
+                    logging::log("KEY", "Enter in FormPrompt - submitting form");
+                    let values = entity_for_submit.read(cx).collect_values(cx);
+                    logging::log("FORM", &format!("Form values: {}", values));
+                    this.submit_prompt_response(prompt_id_for_key.clone(), Some(values), cx);
+                    return;
+                }
+
+                // Note: "escape" is handled by handle_global_shortcut_with_options above
+                if key.eq_ignore_ascii_case("tab") {
+                    // Tab navigation between fields
+                    if has_shift {
+                        entity_for_shift_tab.update(cx, |form, cx| {
+                            form.focus_previous(cx);
+                        });
+                    } else {
+                        entity_for_tab.update(cx, |form, cx| {
+                            form.focus_next(cx);
                         });
                     }
+                    return;
                 }
+
+                // Forward all other keys (characters, backspace, arrows, etc.) to the focused field
+                // This is necessary because GPUI requires track_focus() to receive key events,
+                // and we need the parent to have focus to handle Enter/Escape/Tab.
+                // The form fields' individual on_key_down handlers don't fire when parent has focus.
+                entity_for_input.update(cx, |form, cx| {
+                    form.handle_key_input(event, cx);
+                });
             },
         );
 
@@ -377,11 +336,7 @@ impl ScriptListApp {
                                 "FOCUS",
                                 "Form actions backdrop clicked - dismissing dialog",
                             );
-                            this.show_actions_popup = false;
-                            this.actions_dialog = None;
-                            this.focused_input = FocusedInput::None;
-                            window.focus(&this.focus_handle, cx);
-                            cx.notify();
+                            this.close_actions_popup(ActionsDialogHost::FormPrompt, window, cx);
                         },
                     );
 

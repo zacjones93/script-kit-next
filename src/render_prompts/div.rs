@@ -24,74 +24,43 @@ impl ScriptListApp {
                   window: &mut Window,
                   cx: &mut Context<Self>| {
                 // Global shortcuts (Cmd+W, ESC for dismissable prompts)
-                if this.handle_global_shortcut_with_options(event, true, cx) {
+                // Note: Escape when actions popup is open should close the popup, not dismiss prompt
+                // So only handle global shortcuts when popup is closed
+                if !this.show_actions_popup
+                    && this.handle_global_shortcut_with_options(event, true, cx)
+                {
                     return;
                 }
 
-                let key_str = event.keystroke.key.to_lowercase();
+                let key = event.keystroke.key.as_str();
+                let key_char = event.keystroke.key_char.as_deref();
                 let has_cmd = event.keystroke.modifiers.platform;
 
                 // Check for Cmd+K to toggle actions popup (if actions are available)
-                if has_cmd && key_str == "k" && has_actions_for_handler {
+                if has_cmd && ui_foundation::is_key_k(key) && has_actions_for_handler {
                     logging::log("KEY", "Cmd+K in DivPrompt - calling toggle_arg_actions");
                     this.toggle_arg_actions(cx, window);
                     return;
                 }
 
-                // If actions popup is open, route keyboard events to it
-                if this.show_actions_popup {
-                    if let Some(ref dialog) = this.actions_dialog {
-                        match key_str.as_str() {
-                            "up" | "arrowup" => {
-                                dialog.update(cx, |d, cx| d.move_up(cx));
-                            }
-                            "down" | "arrowdown" => {
-                                dialog.update(cx, |d, cx| d.move_down(cx));
-                            }
-                            "enter" => {
-                                let action_id = dialog.read(cx).get_selected_action_id();
-                                let should_close = dialog.read(cx).selected_action_should_close();
-                                if let Some(action_id) = action_id {
-                                    logging::log(
-                                        "ACTIONS",
-                                        &format!(
-                                            "DivPrompt executing action: {} (close={})",
-                                            action_id, should_close
-                                        ),
-                                    );
-                                    if should_close {
-                                        this.show_actions_popup = false;
-                                        this.actions_dialog = None;
-                                        this.focused_input = FocusedInput::None;
-                                        window.focus(&this.focus_handle, cx);
-                                    }
-                                    this.trigger_action_by_name(&action_id, cx);
-                                }
-                            }
-                            "escape" => {
-                                this.show_actions_popup = false;
-                                this.actions_dialog = None;
-                                this.focused_input = FocusedInput::None;
-                                window.focus(&this.focus_handle, cx);
-                                cx.notify();
-                            }
-                            "backspace" => {
-                                dialog.update(cx, |d, cx| d.handle_backspace(cx));
-                            }
-                            _ => {
-                                if let Some(ref key_char) = event.keystroke.key_char {
-                                    if let Some(ch) = key_char.chars().next() {
-                                        if !ch.is_control() {
-                                            dialog.update(cx, |d, cx| d.handle_char(ch, cx));
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                // Route to shared actions dialog handler (modal when open)
+                match this.route_key_to_actions_dialog(
+                    key,
+                    key_char,
+                    ActionsDialogHost::DivPrompt,
+                    window,
+                    cx,
+                ) {
+                    ActionsRoute::Execute { action_id } => {
+                        this.trigger_action_by_name(&action_id, cx);
+                    }
+                    ActionsRoute::Handled => {
+                        // Key consumed by actions dialog
+                    }
+                    ActionsRoute::NotHandled => {
+                        // Actions popup not open - SDK action shortcuts handled by DivPrompt's own key handler
                     }
                 }
-
-                // SDK action shortcuts are handled by DivPrompt's own key handler
             },
         );
 
@@ -298,11 +267,7 @@ impl ScriptListApp {
                                 "FOCUS",
                                 "Div actions backdrop clicked - dismissing dialog",
                             );
-                            this.show_actions_popup = false;
-                            this.actions_dialog = None;
-                            this.focused_input = FocusedInput::None;
-                            window.focus(&this.focus_handle, cx);
-                            cx.notify();
+                            this.close_actions_popup(ActionsDialogHost::DivPrompt, window, cx);
                         },
                     );
 

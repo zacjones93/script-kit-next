@@ -755,6 +755,7 @@ enum FocusTarget {
 /// This determines focus restoration behavior when the dialog closes,
 /// since different prompt types have different focus targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // MainList variant reserved for render_script_list.rs refactoring
 enum ActionsDialogHost {
     /// Actions in arg prompt (restore focus to ArgPrompt input)
     ArgPrompt,
