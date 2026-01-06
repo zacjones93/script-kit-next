@@ -38,41 +38,9 @@ use std::sync::{Mutex, OnceLock};
 use gpui::{App, WindowHandle};
 use gpui_component::Root;
 
-/// Identifies the role/purpose of a window in the application.
-///
-/// Each role corresponds to a distinct window type with its own behavior.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WindowRole {
-    /// The main Script Kit launcher window
-    Main,
-    /// The Notes window (floating panel)
-    Notes,
-    /// The AI Chat window
-    AiChat,
-}
-
-impl WindowRole {
-    /// Get a human-readable name for this role (for logging)
-    pub fn name(&self) -> &'static str {
-        match self {
-            WindowRole::Main => "Main",
-            WindowRole::Notes => "Notes",
-            WindowRole::AiChat => "AI",
-        }
-    }
-
-    /// Convert to the persistence WindowRole type.
-    ///
-    /// This provides a clean bridge between the registry's WindowRole (used for handle management)
-    /// and window_state::WindowRole (used for bounds persistence).
-    pub fn to_persist_role(self) -> crate::window_state::WindowRole {
-        match self {
-            WindowRole::Main => crate::window_state::WindowRole::Main,
-            WindowRole::Notes => crate::window_state::WindowRole::Notes,
-            WindowRole::AiChat => crate::window_state::WindowRole::Ai,
-        }
-    }
-}
+// Re-export the canonical WindowRole from window_state
+// This ensures a single source of truth for window roles across the codebase
+pub use crate::window_state::WindowRole;
 
 /// Internal registry state
 struct WindowRegistry {
@@ -248,7 +216,7 @@ pub fn close_window_with_bounds(role: WindowRole, cx: &mut App) {
     let _ = handle.update(cx, |_, window, _| {
         // Save bounds before closing
         let wb = window.window_bounds();
-        crate::window_state::save_window_from_gpui(role.to_persist_role(), wb);
+        crate::window_state::save_window_from_gpui(role, wb);
         crate::logging::log(
             "WINDOW_REG",
             &format!("Saved bounds and closing {:?}", role.name()),
@@ -293,7 +261,7 @@ mod tests {
     fn test_window_role_name() {
         assert_eq!(WindowRole::Main.name(), "Main");
         assert_eq!(WindowRole::Notes.name(), "Notes");
-        assert_eq!(WindowRole::AiChat.name(), "AI");
+        assert_eq!(WindowRole::Ai.name(), "AI");
     }
 
     #[test]
@@ -310,15 +278,15 @@ mod tests {
     }
 
     #[test]
-    fn test_window_role_to_persist_role() {
-        // Test conversion from WindowRole to window_state::WindowRole
-        let main = WindowRole::Main.to_persist_role();
+    fn test_window_role_is_canonical() {
+        // WindowRole is now re-exported from window_state, so they're the same type
+        let main = WindowRole::Main;
         assert!(matches!(main, crate::window_state::WindowRole::Main));
 
-        let notes = WindowRole::Notes.to_persist_role();
+        let notes = WindowRole::Notes;
         assert!(matches!(notes, crate::window_state::WindowRole::Notes));
 
-        let ai = WindowRole::AiChat.to_persist_role();
+        let ai = WindowRole::Ai;
         assert!(matches!(ai, crate::window_state::WindowRole::Ai));
     }
 

@@ -78,19 +78,9 @@ use std::sync::{Mutex, OnceLock};
 #[cfg(target_os = "macos")]
 use crate::logging;
 
-/// Identifies the role/purpose of a window in the application.
-///
-/// This enum allows us to track multiple windows by their purpose,
-/// making it easy to retrieve the correct window when needed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WindowRole {
-    /// The main Script Kit launcher window
-    MainWindow,
-    // Future roles can be added here:
-    // SettingsWindow,
-    // PreviewWindow,
-    // etc.
-}
+// Re-export the canonical WindowRole from window_state
+// This ensures a single source of truth for window roles across the codebase
+pub use crate::window_state::WindowRole;
 
 /// A thread-safe wrapper for NSWindow ID pointers.
 ///
@@ -230,7 +220,7 @@ pub fn get_window(role: WindowRole) -> Option<id> {
 /// The main window's native ID if registered, None otherwise
 #[cfg(target_os = "macos")]
 pub fn get_main_window() -> Option<id> {
-    get_window(WindowRole::MainWindow)
+    get_window(WindowRole::Main)
 }
 
 /// Find and register the main window by its expected size.
@@ -294,7 +284,7 @@ pub fn find_and_register_main_window() -> bool {
                         i, width, height
                     ),
                 );
-                register_window(WindowRole::MainWindow, window);
+                register_window(WindowRole::Main, window);
                 return true;
             }
         }
@@ -395,8 +385,8 @@ mod tests {
     /// Test that WindowRole can be used as HashMap key
     #[test]
     fn test_window_role_hash_eq() {
-        let role1 = WindowRole::MainWindow;
-        let role2 = WindowRole::MainWindow;
+        let role1 = WindowRole::Main;
+        let role2 = WindowRole::Main;
         assert_eq!(role1, role2);
 
         // Verify it's Copy
@@ -407,9 +397,10 @@ mod tests {
     /// Test WindowRole Debug formatting
     #[test]
     fn test_window_role_debug() {
-        let role = WindowRole::MainWindow;
+        let role = WindowRole::Main;
         let debug_str = format!("{:?}", role);
-        assert!(debug_str.contains("MainWindow"));
+        // WindowRole::Main now from window_state, debug shows "Main"
+        assert!(debug_str.contains("Main"));
     }
 
     // macOS-specific tests
@@ -437,10 +428,10 @@ mod tests {
             let mock_id: id = 0x12345678 as id;
 
             // Register the window
-            register_window(WindowRole::MainWindow, mock_id);
+            register_window(WindowRole::Main, mock_id);
 
             // Retrieve it
-            let retrieved = get_window(WindowRole::MainWindow);
+            let retrieved = get_window(WindowRole::Main);
             assert!(retrieved.is_some());
             assert_eq!(retrieved.unwrap(), mock_id);
         }
@@ -449,7 +440,7 @@ mod tests {
         #[test]
         fn test_get_main_window_convenience() {
             let mock_id: id = 0x87654321 as id;
-            register_window(WindowRole::MainWindow, mock_id);
+            register_window(WindowRole::Main, mock_id);
 
             let retrieved = get_main_window();
             assert!(retrieved.is_some());
@@ -462,10 +453,10 @@ mod tests {
             let mock_id: id = 0xABCDEF00 as id;
 
             // Register it
-            register_window(WindowRole::MainWindow, mock_id);
+            register_window(WindowRole::Main, mock_id);
 
             // Should be registered now
-            assert!(is_window_registered(WindowRole::MainWindow));
+            assert!(is_window_registered(WindowRole::Main));
         }
 
         /// Test that registration overwrites previous value
@@ -474,11 +465,11 @@ mod tests {
             let first_id: id = 0x11111111 as id;
             let second_id: id = 0x22222222 as id;
 
-            register_window(WindowRole::MainWindow, first_id);
-            assert_eq!(get_window(WindowRole::MainWindow), Some(first_id));
+            register_window(WindowRole::Main, first_id);
+            assert_eq!(get_window(WindowRole::Main), Some(first_id));
 
-            register_window(WindowRole::MainWindow, second_id);
-            assert_eq!(get_window(WindowRole::MainWindow), Some(second_id));
+            register_window(WindowRole::Main, second_id);
+            assert_eq!(get_window(WindowRole::Main), Some(second_id));
         }
 
         /// Test WindowManager internal struct
@@ -489,18 +480,18 @@ mod tests {
             let mock_id: id = 0x33333333 as id;
 
             // Initially empty
-            assert!(!manager.is_registered(WindowRole::MainWindow));
-            assert!(manager.get(WindowRole::MainWindow).is_none());
+            assert!(!manager.is_registered(WindowRole::Main));
+            assert!(manager.get(WindowRole::Main).is_none());
 
             // Register
-            manager.register(WindowRole::MainWindow, mock_id);
-            assert!(manager.is_registered(WindowRole::MainWindow));
-            assert_eq!(manager.get(WindowRole::MainWindow), Some(mock_id));
+            manager.register(WindowRole::Main, mock_id);
+            assert!(manager.is_registered(WindowRole::Main));
+            assert_eq!(manager.get(WindowRole::Main), Some(mock_id));
 
             // Unregister
-            let removed = manager.unregister(WindowRole::MainWindow);
+            let removed = manager.unregister(WindowRole::Main);
             assert_eq!(removed, Some(mock_id));
-            assert!(!manager.is_registered(WindowRole::MainWindow));
+            assert!(!manager.is_registered(WindowRole::Main));
         }
     }
 
@@ -512,11 +503,11 @@ mod tests {
         #[test]
         fn test_stubs_return_none() {
             // All stub functions should return None or false
-            assert!(get_window(WindowRole::MainWindow).is_none());
+            assert!(get_window(WindowRole::Main).is_none());
             assert!(get_main_window().is_none());
             assert!(!find_and_register_main_window());
-            assert!(!is_window_registered(WindowRole::MainWindow));
-            assert!(unregister_window(WindowRole::MainWindow).is_none());
+            assert!(!is_window_registered(WindowRole::Main));
+            assert!(unregister_window(WindowRole::Main).is_none());
         }
     }
 }

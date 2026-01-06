@@ -32,11 +32,21 @@ pub enum WindowRole {
 }
 
 impl WindowRole {
+    /// Get a lowercase string key for persistence/file paths
     pub fn as_str(&self) -> &'static str {
         match self {
             WindowRole::Main => "main",
             WindowRole::Notes => "notes",
             WindowRole::Ai => "ai",
+        }
+    }
+
+    /// Get a human-readable name for logging
+    pub fn name(&self) -> &'static str {
+        match self {
+            WindowRole::Main => "Main",
+            WindowRole::Notes => "Notes",
+            WindowRole::Ai => "AI",
         }
     }
 }
