@@ -499,6 +499,241 @@ extern "C" {
     static NSAppearanceNameVibrantLight: id;
 }
 
+/// Swizzle GPUI's BlurredView class to preserve the CAChameleonLayer tint.
+///
+/// GPUI creates a custom NSVisualEffectView subclass called "BlurredView" that
+/// hides the CAChameleonLayer (the native macOS tint layer) on every updateLayer call.
+/// This function replaces that behavior to preserve the native tint effect.
+///
+/// Call this ONCE early in app startup, before any windows are created.
+///
+/// # Safety
+///
+/// Uses Objective-C runtime to replace method implementations.
+#[cfg(target_os = "macos")]
+static SWIZZLE_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Counter for patched_update_layer calls (for diagnostics)
+#[cfg(target_os = "macos")]
+static PATCHED_UPDATE_LAYER_CALLS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(target_os = "macos")]
+pub fn swizzle_gpui_blurred_view() {
+    use std::sync::atomic::Ordering;
+
+    logging::log("VIBRANCY", "swizzle_gpui_blurred_view() called");
+
+    // Only swizzle once
+    if SWIZZLE_DONE.swap(true, Ordering::SeqCst) {
+        logging::log("VIBRANCY", "Swizzle already done, skipping");
+        return;
+    }
+
+    unsafe {
+        // Get GPUI's BlurredView class
+        let class_name = std::ffi::CString::new("BlurredView").unwrap();
+        let blurred_class = objc::runtime::objc_getClass(class_name.as_ptr());
+
+        logging::log(
+            "VIBRANCY",
+            &format!(
+                "Looking for BlurredView class: {:?}",
+                !blurred_class.is_null()
+            ),
+        );
+
+        if blurred_class.is_null() {
+            logging::log(
+                "VIBRANCY",
+                "BlurredView class not found (GPUI may not have created it yet)",
+            );
+            return;
+        }
+
+        // Get the updateLayer selector
+        let update_layer_sel = sel!(updateLayer);
+
+        // Get the original method
+        let original_method =
+            objc::runtime::class_getInstanceMethod(blurred_class as *const _, update_layer_sel);
+
+        if original_method.is_null() {
+            logging::log("VIBRANCY", "updateLayer method not found on BlurredView");
+            return;
+        }
+
+        // Replace with our implementation that preserves the tint layer
+        let new_imp: extern "C" fn(&objc::runtime::Object, objc::runtime::Sel) =
+            patched_update_layer;
+        let _ = objc::runtime::method_setImplementation(
+            original_method as *mut _,
+            std::mem::transmute::<_, objc::runtime::Imp>(new_imp),
+        );
+
+        logging::log(
+            "VIBRANCY",
+            "Successfully swizzled BlurredView.updateLayer to preserve CAChameleonLayer tint!",
+        );
+    }
+}
+
+/// Our replacement for GPUI's updateLayer that preserves the CAChameleonLayer
+#[cfg(target_os = "macos")]
+extern "C" fn patched_update_layer(this: &objc::runtime::Object, _sel: objc::runtime::Sel) {
+    use std::sync::atomic::Ordering;
+
+    let call_count = PATCHED_UPDATE_LAYER_CALLS.fetch_add(1, Ordering::Relaxed);
+
+    // Log first few calls and then periodically to confirm swizzle is active
+    if call_count < 3 || (call_count < 100 && call_count % 20 == 0) || call_count % 500 == 0 {
+        logging::log(
+            "VIBRANCY",
+            &format!("patched_update_layer CALLED (count={})", call_count + 1),
+        );
+    }
+
+    unsafe {
+        // Call NSVisualEffectView's original updateLayer (skip GPUI's BlurredView implementation)
+        // We use msg_send! with super() to call the parent class implementation
+        let this_id = this as *const _ as id;
+        let _: () = msg_send![super(this_id, class!(NSVisualEffectView)), updateLayer];
+
+        // DON'T hide the CAChameleonLayer - this is the key difference from GPUI's version
+        // The tint layer provides the native macOS vibrancy effect
+
+        // On first call, log the sublayers recursively to find CAChameleonLayer
+        if call_count == 0 {
+            let layer: id = msg_send![this_id, layer];
+            if !layer.is_null() {
+                logging::log("VIBRANCY", "Inspecting BlurredView layer hierarchy:");
+                dump_layer_hierarchy(layer, 0);
+            }
+        }
+
+        // On second call (after window is visible), check layer state again
+        if call_count == 1 {
+            let layer: id = msg_send![this_id, layer];
+            if !layer.is_null() {
+                logging::log("VIBRANCY", "Second call - checking layer state after show:");
+                dump_layer_hierarchy(layer, 0);
+            }
+        }
+    }
+}
+
+/// Recursively dump layer hierarchy to find CAChameleonLayer
+#[cfg(target_os = "macos")]
+unsafe fn dump_layer_hierarchy(layer: id, depth: usize) {
+    if layer.is_null() || depth > 5 {
+        return;
+    }
+
+    let indent = "  ".repeat(depth);
+    let class: id = msg_send![layer, class];
+    let class_name: id = msg_send![class, className];
+    let class_name_str: *const std::os::raw::c_char = msg_send![class_name, UTF8String];
+
+    if !class_name_str.is_null() {
+        let name = std::ffi::CStr::from_ptr(class_name_str).to_string_lossy();
+        let is_hidden: bool = msg_send![layer, isHidden];
+        let is_chameleon = name.contains("Chameleon");
+
+        // Check for filters
+        let filters: id = msg_send![layer, filters];
+        let filter_count: usize = if !filters.is_null() {
+            msg_send![filters, count]
+        } else {
+            0
+        };
+
+        // Check background color
+        let bg_color: id = msg_send![layer, backgroundColor];
+        let has_bg = !bg_color.is_null();
+
+        logging::log(
+            "VIBRANCY",
+            &format!(
+                "{}[d{}] {} (hidden={}, filters={}, bg={}){}",
+                indent,
+                depth,
+                name,
+                is_hidden,
+                filter_count,
+                has_bg,
+                if is_chameleon { " <-- CHAMELEON!" } else { "" }
+            ),
+        );
+
+        // Log filter names if any
+        if filter_count > 0 {
+            for i in 0..filter_count {
+                let filter: id = msg_send![filters, objectAtIndex: i];
+                let desc: id = msg_send![filter, description];
+                let desc_str: *const std::os::raw::c_char = msg_send![desc, UTF8String];
+                if !desc_str.is_null() {
+                    let desc_s = std::ffi::CStr::from_ptr(desc_str).to_string_lossy();
+                    logging::log(
+                        "VIBRANCY",
+                        &format!("{}  filter[{}]: {}", indent, i, desc_s),
+                    );
+                }
+            }
+        }
+
+        // If we find CAChameleonLayer and it's hidden, unhide it!
+        if is_chameleon && is_hidden {
+            logging::log(
+                "VIBRANCY",
+                &format!("{}  -> Unhiding CAChameleonLayer!", indent),
+            );
+            let _: () = msg_send![layer, setHidden: false];
+        }
+    }
+
+    // Recurse into sublayers
+    let sublayers: id = msg_send![layer, sublayers];
+    if !sublayers.is_null() {
+        let count: usize = msg_send![sublayers, count];
+        for i in 0..count {
+            let sublayer: id = msg_send![sublayers, objectAtIndex: i];
+            dump_layer_hierarchy(sublayer, depth + 1);
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn swizzle_gpui_blurred_view() {
+    // No-op on non-macOS platforms
+}
+
+/// Get diagnostic info about the BlurredView swizzle status
+#[cfg(target_os = "macos")]
+pub fn get_swizzle_diagnostics() -> (bool, u64) {
+    use std::sync::atomic::Ordering;
+    (
+        SWIZZLE_DONE.load(Ordering::Relaxed),
+        PATCHED_UPDATE_LAYER_CALLS.load(Ordering::Relaxed),
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn get_swizzle_diagnostics() -> (bool, u64) {
+    (false, 0)
+}
+
+/// Log swizzle diagnostics - call periodically to monitor swizzle health
+pub fn log_swizzle_diagnostics() {
+    let (done, calls) = get_swizzle_diagnostics();
+    logging::log(
+        "VIBRANCY",
+        &format!(
+            "Swizzle diagnostics: done={}, patched_update_layer_calls={}",
+            done, calls
+        ),
+    );
+}
+
 /// Configure the vibrancy blur for the main window to look good on ANY background.
 ///
 /// The key insight from Raycast/Spotlight/Alfred: they force the window's appearance
@@ -545,17 +780,26 @@ pub fn configure_window_vibrancy_material() {
             logging::log("PANEL", "Set window appearance to VibrantDark");
         }
 
-        // Set window background color to clear - this is CRITICAL for vibrancy
-        // Without this, the window's default background can block the blur effect
-        let clear_color: id = msg_send![class!(NSColor), clearColor];
-        let _: () = msg_send![window, setBackgroundColor: clear_color];
+        // ╔════════════════════════════════════════════════════════════════════════════╗
+        // ║ WINDOW BACKGROUND COLOR - DO NOT CHANGE WITHOUT TESTING                   ║
+        // ╠════════════════════════════════════════════════════════════════════════════╣
+        // ║ windowBackgroundColor provides the native ~1px border around the window.  ║
+        // ║ Using clearColor removes the border but allows more blur.                 ║
+        // ║ This setting was tested against Raycast/Spotlight appearance.             ║
+        // ║ See: /Users/johnlindquist/dev/mac-panel-window/panel-window.mm           ║
+        // ╚════════════════════════════════════════════════════════════════════════════╝
+        let window_bg_color: id = msg_send![class!(NSColor), windowBackgroundColor];
+        let _: () = msg_send![window, setBackgroundColor: window_bg_color];
+
+        // Enable shadow for native depth perception (Raycast/Spotlight have shadows)
+        let _: () = msg_send![window, setHasShadow: true];
 
         // Mark window as non-opaque to allow transparency/vibrancy
         let _: () = msg_send![window, setOpaque: false];
 
         logging::log(
             "PANEL",
-            "Set window backgroundColor to clearColor, opaque=false",
+            "Set window backgroundColor to windowBackgroundColor, hasShadow=true, opaque=false",
         );
 
         // Get the content view
@@ -593,17 +837,64 @@ unsafe fn configure_visual_effect_views_recursive(view: id, count: &mut usize) {
     // Check if this view is an NSVisualEffectView
     let is_vev: bool = msg_send![view, isKindOfClass: class!(NSVisualEffectView)];
     if is_vev {
-        // HUD_WINDOW (13) - Dark, high contrast material (expert recommended)
-        // Note: The actual material tint is hidden by GPUI (CAChameleonLayer hidden),
-        // so we provide our own tint via gpui_integration.rs at 70-85% opacity.
-        // The material still affects the blur quality and edge blending.
-        let _: () = msg_send![view, setMaterial: ns_visual_effect_material::HUD_WINDOW];
-        // Always active (not dependent on window focus)
-        let _: () = msg_send![view, setState: 1isize];
-        // BehindWindow blending
+        // Log current state BEFORE configuration
+        let old_material: isize = msg_send![view, material];
+        let old_state: isize = msg_send![view, state];
+        let old_blending: isize = msg_send![view, blendingMode];
+        let old_emphasized: bool = msg_send![view, isEmphasized];
+
+        // ╔════════════════════════════════════════════════════════════════════════════╗
+        // ║ NSVISUALEFFECTVIEW SETTINGS - DO NOT CHANGE WITHOUT TESTING               ║
+        // ╠════════════════════════════════════════════════════════════════════════════╣
+        // ║ These settings match Electron's vibrancy:'popover' + visualEffectState:'followWindow' ║
+        // ║ Combined with windowBackgroundColor + 37% tint alpha in gpui_integration.rs ║
+        // ║ See: /Users/johnlindquist/dev/mac-panel-window/panel-window.mm           ║
+        // ╚════════════════════════════════════════════════════════════════════════════╝
+        // POPOVER (6) - matches Electron's vibrancy: 'popover'
+        let _: () = msg_send![view, setMaterial: ns_visual_effect_material::POPOVER];
+        // State 0 = followsWindowActiveState (matches Electron's visualEffectState: 'followWindow')
+        let _: () = msg_send![view, setState: 0isize];
+        // BehindWindow blending (0) - blur content behind the window
         let _: () = msg_send![view, setBlendingMode: 0isize];
         // Emphasized for more contrast
         let _: () = msg_send![view, setEmphasized: true];
+
+        // Log state AFTER configuration
+        let new_material: isize = msg_send![view, material];
+        let new_state: isize = msg_send![view, state];
+        let new_blending: isize = msg_send![view, blendingMode];
+        let new_emphasized: bool = msg_send![view, isEmphasized];
+
+        // Get effective appearance
+        let effective_appearance: id = msg_send![view, effectiveAppearance];
+        let appearance_name: id = if !effective_appearance.is_null() {
+            msg_send![effective_appearance, name]
+        } else {
+            nil
+        };
+        let appearance_str = if !appearance_name.is_null() {
+            let s: *const std::os::raw::c_char = msg_send![appearance_name, UTF8String];
+            if !s.is_null() {
+                std::ffi::CStr::from_ptr(s).to_string_lossy().to_string()
+            } else {
+                "nil".to_string()
+            }
+        } else {
+            "nil".to_string()
+        };
+
+        logging::log(
+            "VIBRANCY",
+            &format!(
+                "NSVisualEffectView config: mat {} -> {}, state {} -> {}, blend {} -> {}, emph {} -> {}, appearance={}",
+                old_material, new_material,
+                old_state, new_state,
+                old_blending, new_blending,
+                old_emphasized, new_emphasized,
+                appearance_str
+            ),
+        );
+
         *count += 1;
     }
 

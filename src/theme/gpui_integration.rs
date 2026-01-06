@@ -43,11 +43,23 @@ pub fn map_scriptkit_to_gpui_theme(sk_theme: &Theme) -> ThemeColor {
         }
     };
 
-    // Background opacity for vibrancy effect
-    // GPUI hides the CAChameleonLayer (tint), so we must add our own dark tint
-    // Need 70-80% opacity to stay dark over light backgrounds while still showing blur
+    // ╔════════════════════════════════════════════════════════════════════════════╗
+    // ║ VIBRANCY BACKGROUND OPACITY - DO NOT CHANGE WITHOUT TESTING               ║
+    // ╠════════════════════════════════════════════════════════════════════════════╣
+    // ║ This value (0.37) was carefully tuned to work with:                        ║
+    // ║   - POPOVER material (NSVisualEffectMaterial = 6)                          ║
+    // ║   - windowBackgroundColor (provides native ~1px border)                    ║
+    // ║   - VibrantDark appearance                                                 ║
+    // ║   - setState: 0 (followsWindowActiveState)                                 ║
+    // ║                                                                            ║
+    // ║ This matches Electron's vibrancy:'popover' + visualEffectState:'followWindow' ║
+    // ║ See: /Users/johnlindquist/dev/mac-panel-window/panel-window.mm            ║
+    // ║                                                                            ║
+    // ║ Too low (< 0.30): washed out over light backgrounds                        ║
+    // ║ Too high (> 0.60): blur effect becomes invisible                           ║
+    // ╚════════════════════════════════════════════════════════════════════════════╝
     let main_bg = if vibrancy_enabled {
-        let tint_alpha = opacity.main.clamp(0.70, 0.85);
+        let tint_alpha = 0.37;
         with_vibrancy(colors.background.main, tint_alpha)
     } else {
         hex_to_hsla(colors.background.main) // Fully opaque when vibrancy disabled
