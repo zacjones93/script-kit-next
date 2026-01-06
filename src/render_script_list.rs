@@ -735,11 +735,11 @@ impl ScriptListApp {
                             this.close_and_reset_window(cx);
                         }
                     }
-                    "tab" => {
-                        // Tab key: Send query to AI chat if filter has text
+                    // Tab key: Send query to AI chat if filter has text
+                    // Note: This is a fallback - primary Tab handling is in app_impl.rs via intercept_keystrokes
+                    "tab" | "Tab" => {
                         if !this.filter_text.is_empty() {
                             let query = this.filter_text.clone();
-                            logging::log("KEY", &format!("TAB - sending to AI: '{}'", query));
 
                             // Open AI window first
                             if let Err(e) = ai::open_ai_window(cx) {
@@ -870,28 +870,6 @@ impl ScriptListApp {
                                 .focus_bordered(false),
                         ),
                     )
-                    // "Ask AI [Tab]" hint - shows Tab sends to AI
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(6.))
-                            // "Ask AI" text
-                            .child(div().text_sm().text_color(rgb(text_muted)).child("Ask AI"))
-                            // "Tab" badge
-                            .child(
-                                div()
-                                    .px(px(6.))
-                                    .py(px(2.))
-                                    .rounded(px(4.))
-                                    .border_1()
-                                    .border_color(rgb(theme.colors.ui.border))
-                                    .text_xs()
-                                    .text_color(rgb(text_muted))
-                                    .child("Tab"),
-                            ),
-                    )
                     // CLS-FREE ACTIONS AREA: Fixed-size relative container with stacked children
                     // Both states are always rendered at the same position, visibility toggled via opacity
                     // This prevents any layout shift when toggling between Run/Actions and search input
@@ -900,6 +878,18 @@ impl ScriptListApp {
                         let handle_run = cx.entity().downgrade();
                         let handle_actions = cx.entity().downgrade();
                         let show_actions = self.show_actions_popup;
+
+                        // Colors for Ask AI hint
+                        let hint_text_color = if is_default_design {
+                            theme.colors.text.secondary
+                        } else {
+                            design_colors.text_secondary
+                        };
+                        let hint_border_color = if is_default_design {
+                            theme.colors.text.tertiary
+                        } else {
+                            design_colors.text_muted
+                        };
 
                         // Get actions search text from the dialog
                         let search_text = self
@@ -931,6 +921,34 @@ impl ScriptListApp {
                                     .justify_end()
                                     // Visibility: hidden when actions popup is shown
                                     .when(show_actions, |d| d.opacity(0.).invisible())
+                                    // "Ask AI [Tab]" hint - shows Tab sends to AI
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap(px(6.))
+                                            .mr(px(8.)) // Space before Run button
+                                            // "Ask AI" text
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(rgb(hint_text_color))
+                                                    .child("Ask AI"),
+                                            )
+                                            // "Tab" badge
+                                            .child(
+                                                div()
+                                                    .px(px(6.))
+                                                    .py(px(2.))
+                                                    .rounded(px(4.))
+                                                    .border_1()
+                                                    .border_color(rgb(hint_border_color))
+                                                    .text_xs()
+                                                    .text_color(rgb(hint_text_color))
+                                                    .child("Tab"),
+                                            ),
+                                    )
                                     // Run button with click handler
                                     .child(
                                         Button::new("Run", button_colors)

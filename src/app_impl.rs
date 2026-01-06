@@ -313,6 +313,54 @@ impl ScriptListApp {
             );
         }
 
+        // Add Tab key interceptor for "Ask AI" feature
+        // This fires BEFORE normal key handling, allowing us to intercept Tab
+        // even when the Input component has focus
+        let app_entity_for_tab = cx.entity().downgrade();
+        let tab_interceptor = cx.intercept_keystrokes({
+            let app_entity = app_entity_for_tab;
+            move |event, _window, cx| {
+                let key = event.keystroke.key.to_lowercase();
+                // Check for Tab key (no modifiers)
+                if key == "tab"
+                    && !event.keystroke.modifiers.platform
+                    && !event.keystroke.modifiers.shift
+                    && !event.keystroke.modifiers.alt
+                    && !event.keystroke.modifiers.control
+                {
+                    if let Some(app) = app_entity.upgrade() {
+                        app.update(cx, |this, cx| {
+                            // Only handle Tab in ScriptList view with filter text
+                            if matches!(this.current_view, AppView::ScriptList)
+                                && !this.filter_text.is_empty()
+                                && !this.show_actions_popup
+                            {
+                                let query = this.filter_text.clone();
+
+                                // Open AI window and submit query
+                                if let Err(e) = crate::ai::open_ai_window(cx) {
+                                    crate::logging::log(
+                                        "ERROR",
+                                        &format!("Failed to open AI window: {}", e),
+                                    );
+                                } else {
+                                    crate::ai::set_ai_input(cx, &query, true);
+                                }
+
+                                // Clear filter text directly (close_and_reset_window will reset the input)
+                                this.filter_text.clear();
+                                this.close_and_reset_window(cx);
+
+                                // Stop propagation so Input doesn't handle it
+                                cx.stop_propagation();
+                            }
+                        });
+                    }
+                }
+            }
+        });
+        app.gpui_input_subscriptions.push(tab_interceptor);
+
         app
     }
 
