@@ -320,7 +320,7 @@ impl ScriptListApp {
                                                 }
                                                 _ => "⚠️ Confirm? (Enter)".to_string(),
                                             };
-                                            
+
                                             div()
                                                 .w_full()
                                                 .h(px(LIST_ITEM_HEIGHT))
@@ -846,6 +846,11 @@ impl ScriptListApp {
                 } else {
                     design_colors.accent
                 };
+                let search_box_bg = if is_default_design {
+                    theme.colors.background.search_box
+                } else {
+                    design_colors.background_secondary
+                };
                 let input_height = CURSOR_HEIGHT_LG + (CURSOR_MARGIN_Y * 2.0);
 
                 div()
@@ -877,13 +882,6 @@ impl ScriptListApp {
                         let handle_run = cx.entity().downgrade();
                         let handle_actions = cx.entity().downgrade();
                         let show_actions = self.show_actions_popup;
-
-                        // Colors for Tab badge border
-                        let hint_border_color = if is_default_design {
-                            theme.colors.text.tertiary
-                        } else {
-                            design_colors.text_muted
-                        };
 
                         // Get actions search text from the dialog
                         let search_text = self
@@ -930,14 +928,13 @@ impl ScriptListApp {
                                                     .text_color(rgb(accent_color))
                                                     .child("Ask AI"),
                                             )
-                                            // "Tab" badge - GREY
+                                            // "Tab" badge - grey background at 30% opacity (no border)
                                             .child(
                                                 div()
                                                     .px(px(6.))
                                                     .py(px(2.))
                                                     .rounded(px(4.))
-                                                    .border_1()
-                                                    .border_color(rgb(hint_border_color))
+                                                    .bg(rgba((search_box_bg << 8) | 0x4D)) // 30% opacity (0x4D = 77)
                                                     .text_xs()
                                                     .text_color(rgb(text_muted))
                                                     .child("Tab"),
@@ -1091,13 +1088,13 @@ impl ScriptListApp {
                                     ),
                             )
                     })
-                    // Script Kit Logo - Golden ratio: 21px container, 13px SVG, 4px radius
+                    // Script Kit Logo - 19px container, 12px SVG, 4px radius
                     // 85% opacity yellow background for softer appearance
                     .child(
                         div()
-                            .ml(px(16.)) // Spacing from buttons
-                            .w(px(21.))
-                            .h(px(21.))
+                            .ml(px(6.)) // Tighter spacing from buttons (was 16px)
+                            .w(px(18.))
+                            .h(px(18.))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -1106,7 +1103,7 @@ impl ScriptListApp {
                             .child(
                                 svg()
                                     .external_path(utils::get_logo_path())
-                                    .size(px(13.))
+                                    .size(px(11.))
                                     .text_color(rgb(0x000000)), // Black logo inside yellow
                             ),
                     )
