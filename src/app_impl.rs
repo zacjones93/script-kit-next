@@ -1866,6 +1866,140 @@ impl ScriptListApp {
         cx.notify();
     }
 
+    // ========================================================================
+    // Actions Dialog Routing - Shared key routing for all prompt types
+    // ========================================================================
+
+    /// Route keyboard events to the actions dialog when open.
+    ///
+    /// This centralizes the duplicated key routing logic from all render_prompts/*.rs
+    /// files into a single location, eliminating ~80 lines of duplicated code per prompt.
+    ///
+    /// # Arguments
+    /// * `key` - The key string from the KeyDownEvent (case-insensitive)
+    /// * `key_char` - Optional key_char from the event for printable character input
+    /// * `host` - Which type of host is routing (determines focus restoration behavior)
+    /// * `window` - Window reference for focus operations
+    /// * `cx` - Context for entity updates and notifications
+    ///
+    /// # Returns
+    /// * `ActionsRoute::NotHandled` - Actions popup not open, route to normal handlers
+    /// * `ActionsRoute::Handled` - Key was consumed by the actions dialog
+    /// * `ActionsRoute::Execute { action_id }` - User selected an action, caller should execute it
+    fn route_key_to_actions_dialog(
+        &mut self,
+        key: &str,
+        key_char: Option<&str>,
+        host: ActionsDialogHost,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> ActionsRoute {
+        // Not open - let caller handle the key
+        if !self.show_actions_popup {
+            return ActionsRoute::NotHandled;
+        }
+
+        // Defensive: if UI says it's open but dialog is None, don't leak keys
+        let Some(ref dialog) = self.actions_dialog else {
+            return ActionsRoute::Handled;
+        };
+
+        // Use allocation-free key helpers from ui_foundation
+        use crate::ui_foundation::{
+            is_key_backspace, is_key_down, is_key_enter, is_key_escape, is_key_up, printable_char,
+        };
+
+        if is_key_up(key) {
+            dialog.update(cx, |d, cx| d.move_up(cx));
+            return ActionsRoute::Handled;
+        }
+
+        if is_key_down(key) {
+            dialog.update(cx, |d, cx| d.move_down(cx));
+            return ActionsRoute::Handled;
+        }
+
+        if is_key_enter(key) {
+            let action_id = dialog.read(cx).get_selected_action_id();
+            let should_close = dialog.read(cx).selected_action_should_close();
+
+            if let Some(action_id) = action_id {
+                logging::log(
+                    "ACTIONS",
+                    &format!(
+                        "Actions dialog executing action: {} (close={}, host={:?})",
+                        action_id, should_close, host
+                    ),
+                );
+
+                if should_close {
+                    self.close_actions_popup(host, window, cx);
+                }
+
+                return ActionsRoute::Execute { action_id };
+            }
+            return ActionsRoute::Handled;
+        }
+
+        if is_key_escape(key) {
+            self.close_actions_popup(host, window, cx);
+            return ActionsRoute::Handled;
+        }
+
+        if is_key_backspace(key) {
+            dialog.update(cx, |d, cx| d.handle_backspace(cx));
+            return ActionsRoute::Handled;
+        }
+
+        // Check for printable character input
+        if let Some(ch) = printable_char(key_char) {
+            dialog.update(cx, |d, cx| d.handle_char(ch, cx));
+            return ActionsRoute::Handled;
+        }
+
+        // Modal behavior: swallow all other keys while popup is open
+        ActionsRoute::Handled
+    }
+
+    /// Close the actions popup and restore focus based on host type.
+    ///
+    /// This centralizes close behavior, ensuring cx.notify() is always called
+    /// and focus is correctly restored based on which prompt hosted the dialog.
+    fn close_actions_popup(
+        &mut self,
+        host: ActionsDialogHost,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_actions_popup = false;
+        self.actions_dialog = None;
+
+        // Restore focus based on host type
+        match host {
+            ActionsDialogHost::ArgPrompt => {
+                self.focused_input = FocusedInput::ArgPrompt;
+                self.pending_focus = Some(FocusTarget::AppRoot);
+            }
+            ActionsDialogHost::DivPrompt
+            | ActionsDialogHost::EditorPrompt
+            | ActionsDialogHost::TermPrompt
+            | ActionsDialogHost::FormPrompt => {
+                self.focused_input = FocusedInput::None;
+            }
+            ActionsDialogHost::MainList => {
+                self.focused_input = FocusedInput::MainFilter;
+                self.pending_focus = Some(FocusTarget::AppRoot);
+            }
+        }
+
+        window.focus(&self.focus_handle, cx);
+        logging::log(
+            "FOCUS",
+            &format!("Actions popup closed, focus restored for {:?}", host),
+        );
+        cx.notify();
+    }
+
     /// Edit a script in configured editor (config.editor > $EDITOR > "code")
     #[allow(dead_code)]
     fn edit_script(&mut self, path: &std::path::Path) {

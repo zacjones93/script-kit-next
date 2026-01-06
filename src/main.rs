@@ -750,6 +750,40 @@ enum FocusTarget {
     TermPrompt,
 }
 
+/// Identifies which prompt type is hosting the actions dialog.
+///
+/// This determines focus restoration behavior when the dialog closes,
+/// since different prompt types have different focus targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActionsDialogHost {
+    /// Actions in arg prompt (restore focus to ArgPrompt input)
+    ArgPrompt,
+    /// Actions in div prompt (restore focus to None - div has no input)
+    DivPrompt,
+    /// Actions in editor prompt (restore focus to None - editor handles its own focus)
+    EditorPrompt,
+    /// Actions in term prompt (restore focus to None - terminal handles its own focus)
+    TermPrompt,
+    /// Actions in form prompt (restore focus to None - form handles field focus)
+    FormPrompt,
+    /// Actions in main script list (restore focus to MainFilter)
+    MainList,
+}
+
+/// Result of routing a key event to the actions dialog.
+///
+/// Returned by `route_key_to_actions_dialog` to indicate how the caller
+/// should proceed after routing.
+#[derive(Debug, Clone)]
+enum ActionsRoute {
+    /// Actions popup is not open - key was not handled, caller should process normally
+    NotHandled,
+    /// Key was handled by the actions dialog - caller should return/stop propagation
+    Handled,
+    /// User selected an action - caller should execute it via trigger_action_by_name
+    Execute { action_id: String },
+}
+
 /// Messages sent from the prompt poller back to the main app
 #[derive(Debug, Clone)]
 enum PromptMessage {
