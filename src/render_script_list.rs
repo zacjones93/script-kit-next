@@ -874,17 +874,11 @@ impl ScriptListApp {
                     // Both states are always rendered at the same position, visibility toggled via opacity
                     // This prevents any layout shift when toggling between Run/Actions and search input
                     .child({
-                        let button_colors = ButtonColors::from_theme(&self.theme);
                         let handle_run = cx.entity().downgrade();
                         let handle_actions = cx.entity().downgrade();
                         let show_actions = self.show_actions_popup;
 
-                        // Colors for Ask AI hint
-                        let hint_text_color = if is_default_design {
-                            theme.colors.text.secondary
-                        } else {
-                            design_colors.text_secondary
-                        };
+                        // Colors for Tab badge border
                         let hint_border_color = if is_default_design {
                             theme.colors.text.tertiary
                         } else {
@@ -921,22 +915,21 @@ impl ScriptListApp {
                                     .justify_end()
                                     // Visibility: hidden when actions popup is shown
                                     .when(show_actions, |d| d.opacity(0.).invisible())
-                                    // "Ask AI [Tab]" hint - shows Tab sends to AI
+                                    // "Ask AI [Tab]" hint - yellow text, grey badge
                                     .child(
                                         div()
                                             .flex()
                                             .flex_row()
                                             .items_center()
                                             .gap(px(6.))
-                                            .mr(px(8.)) // Space before Run button
-                                            // "Ask AI" text
+                                            // "Ask AI" text - YELLOW (accent)
                                             .child(
                                                 div()
                                                     .text_sm()
-                                                    .text_color(rgb(hint_text_color))
+                                                    .text_color(rgb(accent_color))
                                                     .child("Ask AI"),
                                             )
-                                            // "Tab" badge
+                                            // "Tab" badge - GREY
                                             .child(
                                                 div()
                                                     .px(px(6.))
@@ -945,39 +938,79 @@ impl ScriptListApp {
                                                     .border_1()
                                                     .border_color(rgb(hint_border_color))
                                                     .text_xs()
-                                                    .text_color(rgb(hint_text_color))
+                                                    .text_color(rgb(text_muted))
                                                     .child("Tab"),
                                             ),
                                     )
-                                    // Run button with click handler
-                                    .child(
-                                        Button::new("Run", button_colors)
-                                            .variant(ButtonVariant::Ghost)
-                                            .shortcut("↵")
-                                            .on_click(Box::new(move |_, _window, cx| {
-                                                if let Some(app) = handle_run.upgrade() {
-                                                    app.update(cx, |this, cx| {
-                                                        this.execute_selected(cx);
-                                                    });
-                                                }
-                                            })),
-                                    )
-                                    // Spacing between Run and Actions (no pipe separator)
+                                    // Spacing
                                     .child(div().w(px(16.)))
-                                    // Actions button with click handler
+                                    // Run button - yellow label, grey shortcut
                                     .child(
-                                        Button::new("Actions", button_colors)
-                                            .variant(ButtonVariant::Ghost)
-                                            .shortcut("⌘ K")
-                                            .on_click(Box::new(move |_, window, cx| {
-                                                if let Some(app) = handle_actions.upgrade() {
-                                                    app.update(cx, |this, cx| {
-                                                        this.toggle_actions(cx, window);
-                                                    });
+                                        div()
+                                            .id("run-button")
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap(px(4.))
+                                            .cursor_pointer()
+                                            .on_click({
+                                                let handle = handle_run.clone();
+                                                move |_, _window, cx| {
+                                                    if let Some(app) = handle.upgrade() {
+                                                        app.update(cx, |this, cx| {
+                                                            this.execute_selected(cx);
+                                                        });
+                                                    }
                                                 }
-                                            })),
+                                            })
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(rgb(accent_color))
+                                                    .child("Run"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(rgb(text_muted))
+                                                    .child("↵"),
+                                            ),
                                     )
-                                    // Spacing before logo (no pipe separator)
+                                    // Spacing
+                                    .child(div().w(px(16.)))
+                                    // Actions button - yellow label, grey shortcut
+                                    .child(
+                                        div()
+                                            .id("actions-button")
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap(px(4.))
+                                            .cursor_pointer()
+                                            .on_click({
+                                                let handle = handle_actions.clone();
+                                                move |_, window, cx| {
+                                                    if let Some(app) = handle.upgrade() {
+                                                        app.update(cx, |this, cx| {
+                                                            this.toggle_actions(cx, window);
+                                                        });
+                                                    }
+                                                }
+                                            })
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(rgb(accent_color))
+                                                    .child("Actions"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(text_dimmed))
+                                                    .child("⌘K"),
+                                            ),
+                                    )
+                                    // Spacing before logo
                                     .child(div().w(px(16.))),
                             )
                             // Actions search input - absolute positioned, visible when actions shown
