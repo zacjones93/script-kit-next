@@ -11,6 +11,7 @@ use std::sync::Arc;
 use crate::designs::{get_tokens, DesignVariant};
 use crate::logging;
 use crate::theme;
+use crate::ui_foundation::get_vibrancy_background;
 
 use super::SubmitCallback;
 
@@ -135,7 +136,10 @@ impl Render for DropPrompt {
             },
         );
 
-        let (main_bg, text_color, muted_color, border_color) =
+        // VIBRANCY: Use foundation helper - returns None when vibrancy enabled (let Root handle bg)
+        let vibrancy_bg = get_vibrancy_background(&self.theme);
+
+        let (_main_bg, text_color, muted_color, border_color) =
             if self.design_variant == DesignVariant::Default {
                 (
                     rgb(self.theme.colors.background.main),
@@ -175,7 +179,7 @@ impl Render for DropPrompt {
             .flex_col()
             .w_full()
             .h_full()
-            .bg(main_bg)
+            .when_some(vibrancy_bg, |d, bg| d.bg(bg)) // Only apply bg when vibrancy disabled
             .text_color(text_color)
             .p(px(spacing.padding_lg))
             .key_context("drop_prompt")

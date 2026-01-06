@@ -188,6 +188,7 @@ impl ScriptListApp {
             gpui_input_subscriptions: vec![gpui_input_subscription],
             suppress_filter_events: false,
             pending_filter_sync: false,
+            pending_placeholder: None,
             last_output: None,
             focus_handle: cx.focus_handle(),
             show_logs: false,
@@ -1183,6 +1184,46 @@ impl ScriptListApp {
         }
 
         let new_text = self.gpui_input_state.read(cx).value().to_string();
+
+        // Sync filter to builtin views that use the shared input
+        match &mut self.current_view {
+            AppView::ClipboardHistoryView {
+                filter,
+                selected_index,
+            } => {
+                if *filter != new_text {
+                    *filter = new_text.clone();
+                    *selected_index = 0;
+                    self.clipboard_list_scroll_handle
+                        .scroll_to_item(0, ScrollStrategy::Top);
+                    cx.notify();
+                }
+                return; // Don't run main menu filter logic
+            }
+            AppView::AppLauncherView {
+                filter,
+                selected_index,
+            } => {
+                if *filter != new_text {
+                    *filter = new_text.clone();
+                    *selected_index = 0;
+                    cx.notify();
+                }
+                return; // Don't run main menu filter logic
+            }
+            AppView::WindowSwitcherView {
+                filter,
+                selected_index,
+            } => {
+                if *filter != new_text {
+                    *filter = new_text.clone();
+                    *selected_index = 0;
+                    cx.notify();
+                }
+                return; // Don't run main menu filter logic
+            }
+            _ => {} // Continue with main menu logic
+        }
         if new_text == self.filter_text {
             return;
         }
@@ -1193,11 +1234,14 @@ impl ScriptListApp {
         }
 
         let previous_text = std::mem::replace(&mut self.filter_text, new_text.clone());
-        self.selected_index = 0;
+        // FIX: Don't reset selected_index here - do it in queue_filter_compute() callback
+        // AFTER computed_filter_text is updated. This prevents a race condition where:
+        // 1. We set selected_index=0 immediately
+        // 2. Render runs before async cache update
+        // 3. Stale grouped_items has SectionHeader at index 0
+        // 4. coerce_selection moves selection to index 1
+        // Instead, we'll reset selection when the cache actually updates.
         self.last_scrolled_index = None;
-        // Use main_list_state for variable-height list (not the legacy list_scroll_handle)
-        self.main_list_state.scroll_to_reveal_item(0);
-        self.last_scrolled_index = Some(0);
 
         if new_text.ends_with(' ') {
             let trimmed = new_text.trim_end_matches(' ');
@@ -1240,6 +1284,12 @@ impl ScriptListApp {
                         if let Some(latest) = app.filter_coalescer.take_latest() {
                             if app.computed_filter_text != latest {
                                 app.computed_filter_text = latest;
+                                // FIX: Reset selection AFTER cache key updates to prevent race condition
+                                // Now when render calls get_grouped_results_cached() and coerce_selection(),
+                                // the cache key matches computed_filter_text, so results are fresh.
+                                app.selected_index = 0;
+                                app.main_list_state.scroll_to_reveal_item(0);
+                                app.last_scrolled_index = Some(0);
                                 // This will trigger cache recompute on next get_grouped_results_cached()
                                 app.update_window_size();
                                 cx.notify();
@@ -1285,6 +1335,13 @@ impl ScriptListApp {
     }
 
     fn sync_filter_input_if_needed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Sync placeholder if pending
+        if let Some(placeholder) = self.pending_placeholder.take() {
+            self.gpui_input_state.update(cx, |state, cx| {
+                state.set_placeholder(placeholder, window, cx);
+            });
+        }
+
         if !self.pending_filter_sync {
             return;
         }
@@ -2614,6 +2671,8 @@ impl ScriptListApp {
         self.focused_input = FocusedInput::MainFilter;
         self.gpui_input_focused = false;
         self.pending_focus = Some(FocusTarget::MainFilter);
+        // Reset placeholder back to default for main menu
+        self.pending_placeholder = Some(DEFAULT_PLACEHOLDER.to_string());
         logging::log(
             "FOCUS",
             "Reset focused_input to MainFilter for cursor display",

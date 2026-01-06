@@ -15,6 +15,7 @@ use std::sync::Arc;
 use crate::designs::{get_tokens, DesignVariant};
 use crate::logging;
 use crate::theme;
+use crate::ui_foundation::get_vibrancy_background;
 use crate::utils::{parse_color, parse_html, HtmlElement, TailwindStyles};
 
 use super::SubmitCallback;
@@ -917,22 +918,25 @@ impl Render for DivPrompt {
 
         // Determine container background:
         // 1. If container_options.background is set, use that
-        // 2. Otherwise fall back to design tokens / theme
-        let container_bg = if let Some(custom_bg) = self.container_options.parse_background() {
-            custom_bg
-        } else if self.design_variant == DesignVariant::Default {
-            // Apply opacity if specified
-            let base_color = self.theme.colors.background.main;
-            if let Some(opacity) = self.container_options.opacity {
-                rgb_to_hsla(base_color, Some(opacity))
+        // 2. If container_options.opacity is set, apply that to base color
+        // 3. Otherwise use vibrancy foundation (None when vibrancy enabled)
+        let container_bg: Option<Hsla> =
+            if let Some(custom_bg) = self.container_options.parse_background() {
+                // Custom background specified - always use it
+                Some(custom_bg)
+            } else if let Some(opacity) = self.container_options.opacity {
+                // Opacity specified - apply to theme/design color
+                let base_color = if self.design_variant == DesignVariant::Default {
+                    self.theme.colors.background.main
+                } else {
+                    colors.background
+                };
+                Some(rgb_to_hsla(base_color, Some(opacity)))
             } else {
-                Hsla::from(rgb(base_color))
-            }
-        } else if let Some(opacity) = self.container_options.opacity {
-            rgb_to_hsla(colors.background, Some(opacity))
-        } else {
-            Hsla::from(rgb(colors.background))
-        };
+                // No custom background or opacity - use vibrancy foundation
+                // Returns None when vibrancy enabled (let Root handle bg)
+                get_vibrancy_background(&self.theme).map(Hsla::from)
+            };
 
         // Determine container padding - use uniform padding for consistent appearance
         // Default to 12px (matching config default) for balanced top/left spacing
@@ -982,7 +986,7 @@ impl Render for DivPrompt {
             .w_full()
             .h_full() // Fill container height completely
             .min_h(px(0.)) // Allow proper flex behavior
-            .bg(container_bg)
+            .when_some(container_bg, |d, bg| d.bg(bg)) // Only apply bg when available
             .p(px(container_padding))
             .key_context("div_prompt")
             .track_focus(&self.focus_handle)

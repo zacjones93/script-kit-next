@@ -278,7 +278,25 @@ impl ScriptListApp {
                     // If text changed (not just cursor move), reset selection and update
                     if this.arg_input.text() != old_text {
                         this.arg_selected_index = 0;
-                        this.update_window_size();
+                        // DEFERRED RESIZE: Avoid RefCell borrow error by deferring window resize
+                        // to next frame. The native macOS setFrame:display:animate: call triggers
+                        // callbacks that try to borrow the RefCell while GPUI still holds it.
+                        let filtered = this.filtered_arg_choices();
+                        let (view_type, item_count) = if filtered.is_empty() {
+                            // Check if there are any choices at all
+                            if let AppView::ArgPrompt { choices, .. } = &this.current_view {
+                                if choices.is_empty() {
+                                    (ViewType::ArgPromptNoChoices, 0)
+                                } else {
+                                    (ViewType::ArgPromptWithChoices, 0)
+                                }
+                            } else {
+                                (ViewType::ArgPromptNoChoices, 0)
+                            }
+                        } else {
+                            (ViewType::ArgPromptWithChoices, filtered.len())
+                        };
+                        defer_resize_to_view(view_type, item_count, cx);
                     }
                     cx.notify();
                 }

@@ -25,31 +25,18 @@ impl ScriptListApp {
         let box_shadows = self.create_box_shadows();
 
         // P0 FIX: Reference data from self instead of taking ownership
-        // Use global image cache from clipboard_history module
-        // Images are pre-decoded in the background monitor thread, so this is fast
-        // Only decode if not already in the global cache (fallback with on-demand fetch)
+        // P1 FIX: NEVER do synchronous SQLite queries or image decoding in render loop!
+        // Only copy from global cache (populated async by background prewarm thread).
+        // Images not yet cached will show placeholder with dimensions from metadata.
         for entry in &self.cached_clipboard_entries {
             if entry.content_type == clipboard_history::ContentType::Image {
-                // Check global cache first, then local cache
-                if clipboard_history::get_cached_image(&entry.id).is_none()
-                    && !self.clipboard_image_cache.contains_key(&entry.id)
-                {
-                    // Fallback: fetch content on-demand and decode if not pre-cached
-                    if let Some(content) = clipboard_history::get_entry_content(&entry.id) {
-                        if let Some(render_image) =
-                            clipboard_history::decode_to_render_image(&content)
-                        {
-                            // Store in global cache for future use
-                            clipboard_history::cache_image(&entry.id, render_image.clone());
-                            self.clipboard_image_cache
-                                .insert(entry.id.clone(), render_image);
-                        }
-                    }
-                } else if let Some(cached) = clipboard_history::get_cached_image(&entry.id) {
-                    // Copy from global cache to local cache for this render
-                    if !self.clipboard_image_cache.contains_key(&entry.id) {
+                // Only use already-cached images - NO synchronous fetch/decode
+                if !self.clipboard_image_cache.contains_key(&entry.id) {
+                    if let Some(cached) = clipboard_history::get_cached_image(&entry.id) {
                         self.clipboard_image_cache.insert(entry.id.clone(), cached);
                     }
+                    // If not in global cache yet, background thread will populate it.
+                    // We'll show placeholder with dimensions until then.
                 }
             }
         }
@@ -157,41 +144,13 @@ impl ScriptListApp {
                             }
                         }
                         // Note: "escape" is handled by handle_global_shortcut_with_options above
-                        "backspace" => {
-                            if !filter.is_empty() {
-                                filter.pop();
-                                *selected_index = 0;
-                                // Reset scroll to top when filter changes
-                                this.clipboard_list_scroll_handle
-                                    .scroll_to_item(0, ScrollStrategy::Top);
-                                cx.notify();
-                            }
-                        }
-                        _ => {
-                            if let Some(ref key_char) = event.keystroke.key_char {
-                                if let Some(ch) = key_char.chars().next() {
-                                    if !ch.is_control() {
-                                        filter.push(ch);
-                                        *selected_index = 0;
-                                        // Reset scroll to top when filter changes
-                                        this.clipboard_list_scroll_handle
-                                            .scroll_to_item(0, ScrollStrategy::Top);
-                                        cx.notify();
-                                    }
-                                }
-                            }
-                        }
+                        // Text input (backspace, characters) is handled by the shared Input component
+                        // which syncs via handle_filter_input_change()
+                        _ => {}
                     }
                 }
             },
         );
-
-        let input_display = if filter.is_empty() {
-            SharedString::from("Search clipboard history...")
-        } else {
-            SharedString::from(filter.clone())
-        };
-        let input_is_empty = filter.is_empty();
 
         // Pre-compute colors
         let list_colors = ListItemColors::from_design(&design_colors);
@@ -317,7 +276,7 @@ impl ScriptListApp {
             .key_context("clipboard_history")
             .track_focus(&self.focus_handle)
             .on_key_down(handle_key)
-            // Header with input
+            // Header with input - uses shared gpui_input_state for consistent cursor/selection
             .child(
                 div()
                     .w_full()
@@ -327,48 +286,19 @@ impl ScriptListApp {
                     .flex_row()
                     .items_center()
                     .gap_3()
-                    // Search input with blinking cursor
-                    // ALIGNMENT FIX: Uses canonical cursor constants and negative margin for placeholder
+                    // Search input - shared component with main menu
                     .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .text_lg()
-                            .text_color(if input_is_empty {
-                                rgb(text_muted)
-                            } else {
-                                rgb(text_primary)
-                            })
-                            .when(input_is_empty, |d| {
-                                d.child(
-                                    div()
-                                        .w(px(CURSOR_WIDTH))
-                                        .h(px(CURSOR_HEIGHT_LG))
-                                        .my(px(CURSOR_MARGIN_Y))
-                                        .mr(px(CURSOR_GAP_X))
-                                        .when(self.cursor_visible, |d| d.bg(rgb(text_primary))),
-                                )
-                            })
-                            .when(input_is_empty, |d| {
-                                d.child(
-                                    div()
-                                        .ml(px(-(CURSOR_WIDTH + CURSOR_GAP_X)))
-                                        .child(input_display.clone()),
-                                )
-                            })
-                            .when(!input_is_empty, |d| d.child(input_display.clone()))
-                            .when(!input_is_empty, |d| {
-                                d.child(
-                                    div()
-                                        .w(px(CURSOR_WIDTH))
-                                        .h(px(CURSOR_HEIGHT_LG))
-                                        .my(px(CURSOR_MARGIN_Y))
-                                        .ml(px(CURSOR_GAP_X))
-                                        .when(self.cursor_visible, |d| d.bg(rgb(text_primary))),
-                                )
-                            }),
+                        div().flex_1().flex().flex_row().items_center().child(
+                            Input::new(&self.gpui_input_state)
+                                .w_full()
+                                .h(px(28.))
+                                .px(px(0.))
+                                .py(px(0.))
+                                .with_size(Size::Size(px(design_typography.font_size_xl)))
+                                .appearance(false)
+                                .bordered(false)
+                                .focus_bordered(false),
+                        ),
                     )
                     .child(
                         div()
@@ -1517,11 +1447,7 @@ impl ScriptListApp {
                 );
 
                 // P0 FIX: Refresh window list in self.cached_windows
-                if let AppView::WindowSwitcherView {
-                    selected_index,
-                    ..
-                } = &mut self.current_view
-                {
+                if let AppView::WindowSwitcherView { selected_index, .. } = &mut self.current_view {
                     match window_control::list_windows() {
                         Ok(new_windows) => {
                             self.cached_windows = new_windows;

@@ -1,9 +1,14 @@
-use gpui::{px, size, App, AppContext as _, AsyncApp, Context, Focusable, Window, WindowHandle};
+use std::time::Duration;
+
+use gpui::{
+    px, size, App, AppContext as _, AsyncApp, Context, Focusable, Timer, Window, WindowHandle,
+};
 
 use crate::ai;
 use crate::hotkeys;
 use crate::notes;
 use crate::platform::{calculate_eye_line_bounds_on_mouse_display, move_first_window_to_bounds};
+use crate::window_manager;
 use crate::window_resize::{initial_window_height, reset_resize_debounce};
 use crate::{logging, platform, ScriptListApp, NEEDS_RESET, PANEL_CONFIGURED};
 
@@ -126,7 +131,9 @@ impl HotkeyPoller {
                     logging::log("VISIBILITY", "WINDOW_VISIBLE set to: true");
 
                     let window_clone = window;
-                    let _ = cx.update(move |cx: &mut App| {
+                    // Calculate bounds and do GPUI operations synchronously, but DEFER native window ops
+                    // to avoid RefCell borrow conflicts during GPUI's update cycle.
+                    let deferred_bounds = cx.update(move |cx: &mut App| {
                         // Step 0: CRITICAL - Set MoveToActiveSpace BEFORE any activation
                         // This MUST happen before move_first_window_to_bounds, cx.activate(),
                         // or win.activate_window() to prevent macOS from switching spaces
@@ -147,10 +154,10 @@ impl HotkeyPoller {
                             ),
                         );
 
-                        // Step 2: Move window (position only, no activation)
-                        // Note: makeKeyAndOrderFront was removed - ordering happens via GPUI below
-                        move_first_window_to_bounds(&new_bounds);
-                        logging::log("HOTKEY", "Window repositioned to mouse display");
+                        // NOTE: move_first_window_to_bounds is DEFERRED to avoid RefCell borrow error
+                        // The native macOS setFrame:display:animate: call triggers callbacks that
+                        // try to borrow the RefCell while GPUI still holds it.
+                        logging::log("HOTKEY", "Bounds calculated, window move will be deferred");
 
                         // Step 3: NOW activate the app (makes window visible at new position)
                         cx.activate(true);
@@ -192,15 +199,28 @@ impl HotkeyPoller {
                                         "NEEDS_RESET was true - clearing and resetting to script list",
                                     );
                                     view.reset_to_script_list(cx);
-                                } else {
-                                    // Even without reset, ensure window is properly sized for current content
-                                    view.update_window_size();
                                 }
+                                // NOTE: update_window_size() removed from here - resize is deferred below
                             },
                         );
 
-                        logging::log("VISIBILITY", "Window show sequence complete");
+                        logging::log("VISIBILITY", "Window show sequence complete (sync part)");
+
+                        // Return bounds for deferred window move
+                        new_bounds
                     });
+
+                    // DEFERRED WINDOW OPERATIONS: Execute after cx.update() releases RefCell borrow
+                    // 16ms delay (~1 frame at 60fps) ensures GPUI render cycle completes
+                    if let Ok(bounds) = deferred_bounds {
+                        Timer::after(Duration::from_millis(16)).await;
+
+                        // Move window to calculated bounds (safe now, RefCell released)
+                        if window_manager::get_main_window().is_some() {
+                            move_first_window_to_bounds(&bounds);
+                            logging::log("HOTKEY", "Window repositioned to mouse display (deferred)");
+                        }
+                    }
                 }
 
                 let final_visible = script_kit_gpui::is_main_window_visible();

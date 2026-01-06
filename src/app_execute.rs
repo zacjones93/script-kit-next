@@ -38,6 +38,10 @@ impl ScriptListApp {
                         self.cached_clipboard_entries.len()
                     ),
                 );
+                // Clear the shared input for fresh search (sync on next render)
+                self.filter_text = String::new();
+                self.pending_filter_sync = true;
+                self.pending_placeholder = Some("Search clipboard history...".to_string());
                 // Initial selected_index should be 0 (first entry)
                 // Note: clipboard history uses a flat list without section headers
                 self.current_view = AppView::ClipboardHistoryView {
@@ -46,6 +50,9 @@ impl ScriptListApp {
                 };
                 // Use standard height for clipboard history view
                 defer_resize_to_view(ViewType::ScriptList, 0, cx);
+                // Focus the main filter input so cursor blinks and typing works
+                self.pending_focus = Some(FocusTarget::MainFilter);
+                self.focused_input = FocusedInput::MainFilter;
                 cx.notify();
             }
             builtins::BuiltInFeature::AppLauncher => {
@@ -54,12 +61,19 @@ impl ScriptListApp {
                 // Refresh apps list when opening launcher
                 self.apps = app_launcher::scan_applications().clone();
                 logging::log("EXEC", &format!("Loaded {} applications", self.apps.len()));
+                // Clear the shared input for fresh search (sync on next render)
+                self.filter_text = String::new();
+                self.pending_filter_sync = true;
+                self.pending_placeholder = Some("Search applications...".to_string());
                 self.current_view = AppView::AppLauncherView {
                     filter: String::new(),
                     selected_index: 0,
                 };
                 // Use standard height for app launcher view
                 defer_resize_to_view(ViewType::ScriptList, 0, cx);
+                // Focus the main filter input so cursor blinks and typing works
+                self.pending_focus = Some(FocusTarget::MainFilter);
+                self.focused_input = FocusedInput::MainFilter;
                 cx.notify();
             }
             builtins::BuiltInFeature::App(app_name) => {
@@ -92,12 +106,19 @@ impl ScriptListApp {
                     Ok(windows) => {
                         logging::log("EXEC", &format!("Loaded {} windows", windows.len()));
                         self.cached_windows = windows;
+                        // Clear the shared input for fresh search (sync on next render)
+                        self.filter_text = String::new();
+                        self.pending_filter_sync = true;
+                        self.pending_placeholder = Some("Search windows...".to_string());
                         self.current_view = AppView::WindowSwitcherView {
                             filter: String::new(),
                             selected_index: 0,
                         };
                         // Use standard height for window switcher view
                         defer_resize_to_view(ViewType::ScriptList, 0, cx);
+                        // Focus the main filter input so cursor blinks and typing works
+                        self.pending_focus = Some(FocusTarget::MainFilter);
+                        self.focused_input = FocusedInput::MainFilter;
                     }
                     Err(e) => {
                         logging::log("ERROR", &format!("Failed to list windows: {}", e));
@@ -776,7 +797,10 @@ impl ScriptListApp {
         // Ensure parent directory exists
         if let Some(parent) = scratch_path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                logging::log("ERROR", &format!("Failed to create scratch pad directory: {}", e));
+                logging::log(
+                    "ERROR",
+                    &format!("Failed to create scratch pad directory: {}", e),
+                );
                 self.toast_manager.push(
                     components::toast::Toast::error(
                         format!("Failed to create directory: {}", e),
@@ -795,7 +819,10 @@ impl ScriptListApp {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // Create empty file
                 if let Err(write_err) = std::fs::write(&scratch_path, "") {
-                    logging::log("ERROR", &format!("Failed to create scratch pad file: {}", write_err));
+                    logging::log(
+                        "ERROR",
+                        &format!("Failed to create scratch pad file: {}", write_err),
+                    );
                 }
                 String::new()
             }
@@ -813,7 +840,10 @@ impl ScriptListApp {
             }
         };
 
-        logging::log("EXEC", &format!("Loaded scratch pad with {} bytes", content.len()));
+        logging::log(
+            "EXEC",
+            &format!("Loaded scratch pad with {} bytes", content.len()),
+        );
 
         // Create editor focus handle
         let editor_focus_handle = cx.focus_handle();

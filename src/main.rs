@@ -62,6 +62,7 @@ mod terminal;
 mod theme;
 mod transitions;
 mod tray;
+mod ui_foundation;
 mod utils;
 mod warning_banner;
 mod watcher;
@@ -167,6 +168,7 @@ use prompts::{
     PathPromptEvent, SelectPrompt, TemplatePrompt,
 };
 use tray::{TrayManager, TrayMenuAction};
+use ui_foundation::get_vibrancy_background;
 use warning_banner::{WarningBanner, WarningBannerColors};
 use window_resize::{
     defer_resize_to_view, height_for_view, initial_window_height, reset_resize_debounce,
@@ -299,6 +301,10 @@ fn show_main_window_helper(
     // 4. Configure as floating panel (first time only)
     if !PANEL_CONFIGURED.load(Ordering::SeqCst) {
         platform::configure_as_floating_panel();
+        // HACK: Swizzle GPUI's BlurredView to preserve native CAChameleonLayer tint
+        // GPUI hides this layer which removes the native macOS vibrancy tinting.
+        // By swizzling, we get proper native blur appearance like Raycast/Spotlight.
+        platform::swizzle_gpui_blurred_view();
         // Configure vibrancy material to HUD_WINDOW for proper dark appearance
         // This prevents background colors from bleeding through the blur
         platform::configure_window_vibrancy_material();
@@ -334,7 +340,11 @@ fn show_main_window_helper(
             view.reset_to_script_list(ctx);
         } else {
             // Ensure window size matches current view
-            view.update_window_size();
+            // FIX: Use deferred resize to avoid RefCell borrow conflicts.
+            // view.update_window_size() called resize_first_window_to_height synchronously
+            // which triggered macOS callbacks that tried to borrow the same RefCell.
+            // Using defer_resize_to_view with a 16ms delay allows the render cycle to complete.
+            defer_resize_to_view(ViewType::ScriptList, 0, ctx);
         }
     });
 
@@ -761,6 +771,8 @@ struct ScriptListApp {
     suppress_filter_events: bool,
     /// Sync gpui input text on next render when window access is available.
     pending_filter_sync: bool,
+    /// Pending placeholder text to set on next render (needs Window access).
+    pending_placeholder: Option<String>,
     last_output: Option<SharedString>,
     focus_handle: FocusHandle,
     show_logs: bool,
@@ -957,8 +969,14 @@ impl Render for ScriptListApp {
         // Focus is applied exactly once when pending_focus is set, then cleared.
         self.apply_pending_focus(window, cx);
 
-        // Sync filter input if needed (ScriptList view only)
-        if matches!(self.current_view, AppView::ScriptList) {
+        // Sync filter input if needed (views that use shared input)
+        if matches!(
+            self.current_view,
+            AppView::ScriptList
+                | AppView::ClipboardHistoryView { .. }
+                | AppView::AppLauncherView { .. }
+                | AppView::WindowSwitcherView { .. }
+        ) {
             self.sync_filter_input_if_needed(window, cx);
         }
 
@@ -1506,6 +1524,12 @@ fn main() {
         // so we can reliably find our main window by its expected size (~750x500)
         window_manager::find_and_register_main_window();
 
+        // HACK: Swizzle GPUI's BlurredView IMMEDIATELY after window creation
+        // GPUI hides the native macOS CAChameleonLayer (vibrancy tint) on every frame.
+        // By swizzling now (before any rendering), we preserve the native tint effect.
+        // This gives us Raycast/Spotlight-like vibrancy appearance.
+        platform::swizzle_gpui_blurred_view();
+
         // Window starts hidden - no activation, no panel configuration yet
         // Panel will be configured on first show via hotkey
         // WINDOW_VISIBLE is already false by default (static initializer)
@@ -1940,12 +1964,21 @@ fn main() {
                                 script_kit_gpui::set_main_window_visible(true);
                                 platform::ensure_move_to_active_space();
 
+                                // FIX: Defer window move to avoid RefCell borrow conflicts.
+                                // We're inside nested .update() blocks, and synchronous macOS
+                                // window operations can trigger callbacks that re-borrow.
                                 let window_size = gpui::size(px(750.), initial_window_height());
                                 let bounds = platform::calculate_eye_line_bounds_on_mouse_display(window_size);
-                                platform::move_first_window_to_bounds(&bounds);
+                                ctx.spawn(async move |_this, _cx: &mut gpui::AsyncApp| {
+                                    Timer::after(std::time::Duration::from_millis(16)).await;
+                                    if window_manager::get_main_window().is_some() {
+                                        platform::move_first_window_to_bounds(&bounds);
+                                    }
+                                }).detach();
 
                                 if !PANEL_CONFIGURED.load(std::sync::atomic::Ordering::SeqCst) {
                                     platform::configure_as_floating_panel();
+                                    platform::swizzle_gpui_blurred_view();
                                     platform::configure_window_vibrancy_material();
                                     PANEL_CONFIGURED.store(true, std::sync::atomic::Ordering::SeqCst);
                                 }
@@ -1970,12 +2003,21 @@ fn main() {
                                 script_kit_gpui::set_main_window_visible(true);
                                 platform::ensure_move_to_active_space();
 
+                                // FIX: Defer window move to avoid RefCell borrow conflicts.
+                                // We're inside nested .update() blocks, and synchronous macOS
+                                // window operations can trigger callbacks that re-borrow.
                                 let window_size = gpui::size(px(750.), initial_window_height());
                                 let bounds = platform::calculate_eye_line_bounds_on_mouse_display(window_size);
-                                platform::move_first_window_to_bounds(&bounds);
+                                ctx.spawn(async move |_this, _cx: &mut gpui::AsyncApp| {
+                                    Timer::after(std::time::Duration::from_millis(16)).await;
+                                    if window_manager::get_main_window().is_some() {
+                                        platform::move_first_window_to_bounds(&bounds);
+                                    }
+                                }).detach();
 
                                 if !PANEL_CONFIGURED.load(std::sync::atomic::Ordering::SeqCst) {
                                     platform::configure_as_floating_panel();
+                                    platform::swizzle_gpui_blurred_view();
                                     platform::configure_window_vibrancy_material();
                                     PANEL_CONFIGURED.store(true, std::sync::atomic::Ordering::SeqCst);
                                 }

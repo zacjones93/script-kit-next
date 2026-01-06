@@ -15,6 +15,7 @@ use crate::designs::{get_tokens, DesignVariant};
 use crate::logging;
 use crate::protocol::{generate_semantic_id, Choice};
 use crate::theme;
+use crate::ui_foundation::get_vibrancy_background;
 
 use super::SubmitCallback;
 
@@ -245,6 +246,9 @@ impl Render for SelectPrompt {
             },
         );
 
+        // VIBRANCY: Use foundation helper - returns None when vibrancy enabled (let Root handle bg)
+        let vibrancy_bg = get_vibrancy_background(&self.theme);
+
         let (main_bg, text_color, muted_color, border_color) =
             if self.design_variant == DesignVariant::Default {
                 (
@@ -385,7 +389,7 @@ impl Render for SelectPrompt {
             .flex_col()
             .w_full()
             .h_full()
-            .bg(main_bg)
+            .when_some(vibrancy_bg, |d, bg| d.bg(bg)) // Only apply bg when vibrancy disabled
             .text_color(text_color)
             .key_context("select_prompt")
             .track_focus(&self.focus_handle)

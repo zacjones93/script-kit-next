@@ -22,10 +22,10 @@ impl ScriptListApp {
         let design_spacing = tokens.spacing();
 
         // Use design tokens for global theming
-        let opacity = self.theme.get_opacity();
-        let bg_hex = design_colors.background;
-        let bg_with_alpha = self.hex_to_rgba_with_opacity(bg_hex, opacity.main);
         let box_shadows = self.create_box_shadows();
+
+        // VIBRANCY: Use foundation helper - returns None when vibrancy enabled (let Root handle bg)
+        let vibrancy_bg = get_vibrancy_background(&self.theme);
 
         // Use explicit height from layout constants instead of h_full()
         // h_full() doesn't work at the root level because there's no parent to fill
@@ -133,7 +133,7 @@ impl ScriptListApp {
             .relative() // Needed for absolute positioned actions dialog overlay
             .flex()
             .flex_col()
-            .bg(rgba(bg_with_alpha))
+            .when_some(vibrancy_bg, |d, bg| d.bg(bg)) // VIBRANCY: Only apply bg when vibrancy disabled
             .shadow(box_shadows)
             .w_full()
             .h(content_height)

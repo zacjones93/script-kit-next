@@ -15,6 +15,7 @@ use crate::designs::{get_tokens, DesignVariant};
 use crate::logging;
 use crate::protocol::{generate_semantic_id, Choice};
 use crate::theme;
+use crate::ui_foundation::get_vibrancy_background;
 
 use super::SubmitCallback;
 
@@ -391,7 +392,10 @@ impl Render for ArgPrompt {
         }
 
         // Use helper method for container colors
-        let (main_bg, container_text) = self.get_container_colors(&colors);
+        let (_main_bg, container_text) = self.get_container_colors(&colors);
+
+        // VIBRANCY: Use foundation helper - returns None when vibrancy enabled (let Root handle bg)
+        let bg = get_vibrancy_background(&self.theme);
 
         // Generate semantic ID for the header based on prompt ID
         let header_semantic_id = format!("header:{}", self.id);
@@ -405,7 +409,7 @@ impl Render for ArgPrompt {
             .w_full()
             .h_full() // Fill container height completely
             .min_h(px(0.)) // Allow proper flex behavior
-            .bg(main_bg)
+            .when_some(bg, |d, bg| d.bg(bg)) // Only apply bg when vibrancy disabled
             .text_color(container_text)
             .key_context("arg_prompt")
             .track_focus(&self.focus_handle)

@@ -197,6 +197,11 @@ pub mod login_item;
 // Used for smooth hover effects, toast animations, and other UI transitions
 pub mod transitions;
 
+// UI Foundation - Shared UI patterns for consistent vibrancy and layout
+// Extracts common patterns from main menu (render_script_list.rs) into reusable helpers
+// Used by term.rs, editor.rs, div.rs, form.rs and other prompts
+pub mod ui_foundation;
+
 // File watchers for theme, config, scripts, and system appearance
 pub mod watcher;
 
