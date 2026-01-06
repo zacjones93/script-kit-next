@@ -293,6 +293,19 @@ impl BuiltInEntry {
     pub fn should_exclude_from_frecency(&self, excluded_commands: &[String]) -> bool {
         excluded_commands.iter().any(|cmd| cmd == &self.id)
     }
+
+    /// Get the leaf name for menu bar items (the actual menu item name, not the full path).
+    /// For "Shell → New Tab", returns "New Tab".
+    /// For non-menu bar items, returns the full name.
+    pub fn leaf_name(&self) -> &str {
+        if self.group == BuiltInGroup::MenuBar {
+            // Menu bar names are formatted as "Menu → Submenu → Item"
+            // Extract the last component (the actual menu item name)
+            self.name.rsplit(" → ").next().unwrap_or(&self.name)
+        } else {
+            &self.name
+        }
+    }
 }
 
 /// Get the list of enabled built-in entries based on configuration

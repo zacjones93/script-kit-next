@@ -644,22 +644,61 @@ pub fn fuzzy_search_builtins(entries: &[BuiltInEntry], query: &str) -> Vec<Built
     for entry in entries {
         let mut score = 0i32;
         let mut name_matched = false;
+        let mut leaf_name_matched = false;
 
-        // Score by name match - HIGHEST priority (significantly higher than keywords)
-        // Built-in names are ASCII
+        // For menu bar items, prioritize matching the LEAF name (actual menu item)
+        // e.g., for "Shell → New Tab", matching "New Tab" should score high
+        if entry.group == BuiltInGroup::MenuBar {
+            let leaf_name = entry.leaf_name();
+            if query_is_ascii && leaf_name.is_ascii() {
+                if let Some(pos) = find_ignore_ascii_case(leaf_name, &query_lower) {
+                    // Strong bonus for matching the actual menu item name
+                    // Prefix match on leaf name is the best possible match for menu items
+                    score += if pos == 0 { 300 } else { 200 };
+                    leaf_name_matched = true;
+                    name_matched = true;
+                }
+            }
+            // Fuzzy match on leaf name
+            if !leaf_name_matched {
+                if let Some(nucleo_s) = nucleo.score(leaf_name) {
+                    score += 150 + (nucleo_s / 10) as i32;
+                    leaf_name_matched = true;
+                    name_matched = true;
+                }
+            }
+        }
+
+        // Score by full name match - HIGHEST priority for non-menu-bar items
+        // For menu bar items, this adds to the leaf name score for path matches
         if query_is_ascii && entry.name.is_ascii() {
             if let Some(pos) = find_ignore_ascii_case(&entry.name, &query_lower) {
                 // Bonus for exact substring match at start of name (prefix match is best)
-                score += if pos == 0 { 200 } else { 150 };
+                // Reduced bonus for menu bar items since leaf name match is primary
+                let bonus = if entry.group == BuiltInGroup::MenuBar {
+                    if pos == 0 {
+                        50
+                    } else {
+                        25
+                    }
+                } else if pos == 0 {
+                    200
+                } else {
+                    150
+                };
+                score += bonus;
                 name_matched = true;
             }
         }
 
-        // Fuzzy character matching in name using nucleo (handles Unicode)
-        if let Some(nucleo_s) = nucleo.score(&entry.name) {
-            // Scale nucleo score - name fuzzy matches are worth more than keyword matches
-            score += 100 + (nucleo_s / 15) as i32;
-            name_matched = true;
+        // Fuzzy character matching in full name using nucleo (handles Unicode)
+        // Skip for menu bar items if we already matched the leaf name well
+        if !leaf_name_matched {
+            if let Some(nucleo_s) = nucleo.score(&entry.name) {
+                // Scale nucleo score - name fuzzy matches are worth more than keyword matches
+                score += 100 + (nucleo_s / 15) as i32;
+                name_matched = true;
+            }
         }
 
         // Score by description match - medium priority
@@ -698,12 +737,11 @@ pub fn fuzzy_search_builtins(entries: &[BuiltInEntry], query: &str) -> Vec<Built
             }
         }
 
-        // Apply heavy penalty for menu bar items to prevent them from dominating search results
-        // This ensures scripts, apps, and core built-ins rank MUCH higher than menu bar matches
-        // Menu bar items should only appear if they're very strong matches
-        if entry.group == BuiltInGroup::MenuBar {
-            // Aggressive penalty: divide by 4 AND subtract 50
-            // This means a menu bar item needs ~4x the match quality to compete with scripts
+        // Apply penalty for menu bar items that did NOT match their leaf name well
+        // This prevents random path matches from cluttering results
+        // But if they matched the leaf name, they should compete fairly
+        if entry.group == BuiltInGroup::MenuBar && !leaf_name_matched {
+            // Heavy penalty for menu bar items that only matched on path/keywords
             score = (score / 4).saturating_sub(50);
         }
 
