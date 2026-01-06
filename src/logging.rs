@@ -288,12 +288,29 @@ pub struct LoggingGuard {
     _file_guard: WorkerGuard,
 }
 
-/// Initialize the dual-output logging system.
+/// Static storage for the logging guard to ensure it lives for the entire program.
+/// This prevents the common mistake of calling `logging::init()` without storing the guard.
+static LOGGING_GUARD: OnceLock<LoggingGuard> = OnceLock::new();
+
+/// Initialize the global logging system.
 ///
-/// Returns a guard that MUST be kept alive for the duration of the program.
-/// Dropping the guard will flush remaining logs and close the file.
+/// This is the preferred way to initialize logging - it stores the guard internally
+/// so callers cannot accidentally drop it. Safe to call multiple times (subsequent
+/// calls are no-ops).
 ///
-pub fn init() -> LoggingGuard {
+/// # Example
+/// ```ignore
+/// logging::init();  // Guard stored internally, can't be dropped
+/// // ... rest of program
+/// ```
+pub fn init() {
+    // Only initialize once - subsequent calls are no-ops
+    LOGGING_GUARD.get_or_init(init_internal);
+}
+
+/// Internal initialization that returns a LoggingGuard.
+/// This is used by init() to store the guard in LOGGING_GUARD.
+fn init_internal() -> LoggingGuard {
     // Initialize legacy log buffer for UI display
     let _ = LOG_BUFFER.set(Mutex::new(VecDeque::with_capacity(MAX_LOG_LINES)));
 
@@ -605,13 +622,20 @@ pub fn log_error(category: &str, error: &str, context: Option<&str>) {
 /// Maximum length for logged message payloads
 const MAX_PAYLOAD_LOG_LEN: usize = 200;
 
-/// Truncate a string for logging, adding "..." suffix if truncated
+/// Truncate a string for logging, adding "..." suffix if truncated.
+/// This function is UTF-8 safe - it will never panic on multi-byte characters.
+/// If max_len falls in the middle of a multi-byte character, it backs up to the
+/// nearest valid character boundary.
 pub fn truncate_for_log(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...({})", &s[..max_len], s.len())
+        return s.to_owned();
     }
+    // Find a valid UTF-8 char boundary at or before max_len
+    let mut end = max_len.min(s.len());
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...({})", &s[..end], s.len())
 }
 
 /// Summarize a JSON payload for logging (type + length, truncated preview)
@@ -1636,6 +1660,55 @@ mod tests {
         let result = truncate_for_log(s, 10);
         assert!(result.starts_with("hello worl"));
         assert!(result.contains("...(33)")); // Original length in parens
+    }
+
+    #[test]
+    fn test_truncate_for_log_utf8_emoji() {
+        // Emoji are 4-byte UTF-8 sequences. Truncating mid-codepoint would panic with naive &s[..max_len]
+        let s = "hello 🎉 world";
+        // "hello " is 6 bytes, 🎉 is 4 bytes (positions 6-9), " world" starts at byte 10
+        // If max_len=8, naive slice would land inside the emoji and panic
+        let result = truncate_for_log(s, 8);
+        // Should truncate to a valid char boundary without panic
+        assert!(result.starts_with("hello "));
+        assert!(result.contains(&format!("...({})", s.len())));
+    }
+
+    #[test]
+    fn test_truncate_for_log_utf8_multibyte() {
+        // Test with various multi-byte UTF-8 characters
+        let s = "日本語テスト"; // Each char is 3 bytes = 18 bytes total
+                                // If we truncate at 5 bytes, we'd land mid-character
+        let result = truncate_for_log(s, 5);
+        // Should back up to char boundary (3 bytes = 1 char)
+        assert!(result.starts_with("日"));
+        assert!(result.contains(&format!("...({})", s.len())));
+    }
+
+    #[test]
+    fn test_truncate_for_log_utf8_mixed() {
+        // Mixed ASCII and multi-byte
+        let s = "abc日本語def";
+        // "abc" = 3 bytes, "日本語" = 9 bytes, "def" = 3 bytes
+        // Truncate at 5 would land inside 日
+        let result = truncate_for_log(s, 5);
+        // Should truncate at byte 3 (after "abc")
+        assert!(result.starts_with("abc"));
+        assert!(result.contains(&format!("...({})", s.len())));
+    }
+
+    #[test]
+    fn test_truncate_for_log_empty_string() {
+        let s = "";
+        assert_eq!(truncate_for_log(s, 10), "");
+    }
+
+    #[test]
+    fn test_truncate_for_log_zero_max_len() {
+        let s = "hello";
+        let result = truncate_for_log(s, 0);
+        // Edge case: max_len=0 should return just the suffix
+        assert!(result.contains("...(5)"));
     }
 
     #[test]
