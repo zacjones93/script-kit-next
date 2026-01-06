@@ -287,6 +287,9 @@ pub struct AiApp {
 
     /// Last time we saved bounds (debounce to avoid too-frequent saves)
     last_bounds_save: std::time::Instant,
+
+    /// Theme revision seen - used to detect theme changes and recompute cached values
+    theme_rev_seen: u64,
 }
 
 impl AiApp {
@@ -399,11 +402,24 @@ impl AiApp {
             needs_focus_input: false,
             last_persisted_bounds: None,
             last_bounds_save: std::time::Instant::now(),
+            theme_rev_seen: crate::theme::service::theme_revision(),
         }
     }
 
     /// Debounce interval for bounds persistence (in milliseconds)
     const BOUNDS_DEBOUNCE_MS: u64 = 250;
+
+    /// Update cached theme-derived values if theme revision has changed.
+    ///
+    /// This is called during render to detect theme hot-reloads and recompute
+    /// values like box shadows that are derived from the theme.
+    fn maybe_update_theme_cache(&mut self) {
+        let current_rev = crate::theme::service::theme_revision();
+        if self.theme_rev_seen != current_rev {
+            self.theme_rev_seen = current_rev;
+            self.cached_box_shadows = Self::compute_box_shadows();
+        }
+    }
 
     /// Persist window bounds if they've changed (debounced).
     ///
@@ -1850,6 +1866,9 @@ impl Drop for AiApp {
 
 impl Render for AiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Update cached theme values if theme has changed (hot-reload)
+        self.maybe_update_theme_cache();
+
         // Persist bounds on change (ensures bounds saved even on traffic light close)
         self.maybe_persist_bounds(window);
 
