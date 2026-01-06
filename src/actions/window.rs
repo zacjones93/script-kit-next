@@ -7,6 +7,7 @@
 //! - Auto-closes when app loses focus
 //! - Shares the ActionsDialog entity with the main app for keyboard routing
 
+use crate::panel::HEADER_TOTAL_HEIGHT;
 use crate::platform;
 use crate::theme;
 use gpui::{
@@ -26,6 +27,8 @@ static ACTIONS_WINDOW: OnceLock<Mutex<Option<WindowHandle<Root>>>> = OnceLock::n
 const ACTIONS_WINDOW_WIDTH: f32 = 320.0;
 /// Horizontal margin from main window right edge
 const ACTIONS_MARGIN_X: f32 = 8.0;
+/// Vertical margin from header
+const ACTIONS_MARGIN_Y: f32 = 8.0;
 
 /// ActionsWindow wrapper that renders the shared ActionsDialog entity
 pub struct ActionsWindow {
@@ -98,19 +101,18 @@ pub fn open_actions_window(
 
     // Calculate window position:
     // - X: Right edge of main window, minus actions width, minus margin
-    // - Y: Below the header (using canonical top-left origin coordinates)
+    // - Y: Below the header (HEADER_TOTAL_HEIGHT), plus margin
     //
-    // Canonical coordinates: Y=0 at top, Y increases downward
-    // Main window origin is at top-left of the window
+    // Both get_main_window_bounds() and GPUI's open_window() use canonical
+    // top-left origin coordinates (Y=0 at top, Y increases downward).
     let window_width = px(ACTIONS_WINDOW_WIDTH);
     let window_height = px(dynamic_height);
 
     let window_x = main_window_bounds.origin.x + main_window_bounds.size.width
         - window_width
         - px(ACTIONS_MARGIN_X);
-    // Position popup right below the search input in the header
-    // Using negative offset to compensate for coordinate system differences
-    let window_y = main_window_bounds.origin.y - px(55.0);
+    // Position popup right below the header
+    let window_y = main_window_bounds.origin.y + px(HEADER_TOTAL_HEIGHT) + px(ACTIONS_MARGIN_Y);
 
     let bounds = Bounds {
         origin: Point {

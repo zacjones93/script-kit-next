@@ -593,9 +593,10 @@ impl ActionsDialog {
         &self,
         colors: &crate::designs::DesignColors,
     ) -> (gpui::Rgba, gpui::Rgba, gpui::Rgba) {
-        // Use very low opacity for actions popup to let vibrancy blur show through
-        // This creates the frosted glass effect like Raycast/Spotlight
-        let dialog_alpha: u8 = 0x15; // ~8% opacity - very transparent
+        // Use theme opacity for dialog background to support vibrancy
+        // The theme's opacity.dialog controls how transparent the popup is
+        let opacity = self.theme.get_opacity();
+        let dialog_alpha = (opacity.dialog * 255.0) as u8;
 
         if self.design_variant == DesignVariant::Default {
             (
@@ -603,13 +604,13 @@ impl ActionsDialog {
                     self.theme.colors.background.main,
                     dialog_alpha,
                 )),
-                rgba(hex_with_alpha(self.theme.colors.ui.border, 0x40)),
+                rgba(hex_with_alpha(self.theme.colors.ui.border, 0x80)),
                 rgb(self.theme.colors.text.secondary),
             )
         } else {
             (
                 rgba(hex_with_alpha(colors.background, dialog_alpha)),
-                rgba(hex_with_alpha(colors.border, 0x40)),
+                rgba(hex_with_alpha(colors.border, 0x80)),
                 rgb(colors.text_secondary),
             )
         }
@@ -1092,14 +1093,20 @@ impl Render for ActionsDialog {
         let total_height = items_height + search_box_height + border_height;
 
         // Main overlay popup container
-        // Fixed width, dynamic height based on content, rounded corners, shadow, semi-transparent bg
+        // Fixed width, dynamic height based on content, rounded corners, shadow
         // NOTE: Using visual.radius_lg from design tokens for consistency with child item rounding
+        //
+        // VIBRANCY: When vibrancy is enabled, do NOT apply a background here.
+        // The window's native vibrancy blur provides the frosted glass effect.
+        // Only apply a background when vibrancy is disabled for a solid fallback.
+        let use_vibrancy = self.theme.is_vibrancy_enabled();
+
         div()
             .flex()
             .flex_col()
             .w(px(POPUP_WIDTH))
             .h(px(total_height)) // Use calculated height instead of max_h
-            .bg(main_bg)
+            .when(!use_vibrancy, |d| d.bg(main_bg)) // Only apply bg when vibrancy disabled
             .rounded(px(visual.radius_lg))
             .shadow(Self::create_popup_shadow())
             .border_1()

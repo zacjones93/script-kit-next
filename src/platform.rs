@@ -1108,16 +1108,17 @@ pub fn toggle_blending_mode() -> String {
 // Actions Popup Window Configuration
 // ============================================================================
 
-/// Configure the actions popup window as a non-movable child window.
+/// Configure the actions popup window as a non-movable child window with vibrancy.
 ///
 /// This function configures a popup window with:
 /// - isMovable = false - prevents window dragging
 /// - isMovableByWindowBackground = false - prevents dragging by clicking background
 /// - Same window level as main window (NSFloatingWindowLevel = 3)
 /// - hidesOnDeactivate = true - auto-hides when app loses focus
-/// - hasShadow = false - no macOS window shadow (we use our own subtle shadow)
+/// - hasShadow = true - shadow for depth perception
 /// - Disabled restoration - no position caching
 /// - animationBehavior = NSWindowAnimationBehaviorNone - no animation on close
+/// - VibrantDark appearance + POPOVER material for frosted glass effect
 ///
 /// # Arguments
 /// * `window` - The NSWindow pointer to configure
@@ -1159,9 +1160,43 @@ pub unsafe fn configure_actions_popup_window(window: id) {
     let empty_string: id = msg_send![class!(NSString), string];
     let _: () = msg_send![window, setFrameAutosaveName: empty_string];
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VIBRANCY CONFIGURATION - Match main window settings for consistent blur
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // Set window appearance to VibrantDark for consistent blur rendering
+    let vibrant_dark: id = msg_send![
+        class!(NSAppearance),
+        appearanceNamed: NSAppearanceNameVibrantDark
+    ];
+    if !vibrant_dark.is_null() {
+        let _: () = msg_send![window, setAppearance: vibrant_dark];
+    }
+
+    // Use clearColor for window background to allow maximum blur transparency
+    let clear_color: id = msg_send![class!(NSColor), clearColor];
+    let _: () = msg_send![window, setBackgroundColor: clear_color];
+
+    // Mark window as non-opaque to allow transparency/vibrancy
+    let _: () = msg_send![window, setOpaque: false];
+
+    // Configure NSVisualEffectViews in the window hierarchy
+    let content_view: id = msg_send![window, contentView];
+    if !content_view.is_null() {
+        let mut count = 0;
+        configure_visual_effect_views_recursive(content_view, &mut count);
+        logging::log(
+            "ACTIONS",
+            &format!(
+                "Configured {} NSVisualEffectView(s) in actions popup",
+                count
+            ),
+        );
+    }
+
     logging::log(
         "ACTIONS",
-        "Configured actions popup window (non-movable, no shadow, no animation)",
+        "Configured actions popup window (non-movable, vibrancy, VibrantDark)",
     );
 }
 
