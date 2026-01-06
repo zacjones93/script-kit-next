@@ -1012,63 +1012,18 @@ impl ScriptListApp {
                             }
                         }
                         // Note: "escape" is handled by handle_global_shortcut_with_options above
-                        "backspace" => {
-                            if !filter.is_empty() {
-                                filter.pop();
-                                *selected_index = 0;
-                                this.window_list_scroll_handle
-                                    .scroll_to_item(0, ScrollStrategy::Top);
-                                cx.notify();
-                            }
-                        }
-                        // Number keys for quick window actions - extract window_id to avoid borrow issues
-                        "1" | "2" | "3" | "4" | "m" | "n" | "c" => {
-                            if let Some((_, window_info)) = filtered_windows.get(*selected_index) {
-                                let window_id = window_info.id;
-                                let action = match key_str.as_str() {
-                                    "1" => "tile_left",
-                                    "2" => "tile_right",
-                                    "3" => "tile_top",
-                                    "4" => "tile_bottom",
-                                    "m" => "maximize",
-                                    "n" => "minimize",
-                                    "c" => "close",
-                                    _ => unreachable!(),
-                                };
-                                // Drop the borrow before calling execute_window_action
-                                drop(filtered_windows);
-                                this.execute_window_action(window_id, action, cx);
-                            }
-                        }
-                        _ => {
-                            // Allow all printable characters for window search
-                            if let Some(ref key_char) = event.keystroke.key_char {
-                                if let Some(ch) = key_char.chars().next() {
-                                    if !ch.is_control() {
-                                        filter.push(ch);
-                                        *selected_index = 0;
-                                        this.window_list_scroll_handle
-                                            .scroll_to_item(0, ScrollStrategy::Top);
-                                        cx.notify();
-                                    }
-                                }
-                            }
-                        }
+                        // Text input (backspace, characters) is handled by the shared Input component
+                        // which syncs via handle_filter_input_change()
+                        _ => {}
                     }
                 }
             },
         );
 
-        let input_display = if filter.is_empty() {
-            SharedString::from("Search windows...")
-        } else {
-            SharedString::from(filter.clone())
-        };
-        let input_is_empty = filter.is_empty();
-
         // Pre-compute colors
         let list_colors = ListItemColors::from_design(&design_colors);
         let text_primary = design_colors.text_primary;
+        #[allow(unused_variables)]
         let text_muted = design_colors.text_muted;
         let text_dimmed = design_colors.text_dimmed;
         let ui_border = design_colors.border;
@@ -1170,55 +1125,19 @@ impl ScriptListApp {
                     .flex_row()
                     .items_center()
                     .gap_3()
-                    // Title
+                    // Search input - uses shared gpui_input_state for consistent cursor/selection
                     .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(text_dimmed))
-                            .child("🪟 Windows"),
-                    )
-                    // Search input with blinking cursor
-                    // ALIGNMENT FIX: Uses canonical cursor constants and negative margin for placeholder
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .text_lg()
-                            .text_color(if input_is_empty {
-                                rgb(text_muted)
-                            } else {
-                                rgb(text_primary)
-                            })
-                            .when(input_is_empty, |d| {
-                                d.child(
-                                    div()
-                                        .w(px(CURSOR_WIDTH))
-                                        .h(px(CURSOR_HEIGHT_LG))
-                                        .my(px(CURSOR_MARGIN_Y))
-                                        .mr(px(CURSOR_GAP_X))
-                                        .when(self.cursor_visible, |d| d.bg(rgb(text_primary))),
-                                )
-                            })
-                            .when(input_is_empty, |d| {
-                                d.child(
-                                    div()
-                                        .ml(px(-(CURSOR_WIDTH + CURSOR_GAP_X)))
-                                        .child(input_display.clone()),
-                                )
-                            })
-                            .when(!input_is_empty, |d| d.child(input_display.clone()))
-                            .when(!input_is_empty, |d| {
-                                d.child(
-                                    div()
-                                        .w(px(CURSOR_WIDTH))
-                                        .h(px(CURSOR_HEIGHT_LG))
-                                        .my(px(CURSOR_MARGIN_Y))
-                                        .ml(px(CURSOR_GAP_X))
-                                        .when(self.cursor_visible, |d| d.bg(rgb(text_primary))),
-                                )
-                            }),
+                        div().flex_1().flex().flex_row().items_center().child(
+                            Input::new(&self.gpui_input_state)
+                                .w_full()
+                                .h(px(28.))
+                                .px(px(0.))
+                                .py(px(0.))
+                                .with_size(Size::Size(px(design_typography.font_size_xl)))
+                                .appearance(false)
+                                .bordered(false)
+                                .focus_bordered(false),
+                        ),
                     )
                     .child(
                         div()
@@ -1344,47 +1263,8 @@ impl ScriptListApp {
                         .text_xs()
                         .text_color(rgb(text_muted))
                         .pb(px(spacing.padding_md))
-                        .child("Actions (keyboard shortcuts)"),
+                        .child("Press Enter to focus window"),
                 );
-
-                // Action buttons grid - using text labels with shortcuts
-                let action_items = [
-                    ("1", "← Tile Left Half"),
-                    ("2", "→ Tile Right Half"),
-                    ("3", "↑ Tile Top Half"),
-                    ("4", "↓ Tile Bottom Half"),
-                    ("M", "□ Maximize"),
-                    ("N", "_ Minimize"),
-                    ("⏎", "◉ Focus"),
-                    ("C", "✕ Close"),
-                ];
-
-                for (key, label) in action_items {
-                    panel = panel.child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_2()
-                            .py(px(spacing.padding_xs))
-                            // Key badge
-                            .child(
-                                div()
-                                    .w(px(24.0))
-                                    .h(px(20.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(px(visual.radius_sm))
-                                    .bg(rgba((colors.background_tertiary << 8) | 0x80))
-                                    .text_xs()
-                                    .text_color(rgb(text_secondary))
-                                    .child(key),
-                            )
-                            // Label
-                            .child(div().text_sm().text_color(rgb(text_primary)).child(label)),
-                    );
-                }
             }
             None => {
                 // Empty state
@@ -1405,6 +1285,8 @@ impl ScriptListApp {
     }
 
     /// Execute a window action (tile, maximize, minimize, close)
+    /// NOTE: Currently unused - kept for future when we add action buttons to the actions panel
+    #[allow(dead_code)]
     fn execute_window_action(&mut self, window_id: u32, action: &str, cx: &mut Context<Self>) {
         logging::log(
             "EXEC",
