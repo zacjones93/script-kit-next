@@ -34,6 +34,9 @@ pub mod prompt_header;
 pub mod scrollbar;
 pub mod text_input;
 pub mod toast;
+pub mod unified_list_item;
+#[cfg(test)]
+mod unified_list_item_tests;
 
 // Re-export commonly used types
 pub use button::{Button, ButtonColors, ButtonVariant};
@@ -54,3 +57,8 @@ pub use prompt_header::{PromptHeader, PromptHeaderColors, PromptHeaderConfig};
 pub use text_input::{TextInputState, TextSelection};
 #[allow(unused_imports)]
 pub use toast::{Toast, ToastAction, ToastColors, ToastVariant};
+#[allow(unused_imports)]
+pub use unified_list_item::{
+    Density, ItemState, LeadingContent, ListItemLayout, SectionHeader, TextContent,
+    TrailingContent, UnifiedListItem, UnifiedListItemColors, SECTION_HEADER_HEIGHT,
+};
