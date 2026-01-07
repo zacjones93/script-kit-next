@@ -111,7 +111,20 @@ pub fn get_script_context_actions(script: &ScriptInfo) -> Vec<Action> {
         .with_shortcut("↵"),
     );
 
-    // Script-only actions (not available for built-ins)
+    // Configure shortcut - available for ALL items
+    // Scripts: opens the script file to edit // Shortcut: comment
+    // Non-scripts: opens config.ts to add shortcut in commands section
+    actions.push(
+        Action::new(
+            "configure_shortcut",
+            "Configure Keyboard Shortcut",
+            Some("Set or change the keyboard shortcut".to_string()),
+            ActionCategory::ScriptContext,
+        )
+        .with_shortcut("⌘⇧K"),
+    );
+
+    // Script-only actions (not available for built-ins, apps, windows)
     if script.is_script {
         actions.push(
             Action::new(
@@ -121,16 +134,6 @@ pub fn get_script_context_actions(script: &ScriptInfo) -> Vec<Action> {
                 ActionCategory::ScriptContext,
             )
             .with_shortcut("⌘E"),
-        );
-
-        actions.push(
-            Action::new(
-                "configure_shortcut",
-                "Configure Keyboard Shortcut",
-                Some("Set or change the script's hotkey".to_string()),
-                ActionCategory::ScriptContext,
-            )
-            .with_shortcut("⌘⇧K"),
         );
 
         actions.push(
@@ -215,16 +218,16 @@ mod tests {
         let builtin = ScriptInfo::builtin("Clipboard History");
         let actions = get_script_context_actions(&builtin);
 
-        // Should have run and copy_deeplink
+        // Should have run, copy_deeplink, and configure_shortcut (opens config.ts)
         assert!(actions.iter().any(|a| a.id == "run_script"));
         assert!(actions.iter().any(|a| a.id == "copy_deeplink"));
+        assert!(actions.iter().any(|a| a.id == "configure_shortcut"));
 
         // Should NOT have script-only actions
         assert!(!actions.iter().any(|a| a.id == "edit_script"));
         assert!(!actions.iter().any(|a| a.id == "view_logs"));
         assert!(!actions.iter().any(|a| a.id == "reveal_in_finder"));
         assert!(!actions.iter().any(|a| a.id == "copy_path"));
-        assert!(!actions.iter().any(|a| a.id == "configure_shortcut"));
     }
 
     #[test]

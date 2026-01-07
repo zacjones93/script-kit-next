@@ -189,6 +189,64 @@ impl ScriptListApp {
                     self.last_output = Some(SharedString::from("No item selected"));
                 }
             }
+            "configure_shortcut" => {
+                logging::log("UI", "Configure shortcut action");
+                if let Some(result) = self.get_selected_result() {
+                    match result {
+                        // Scripts: open the script file to edit // Shortcut: comment
+                        scripts::SearchResult::Script(m) => {
+                            self.edit_script(&m.script.path);
+                            self.hide_main_and_reset(cx);
+                        }
+                        scripts::SearchResult::Agent(m) => {
+                            self.edit_script(&m.agent.path);
+                            self.hide_main_and_reset(cx);
+                        }
+                        // Non-scripts: open config.ts with the command ID as a hint
+                        scripts::SearchResult::Scriptlet(m) => {
+                            let command_id = format!("scriptlet/{}", m.scriptlet.name);
+                            self.open_config_for_shortcut(&command_id);
+                            self.hide_main_and_reset(cx);
+                        }
+                        scripts::SearchResult::BuiltIn(m) => {
+                            let command_id = format!("builtin/{}", m.entry.id);
+                            self.open_config_for_shortcut(&command_id);
+                            self.hide_main_and_reset(cx);
+                        }
+                        scripts::SearchResult::App(m) => {
+                            // Use bundle ID if available, otherwise use name
+                            let command_id = if let Some(ref bundle_id) = m.app.bundle_id {
+                                format!("app/{}", bundle_id)
+                            } else {
+                                format!("app/{}", m.app.name.to_lowercase().replace(' ', "-"))
+                            };
+                            self.open_config_for_shortcut(&command_id);
+                            self.hide_main_and_reset(cx);
+                        }
+                        scripts::SearchResult::Window(_) => {
+                            self.last_output = Some(SharedString::from(
+                                "Window shortcuts not supported - windows are transient",
+                            ));
+                        }
+                        scripts::SearchResult::Fallback(m) => {
+                            match &m.fallback {
+                                crate::fallbacks::collector::FallbackItem::Builtin(_) => {
+                                    let command_id = format!("fallback/{}", m.fallback.name());
+                                    self.open_config_for_shortcut(&command_id);
+                                    self.hide_main_and_reset(cx);
+                                }
+                                crate::fallbacks::collector::FallbackItem::Script(s) => {
+                                    // Script-based fallback - open the script
+                                    self.edit_script(&s.script.path);
+                                    self.hide_main_and_reset(cx);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    self.last_output = Some(SharedString::from("No item selected"));
+                }
+            }
             "edit_script" => {
                 logging::log("UI", "Edit script action");
                 if let Some(result) = self.get_selected_result() {

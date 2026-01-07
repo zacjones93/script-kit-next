@@ -2212,6 +2212,139 @@ impl ScriptListApp {
         });
     }
 
+    /// Open config.ts for configuring a keyboard shortcut
+    /// Creates the file with documentation if it doesn't exist
+    fn open_config_for_shortcut(&mut self, command_id: &str) {
+        let config_path = shellexpand::tilde("~/.scriptkit/config.ts").to_string();
+        let editor = self.config.get_editor();
+
+        logging::log(
+            "UI",
+            &format!(
+                "Opening config.ts for shortcut configuration: {} (command: {})",
+                config_path, command_id
+            ),
+        );
+
+        // Ensure config.ts exists with documentation
+        let config_path_buf = std::path::PathBuf::from(&config_path);
+        if !config_path_buf.exists() {
+            if let Err(e) = Self::create_config_template(&config_path_buf) {
+                logging::log("ERROR", &format!("Failed to create config.ts: {}", e));
+            }
+        }
+
+        // Copy command_id to clipboard as a hint
+        #[cfg(target_os = "macos")]
+        {
+            if let Err(e) = self.pbcopy(command_id) {
+                logging::log("ERROR", &format!("Failed to copy command ID: {}", e));
+            } else {
+                self.last_output = Some(gpui::SharedString::from(format!(
+                    "Copied '{}' to clipboard - paste in config.ts commands section",
+                    command_id
+                )));
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            use arboard::Clipboard;
+            if let Ok(mut clipboard) = Clipboard::new() {
+                if clipboard.set_text(command_id).is_ok() {
+                    self.last_output = Some(gpui::SharedString::from(format!(
+                        "Copied '{}' to clipboard - paste in config.ts commands section",
+                        command_id
+                    )));
+                }
+            }
+        }
+
+        let config_path_clone = config_path.clone();
+        std::thread::spawn(move || {
+            use std::process::Command;
+            match Command::new(&editor).arg(&config_path_clone).spawn() {
+                Ok(_) => logging::log("UI", &format!("Opened config.ts in {}", editor)),
+                Err(e) => logging::log("ERROR", &format!("Failed to open config.ts: {}", e)),
+            }
+        });
+    }
+
+    /// Create config.ts template with keyboard shortcut documentation
+    fn create_config_template(path: &std::path::Path) -> std::io::Result<()> {
+        use std::io::Write;
+        let template = r#"// Script Kit Configuration
+// https://scriptkit.com/docs/config
+
+import type { Config } from "@scriptkit/sdk";
+
+export default {
+  // ============================================
+  // MAIN HOTKEY
+  // ============================================
+  // The keyboard shortcut to open Script Kit
+  hotkey: {
+    modifiers: ["meta"],
+    key: "Semicolon",
+  },
+
+  // ============================================
+  // KEYBOARD SHORTCUTS
+  // ============================================
+  // Configure shortcuts for any command (scripts, built-ins, apps, snippets)
+  //
+  // Command ID formats:
+  //   - "script/my-script"           - User scripts (by filename without extension)
+  //   - "builtin/clipboard-history"  - Built-in features
+  //   - "app/com.apple.Safari"       - Apps (by bundle ID)
+  //   - "scriptlet/my-snippet"       - Scriptlets/snippets
+  //
+  // Modifier keys: "meta" (⌘), "ctrl", "alt" (⌥), "shift"
+  // Key names: "KeyA"-"KeyZ", "Digit0"-"Digit9", "Space", "Enter", etc.
+  //
+  // Example:
+  //   commands: {
+  //     "builtin/clipboard-history": {
+  //       shortcut: { modifiers: ["meta", "shift"], key: "KeyV" }
+  //     },
+  //     "app/com.apple.Safari": {
+  //       shortcut: { modifiers: ["meta", "alt"], key: "KeyS" }
+  //     }
+  //   }
+  commands: {
+    // Add your shortcuts here
+  },
+
+  // ============================================
+  // WINDOW HOTKEYS
+  // ============================================
+  // notesHotkey: { modifiers: ["meta", "shift"], key: "KeyN" },
+  // aiHotkey: { modifiers: ["meta", "shift"], key: "Space" },
+
+  // ============================================
+  // APPEARANCE
+  // ============================================
+  // editorFontSize: 14,
+  // terminalFontSize: 14,
+  // uiScale: 1.0,
+
+  // ============================================
+  // PATHS
+  // ============================================
+  // bun_path: "/opt/homebrew/bin/bun",
+  // editor: "code",
+} satisfies Config;
+"#;
+
+        let mut file = std::fs::File::create(path)?;
+        file.write_all(template.as_bytes())?;
+        logging::log(
+            "UI",
+            &format!("Created config.ts template: {}", path.display()),
+        );
+        Ok(())
+    }
+
     /// Execute a path action from the actions dialog
     /// Handles actions like copy_path, open_in_finder, open_in_editor, etc.
     fn execute_path_action(
