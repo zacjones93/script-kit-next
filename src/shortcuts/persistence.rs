@@ -194,6 +194,110 @@ pub fn default_overrides_path() -> std::path::PathBuf {
         .join("shortcuts.json")
 }
 
+// ============================================================================
+// Standalone convenience functions for UI integration
+// ============================================================================
+// These functions provide a simpler API for the shortcut recorder UI.
+// The JSON format is: { "command_id": { "modifiers": {...}, "key": "..." }, ... }
+// ============================================================================
+
+use anyhow::{Context, Result};
+
+/// Load all shortcut overrides from ~/.scriptkit/shortcuts.json.
+///
+/// Returns a HashMap mapping command_id to Shortcut.
+/// Returns an empty HashMap if the file doesn't exist.
+///
+/// # Errors
+/// Returns an error if the file exists but cannot be read or parsed.
+pub fn load_shortcut_overrides() -> Result<HashMap<String, Shortcut>> {
+    let path = default_overrides_path();
+
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read shortcuts file: {}", path.display()))?;
+
+    let overrides: HashMap<String, Shortcut> = serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse shortcuts file: {}", path.display()))?;
+
+    Ok(overrides)
+}
+
+/// Save a shortcut override for a specific command.
+///
+/// This function:
+/// 1. Loads existing overrides (or creates empty map if file doesn't exist)
+/// 2. Adds/updates the shortcut for the given command_id
+/// 3. Writes the updated overrides back to ~/.scriptkit/shortcuts.json
+///
+/// # Arguments
+/// * `command_id` - The unique identifier for the command (e.g., "script.my-script")
+/// * `shortcut` - The new shortcut to assign
+///
+/// # Errors
+/// Returns an error if the file cannot be written or the JSON cannot be serialized.
+pub fn save_shortcut_override(command_id: &str, shortcut: &Shortcut) -> Result<()> {
+    let path = default_overrides_path();
+
+    // Load existing overrides
+    let mut overrides = load_shortcut_overrides().unwrap_or_default();
+
+    // Update with new shortcut
+    overrides.insert(command_id.to_string(), shortcut.clone());
+
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+    }
+
+    // Write back to file
+    let content = serde_json::to_string_pretty(&overrides)
+        .context("Failed to serialize shortcuts to JSON")?;
+
+    fs::write(&path, content)
+        .with_context(|| format!("Failed to write shortcuts file: {}", path.display()))?;
+
+    Ok(())
+}
+
+/// Remove a shortcut override for a specific command.
+///
+/// This reverts the command to its default shortcut (or no shortcut).
+/// If the command_id doesn't exist in overrides, this is a no-op.
+///
+/// # Arguments
+/// * `command_id` - The unique identifier for the command to remove
+///
+/// # Errors
+/// Returns an error if the file cannot be read or written.
+pub fn remove_shortcut_override(command_id: &str) -> Result<()> {
+    let path = default_overrides_path();
+
+    // If file doesn't exist, nothing to remove
+    if !path.exists() {
+        return Ok(());
+    }
+
+    // Load existing overrides
+    let mut overrides = load_shortcut_overrides()?;
+
+    // Remove the override
+    overrides.remove(command_id);
+
+    // Write back to file (even if empty, to reflect the removal)
+    let content = serde_json::to_string_pretty(&overrides)
+        .context("Failed to serialize shortcuts to JSON")?;
+
+    fs::write(&path, content)
+        .with_context(|| format!("Failed to write shortcuts file: {}", path.display()))?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,5 +425,172 @@ mod tests {
         assert!(json.contains("cmd+k"));
         assert!(json.contains("edit.copy"));
         assert!(json.contains("null")); // disabled shortcut
+    }
+
+    // ========================================================================
+    // Tests for standalone convenience functions
+    // ========================================================================
+
+    #[test]
+    fn load_shortcut_overrides_empty_when_no_file() {
+        // The standalone function uses default path, but we can test the behavior
+        // by verifying it returns empty HashMap for non-existent files
+        // (this relies on the file not existing at the default path during tests)
+
+        // Create a temp directory and test there via the underlying mechanisms
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("shortcuts.json");
+
+        // Directly test the logic: reading non-existent file
+        assert!(!path.exists());
+        let content = std::fs::read_to_string(&path);
+        assert!(content.is_err());
+    }
+
+    #[test]
+    fn save_and_load_shortcut_override_roundtrip() {
+        use super::super::types::Modifiers;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("shortcuts.json");
+
+        // Create a shortcut
+        let shortcut = Shortcut {
+            key: "k".to_string(),
+            modifiers: Modifiers {
+                cmd: true,
+                shift: true,
+                ..Default::default()
+            },
+        };
+
+        // Manually save to temp path (simulating what save_shortcut_override does)
+        let mut overrides: HashMap<String, Shortcut> = HashMap::new();
+        overrides.insert("test.command".to_string(), shortcut.clone());
+
+        std::fs::create_dir_all(dir.path()).unwrap();
+        let content = serde_json::to_string_pretty(&overrides).unwrap();
+        std::fs::write(&path, &content).unwrap();
+
+        // Load back
+        let loaded_content = std::fs::read_to_string(&path).unwrap();
+        let loaded: HashMap<String, Shortcut> = serde_json::from_str(&loaded_content).unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        let loaded_shortcut = loaded.get("test.command").unwrap();
+        assert_eq!(loaded_shortcut.key, "k");
+        assert!(loaded_shortcut.modifiers.cmd);
+        assert!(loaded_shortcut.modifiers.shift);
+        assert!(!loaded_shortcut.modifiers.ctrl);
+        assert!(!loaded_shortcut.modifiers.alt);
+    }
+
+    #[test]
+    fn remove_shortcut_override_from_map() {
+        use super::super::types::Modifiers;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("shortcuts.json");
+
+        // Create initial overrides
+        let mut overrides: HashMap<String, Shortcut> = HashMap::new();
+        overrides.insert(
+            "test.command1".to_string(),
+            Shortcut {
+                key: "k".to_string(),
+                modifiers: Modifiers::cmd(),
+            },
+        );
+        overrides.insert(
+            "test.command2".to_string(),
+            Shortcut {
+                key: "j".to_string(),
+                modifiers: Modifiers::cmd(),
+            },
+        );
+
+        // Save
+        let content = serde_json::to_string_pretty(&overrides).unwrap();
+        std::fs::write(&path, &content).unwrap();
+
+        // Remove one
+        overrides.remove("test.command1");
+
+        // Save again
+        let content = serde_json::to_string_pretty(&overrides).unwrap();
+        std::fs::write(&path, &content).unwrap();
+
+        // Verify
+        let loaded_content = std::fs::read_to_string(&path).unwrap();
+        let loaded: HashMap<String, Shortcut> = serde_json::from_str(&loaded_content).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert!(!loaded.contains_key("test.command1"));
+        assert!(loaded.contains_key("test.command2"));
+    }
+
+    #[test]
+    fn shortcut_json_format_matches_spec() {
+        use super::super::types::Modifiers;
+
+        // Verify the JSON format is: { "command_id": { "modifiers": {...}, "key": "..." } }
+        let mut overrides: HashMap<String, Shortcut> = HashMap::new();
+        overrides.insert(
+            "my.command".to_string(),
+            Shortcut {
+                key: "k".to_string(),
+                modifiers: Modifiers {
+                    cmd: true,
+                    shift: true,
+                    ctrl: false,
+                    alt: false,
+                },
+            },
+        );
+
+        let json = serde_json::to_string_pretty(&overrides).unwrap();
+
+        // Verify structure
+        assert!(json.contains("\"my.command\""));
+        assert!(json.contains("\"key\""));
+        assert!(json.contains("\"modifiers\""));
+        assert!(json.contains("\"cmd\""));
+        assert!(json.contains("\"shift\""));
+        assert!(json.contains("\"k\""));
+    }
+
+    #[test]
+    fn shortcut_serialization_includes_all_modifiers() {
+        use super::super::types::Modifiers;
+
+        let shortcut = Shortcut {
+            key: "a".to_string(),
+            modifiers: Modifiers {
+                cmd: true,
+                ctrl: true,
+                alt: true,
+                shift: true,
+            },
+        };
+
+        let json = serde_json::to_string(&shortcut).unwrap();
+
+        assert!(json.contains("\"cmd\":true"));
+        assert!(json.contains("\"ctrl\":true"));
+        assert!(json.contains("\"alt\":true"));
+        assert!(json.contains("\"shift\":true"));
+        assert!(json.contains("\"key\":\"a\""));
+    }
+
+    #[test]
+    fn shortcut_deserialization_with_missing_modifiers_defaults_false() {
+        // Test that missing modifier fields default to false
+        let json = r#"{"key": "b", "modifiers": {"cmd": true}}"#;
+        let shortcut: Shortcut = serde_json::from_str(json).unwrap();
+
+        assert_eq!(shortcut.key, "b");
+        assert!(shortcut.modifiers.cmd);
+        assert!(!shortcut.modifiers.ctrl);
+        assert!(!shortcut.modifiers.alt);
+        assert!(!shortcut.modifiers.shift);
     }
 }

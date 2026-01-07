@@ -130,22 +130,17 @@ impl Story for ArgPromptStory {
             .child(story_divider())
             .child(story_section("Usage").child(code_block(
                 r#"
-use crate::prompts::ArgPrompt;
-use crate::protocol::Choice;
+// ArgPrompt is rendered inline via AppView::ArgPrompt in main.rs
+// and rendered by render_prompts/arg.rs
 
-let choices = vec![
-    Choice::new("apple", "Apple"),
-    Choice::new("banana", "Banana"),
-];
+// In SDK scripts:
+const choice = await arg("Select a fruit", ["Apple", "Banana", "Cherry"]);
 
-let prompt = ArgPrompt::new(
-    "fruit-picker".to_string(),
-    "Select a fruit...".to_string(),
-    choices,
-    focus_handle,
-    on_submit,
-    theme,
-);
+// Or with Choice objects:
+const choice = await arg("Select a fruit", [
+    { name: "Apple", value: "apple" },
+    { name: "Banana", value: "banana" },
+]);
 "#,
             )))
             .into_any_element()

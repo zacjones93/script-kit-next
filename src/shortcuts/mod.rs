@@ -63,4 +63,7 @@ pub use hotkey_compat::{keystroke_to_shortcut, normalize_shortcut, parse_shortcu
 
 // Re-export persistence types
 #[allow(unused_imports)]
-pub use persistence::{default_overrides_path, PersistenceError, ShortcutOverrides};
+pub use persistence::{
+    default_overrides_path, load_shortcut_overrides, remove_shortcut_override,
+    save_shortcut_override, PersistenceError, ShortcutOverrides,
+};

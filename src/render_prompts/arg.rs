@@ -217,6 +217,13 @@ impl ScriptListApp {
                 // Delegate all other keys to TextInputState for editing, selection, clipboard
                 let old_text = this.arg_input.text().to_string();
 
+                // PRESERVE SELECTION: Capture the original index of the currently selected item
+                // BEFORE handle_key changes the text (which changes the filtered results)
+                let prev_original_idx = this
+                    .filtered_arg_choices()
+                    .get(this.arg_selected_index)
+                    .map(|(orig_idx, _)| *orig_idx);
+
                 let handled = this.arg_input.handle_key(
                     &key_lower,
                     key_char,
@@ -227,26 +234,46 @@ impl ScriptListApp {
                 );
 
                 if handled {
-                    // If text changed (not just cursor move), reset selection and update
+                    // If text changed (not just cursor move), update selection and resize
                     if this.arg_input.text() != old_text {
-                        this.arg_selected_index = 0;
+                        // Compute the new filtered list (based on new text)
+                        // Extract the data we need to avoid borrow conflicts
+                        let (new_selected_idx, filtered_len, has_choices) = {
+                            let filtered = this.filtered_arg_choices();
+
+                            // Try to find the previously selected item in the new filtered list
+                            let new_idx = if let Some(prev_idx) = prev_original_idx {
+                                filtered.iter()
+                                    .position(|(orig_idx, _)| *orig_idx == prev_idx)
+                                    .unwrap_or(0)
+                            } else {
+                                0
+                            };
+
+                            // Check if there are any choices at all
+                            let has_choices = if let AppView::ArgPrompt { choices, .. } = &this.current_view {
+                                !choices.is_empty()
+                            } else {
+                                false
+                            };
+
+                            (new_idx, filtered.len(), has_choices)
+                        };
+
+                        // Now update selection (borrow is dropped)
+                        this.arg_selected_index = new_selected_idx;
+
                         // DEFERRED RESIZE: Avoid RefCell borrow error by deferring window resize
                         // to next frame. The native macOS setFrame:display:animate: call triggers
                         // callbacks that try to borrow the RefCell while GPUI still holds it.
-                        let filtered = this.filtered_arg_choices();
-                        let (view_type, item_count) = if filtered.is_empty() {
-                            // Check if there are any choices at all
-                            if let AppView::ArgPrompt { choices, .. } = &this.current_view {
-                                if choices.is_empty() {
-                                    (ViewType::ArgPromptNoChoices, 0)
-                                } else {
-                                    (ViewType::ArgPromptWithChoices, 0)
-                                }
+                        let (view_type, item_count) = if filtered_len == 0 {
+                            if has_choices {
+                                (ViewType::ArgPromptWithChoices, 0)
                             } else {
                                 (ViewType::ArgPromptNoChoices, 0)
                             }
                         } else {
-                            (ViewType::ArgPromptWithChoices, filtered.len())
+                            (ViewType::ArgPromptWithChoices, filtered_len)
                         };
                         // Use window_ops for coalesced resize (avoids Timer::after pattern)
                         let target_height =

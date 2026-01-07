@@ -121,6 +121,15 @@ pub enum ExternalCommand {
     },
     /// Hide the debug grid overlay
     HideGrid,
+    /// Show the shortcut recorder modal (for testing)
+    /// command_id: ID of the command (e.g., "test/my-command")
+    /// command_name: Display name (e.g., "My Command")
+    ShowShortcutRecorder {
+        #[serde(rename = "commandId")]
+        command_id: String,
+        #[serde(rename = "commandName")]
+        command_name: String,
+    },
     /// Execute a fallback action (e.g., Search Google, Copy to Clipboard)
     /// This is triggered when a fallback item is selected from the UI
     ExecuteFallback {

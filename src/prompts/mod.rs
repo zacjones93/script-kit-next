@@ -5,7 +5,6 @@
 //!
 //! # Module Structure
 //! - `base`: PromptBase - Shared base infrastructure (fields, DesignContext, macros)
-//! - `arg`: ArgPrompt - Selectable list with search/filtering
 //! - `div`: DivPrompt - HTML content display
 //! - `path`: PathPrompt - File/folder picker (skeleton)
 //! - `env`: EnvPrompt - Environment variable/secrets (skeleton)
@@ -15,7 +14,6 @@
 
 #![allow(dead_code)]
 
-mod arg;
 pub mod base;
 pub mod div;
 mod drop;
@@ -28,7 +26,7 @@ mod template;
 // When integrating:
 // 1. Create Entity<PromptType> in main.rs
 // 2. Switch from inline rendering to entity-based rendering
-// pub use arg::ArgPrompt;
+// Note: ArgPrompt is implemented inline in render_prompts/arg.rs, not as a standalone component
 
 // Base infrastructure for prompts - will be used as prompts adopt PromptBase
 #[allow(unused_imports)]

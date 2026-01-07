@@ -14,6 +14,7 @@
 //! - [`PromptHeader`] - Header component with search input, buttons, and logo
 //! - [`PromptFooter`] - Footer component with logo, primary/secondary action buttons
 //! - [`PromptContainer`] - Container component for consistent prompt window layout
+//! - [`ShortcutRecorder`] - Modal for recording keyboard shortcuts with visual feedback
 //!
 //!
 //! # Design Patterns
@@ -32,6 +33,7 @@ pub mod prompt_container;
 pub mod prompt_footer;
 pub mod prompt_header;
 pub mod scrollbar;
+pub mod shortcut_recorder;
 pub mod text_input;
 pub mod toast;
 pub mod unified_list_item;
@@ -53,6 +55,10 @@ pub use prompt_container::{PromptContainer, PromptContainerColors, PromptContain
 pub use prompt_footer::{PromptFooter, PromptFooterColors, PromptFooterConfig};
 #[allow(unused_imports)]
 pub use prompt_header::{PromptHeader, PromptHeaderColors, PromptHeaderConfig};
+#[allow(unused_imports)]
+pub use shortcut_recorder::{
+    RecordedShortcut, ShortcutConflict, ShortcutRecorder, ShortcutRecorderColors,
+};
 #[allow(unused_imports)]
 pub use text_input::{TextInputState, TextSelection};
 #[allow(unused_imports)]

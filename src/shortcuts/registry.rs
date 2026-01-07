@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::context::ShortcutContext;
-use super::types::Shortcut;
+use super::types::{ConflictInfo, Shortcut};
 
 /// Source of a shortcut binding.
 ///
@@ -564,6 +564,156 @@ impl ShortcutRegistry {
         }
 
         conflicts
+    }
+
+    /// Find a conflict for a proposed shortcut.
+    ///
+    /// This is the primary API for the ShortcutRecorder UI. It checks if the given
+    /// shortcut is already registered (either as a default or user override) and
+    /// returns conflict information suitable for displaying to the user.
+    ///
+    /// # Arguments
+    /// * `shortcut` - The shortcut to check for conflicts
+    ///
+    /// # Returns
+    /// * `Some(ConflictInfo)` if the shortcut conflicts with an existing binding
+    /// * `None` if the shortcut is available
+    ///
+    /// # Example
+    /// ```ignore
+    /// let shortcut = Shortcut::parse("cmd+k").unwrap();
+    /// if let Some(conflict) = registry.find_conflict(&shortcut) {
+    ///     println!("Conflict with: {} ({})", conflict.command_name, conflict.command_type);
+    /// }
+    /// ```
+    pub fn find_conflict(&self, shortcut: &Shortcut) -> Option<ConflictInfo> {
+        let canonical = shortcut.to_canonical_string();
+
+        // Check OS reserved shortcuts first
+        let os_reserved = Self::get_os_reserved_shortcuts();
+        if os_reserved.contains(&canonical.as_str()) {
+            return Some(ConflictInfo::system());
+        }
+
+        // Check all registered bindings (both defaults and user overrides)
+        for binding in &self.bindings {
+            if self.disabled.contains(&binding.id) {
+                continue;
+            }
+
+            // Get the effective shortcut (user override or default)
+            let effective = self
+                .user_overrides
+                .get(&binding.id)
+                .cloned()
+                .unwrap_or_else(|| Some(binding.default_shortcut.clone()));
+
+            if let Some(existing_shortcut) = effective {
+                if existing_shortcut.to_canonical_string() == canonical {
+                    // Found a conflict
+                    let command_type = match binding.source {
+                        BindingSource::Builtin => "builtin",
+                        BindingSource::Script => "script",
+                    };
+
+                    return Some(ConflictInfo {
+                        conflicting_command_id: binding.id.clone(),
+                        command_name: binding.name.clone(),
+                        command_type: command_type.to_string(),
+                    });
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Find a conflict for a shortcut, excluding a specific command ID.
+    ///
+    /// This is useful when editing an existing shortcut - you want to check
+    /// for conflicts but not report a conflict with the command being edited.
+    ///
+    /// # Arguments
+    /// * `shortcut` - The shortcut to check for conflicts
+    /// * `exclude_id` - The command ID to exclude from conflict checking
+    ///
+    /// # Returns
+    /// * `Some(ConflictInfo)` if the shortcut conflicts with another binding
+    /// * `None` if the shortcut is available (or only conflicts with excluded ID)
+    pub fn find_conflict_excluding(
+        &self,
+        shortcut: &Shortcut,
+        exclude_id: &str,
+    ) -> Option<ConflictInfo> {
+        let canonical = shortcut.to_canonical_string();
+
+        // Check OS reserved shortcuts first
+        let os_reserved = Self::get_os_reserved_shortcuts();
+        if os_reserved.contains(&canonical.as_str()) {
+            return Some(ConflictInfo::system());
+        }
+
+        // Check all registered bindings (both defaults and user overrides)
+        for binding in &self.bindings {
+            // Skip the excluded binding
+            if binding.id == exclude_id {
+                continue;
+            }
+            if self.disabled.contains(&binding.id) {
+                continue;
+            }
+
+            // Get the effective shortcut (user override or default)
+            let effective = self
+                .user_overrides
+                .get(&binding.id)
+                .cloned()
+                .unwrap_or_else(|| Some(binding.default_shortcut.clone()));
+
+            if let Some(existing_shortcut) = effective {
+                if existing_shortcut.to_canonical_string() == canonical {
+                    // Found a conflict
+                    let command_type = match binding.source {
+                        BindingSource::Builtin => "builtin",
+                        BindingSource::Script => "script",
+                    };
+
+                    return Some(ConflictInfo {
+                        conflicting_command_id: binding.id.clone(),
+                        command_name: binding.name.clone(),
+                        command_type: command_type.to_string(),
+                    });
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Get the human-readable name for a command ID.
+    ///
+    /// # Arguments
+    /// * `id` - The command ID to look up
+    ///
+    /// # Returns
+    /// * `Some(&str)` with the command name if found
+    /// * `None` if the command ID is not registered
+    pub fn get_command_name(&self, id: &str) -> Option<&str> {
+        self.get(id).map(|binding| binding.name.as_str())
+    }
+
+    /// Get full binding info for a command ID, useful for UI display.
+    ///
+    /// Returns the binding along with its effective shortcut (considering overrides).
+    pub fn get_binding_info(&self, id: &str) -> Option<(&ShortcutBinding, Option<Shortcut>)> {
+        self.get(id).map(|binding| {
+            let effective = self
+                .user_overrides
+                .get(&binding.id)
+                .cloned()
+                .unwrap_or_else(|| Some(binding.default_shortcut.clone()));
+            (binding, effective)
+        })
     }
 }
 

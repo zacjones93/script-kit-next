@@ -71,7 +71,7 @@ fn default_preview_opacity() -> f32 {
 }
 
 fn default_dialog_opacity() -> f32 {
-    0.35 // Low opacity - separate window vibrancy provides the blur to obscure text
+    0.15 // Very low opacity - let vibrancy blur show through more
 }
 
 fn default_input_opacity() -> f32 {
@@ -131,13 +131,13 @@ impl Default for BackgroundOpacity {
             selected: 0.15,         // Selected list item highlight
             hover: 0.08,            // Hovered list item highlight
             preview: 0.0,           // Preview panel (0 = fully transparent)
-            dialog: 0.35,           // Dialogs/popups - low opacity, window vibrancy blurs
-            input: 0.30,            // Input fields
-            panel: 0.20,            // Panels/containers
-            input_inactive: 0.25,   // Input fields when empty/inactive
-            input_active: 0.50,     // Input fields when has text/active
+            dialog: 0.15, // Dialogs/popups - very low opacity, let vibrancy blur show through
+            input: 0.30,  // Input fields
+            panel: 0.20,  // Panels/containers
+            input_inactive: 0.25, // Input fields when empty/inactive
+            input_active: 0.50, // Input fields when has text/active
             border_inactive: 0.125, // Borders when inactive
-            border_active: 0.25,    // Borders when active
+            border_active: 0.25, // Borders when active
         }
     }
 }

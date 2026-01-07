@@ -10,6 +10,7 @@
 // by the context stack (task 2) and registry (task 3).
 #![allow(dead_code)]
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use thiserror::Error;
 
@@ -31,11 +32,15 @@ pub enum ShortcutParseError {
 /// Note on `cmd` (platform accelerator):
 /// - On macOS: Command (⌘)
 /// - On Windows/Linux: Ctrl
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Modifiers {
+    #[serde(default)]
     pub cmd: bool,
+    #[serde(default)]
     pub ctrl: bool,
+    #[serde(default)]
     pub alt: bool,
+    #[serde(default)]
     pub shift: bool,
 }
 
@@ -90,7 +95,7 @@ impl Platform {
 }
 
 /// A keyboard shortcut consisting of modifier keys and a main key.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Shortcut {
     pub key: String,
     pub modifiers: Modifiers,
@@ -300,6 +305,50 @@ pub fn canonicalize_key(key: &str) -> String {
         _ => return key_lower,
     }
     .to_string()
+}
+
+/// Information about a shortcut conflict.
+///
+/// This struct provides UI-friendly information about a conflict between
+/// a proposed shortcut and an existing one. Used by ShortcutRecorder to
+/// display warnings before saving.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConflictInfo {
+    /// The ID of the command that already has this shortcut
+    pub conflicting_command_id: String,
+    /// Human-readable name of the conflicting command (e.g., "Move Selection Up")
+    pub command_name: String,
+    /// Type of command: "builtin", "script", or "system"
+    pub command_type: String,
+}
+
+impl ConflictInfo {
+    /// Create a new ConflictInfo for a builtin command
+    pub fn builtin(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            conflicting_command_id: id.into(),
+            command_name: name.into(),
+            command_type: "builtin".to_string(),
+        }
+    }
+
+    /// Create a new ConflictInfo for a script command
+    pub fn script(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            conflicting_command_id: id.into(),
+            command_name: name.into(),
+            command_type: "script".to_string(),
+        }
+    }
+
+    /// Create a new ConflictInfo for a system/OS reserved shortcut
+    pub fn system() -> Self {
+        Self {
+            conflicting_command_id: "system".to_string(),
+            command_name: "System Shortcut".to_string(),
+            command_type: "system".to_string(),
+        }
+    }
 }
 
 /// Check if a key name is known/valid.

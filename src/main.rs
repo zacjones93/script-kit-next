@@ -797,6 +797,18 @@ enum ActionsRoute {
     Execute { action_id: String },
 }
 
+/// State for the inline shortcut recorder overlay.
+///
+/// When this is Some, the ShortcutRecorder modal is displayed.
+/// Used for configuring keyboard shortcuts without opening an external editor.
+#[derive(Debug, Clone)]
+struct ShortcutRecorderState {
+    /// The unique command identifier (e.g., "scriptlet/my-script", "builtin/clipboard-history")
+    command_id: String,
+    /// Human-readable name of the command being configured
+    command_name: String,
+}
+
 /// Messages sent from the prompt poller back to the main app
 #[derive(Debug, Clone)]
 enum PromptMessage {
@@ -1113,6 +1125,11 @@ struct ScriptListApp {
     last_scrolled_design_gallery: Option<usize>,
     // Menu bar integration: Now handled by frontmost_app_tracker module
     // which pre-fetches menu items in background when apps activate
+    /// Shortcut recorder state - when Some, shows the inline recorder overlay
+    shortcut_recorder_state: Option<ShortcutRecorderState>,
+    /// The shortcut recorder entity (persisted to maintain focus)
+    shortcut_recorder_entity:
+        Option<Entity<crate::components::shortcut_recorder::ShortcutRecorder>>,
 }
 
 /// Result of alias matching - either a Script or Scriptlet
@@ -1334,6 +1351,9 @@ impl Render for ScriptListApp {
             None
         };
 
+        // Build shortcut recorder overlay if state is set
+        let shortcut_recorder_overlay = self.render_shortcut_recorder_overlay(window, cx);
+
         div()
             .w_full()
             .h_full()
@@ -1344,6 +1364,10 @@ impl Render for ScriptListApp {
             .when_some(warning_banner, |container, banner| container.child(banner))
             // Main content takes remaining space
             .child(div().flex_1().w_full().min_h(px(0.)).child(main_content))
+            // Shortcut recorder overlay (on top of main content when recording)
+            .when_some(shortcut_recorder_overlay, |container, overlay| {
+                container.child(overlay)
+            })
             .when_some(grid_config, |container, config| {
                 let overlay_bounds = gpui::Bounds {
                     origin: gpui::point(px(0.), px(0.)),
@@ -2638,6 +2662,10 @@ fn main() {
                             ExternalCommand::ExecuteFallback { ref fallback_id, ref input } => {
                                 logging::log("STDIN", &format!("ExecuteFallback: id='{}', input='{}'", fallback_id, input));
                                 execute_fallback_action(view, fallback_id, input, window, ctx);
+                            }
+                            ExternalCommand::ShowShortcutRecorder { ref command_id, ref command_name } => {
+                                logging::log("STDIN", &format!("ShowShortcutRecorder: command_id='{}', command_name='{}'", command_id, command_name));
+                                view.show_shortcut_recorder(command_id.clone(), command_name.clone(), ctx);
                             }
                         }
                         ctx.notify();

@@ -202,16 +202,16 @@ impl ScriptListApp {
                             self.edit_script(&m.agent.path);
                             self.hide_main_and_reset(cx);
                         }
-                        // Non-scripts: open config.ts with the command ID as a hint
+                        // Non-scripts: show inline shortcut recorder
                         scripts::SearchResult::Scriptlet(m) => {
                             let command_id = format!("scriptlet/{}", m.scriptlet.name);
-                            self.open_config_for_shortcut(&command_id);
-                            self.hide_main_and_reset(cx);
+                            let command_name = m.scriptlet.name.clone();
+                            self.show_shortcut_recorder(command_id, command_name, cx);
                         }
                         scripts::SearchResult::BuiltIn(m) => {
                             let command_id = format!("builtin/{}", m.entry.id);
-                            self.open_config_for_shortcut(&command_id);
-                            self.hide_main_and_reset(cx);
+                            let command_name = m.entry.name.clone();
+                            self.show_shortcut_recorder(command_id, command_name, cx);
                         }
                         scripts::SearchResult::App(m) => {
                             // Use bundle ID if available, otherwise use name
@@ -220,8 +220,8 @@ impl ScriptListApp {
                             } else {
                                 format!("app/{}", m.app.name.to_lowercase().replace(' ', "-"))
                             };
-                            self.open_config_for_shortcut(&command_id);
-                            self.hide_main_and_reset(cx);
+                            let command_name = m.app.name.clone();
+                            self.show_shortcut_recorder(command_id, command_name, cx);
                         }
                         scripts::SearchResult::Window(_) => {
                             self.last_output = Some(SharedString::from(
@@ -230,10 +230,10 @@ impl ScriptListApp {
                         }
                         scripts::SearchResult::Fallback(m) => {
                             match &m.fallback {
-                                crate::fallbacks::collector::FallbackItem::Builtin(_) => {
+                                crate::fallbacks::collector::FallbackItem::Builtin(b) => {
                                     let command_id = format!("fallback/{}", m.fallback.name());
-                                    self.open_config_for_shortcut(&command_id);
-                                    self.hide_main_and_reset(cx);
+                                    let command_name = b.name.to_string();
+                                    self.show_shortcut_recorder(command_id, command_name, cx);
                                 }
                                 crate::fallbacks::collector::FallbackItem::Script(s) => {
                                     // Script-based fallback - open the script
