@@ -262,7 +262,7 @@ impl AppShell {
             .justify_between()
             .border_t_1()
             .border_color(colors.border_hex.rgba8(0x30))
-            .bg(rgba(0x00000040)); // Semi-transparent for vibrancy
+            .bg(rgba(0x00000080)); // 50% opacity for vibrancy balance
 
         // Left side: Logo + helper text
         let mut left_side = hstack().gap(px(8.0)).items_center();

@@ -26,10 +26,10 @@ pub struct BackgroundOpacity {
     pub search_box: f32,
     /// Log panel opacity (default: 0.40)
     pub log_panel: f32,
-    /// Selected list item background opacity (default: 0.15)
+    /// Selected list item background opacity (default: 0.35)
     #[serde(default = "default_selected_opacity")]
     pub selected: f32,
-    /// Hovered list item background opacity (default: 0.08)
+    /// Hovered list item background opacity (default: 0.25)
     #[serde(default = "default_hover_opacity")]
     pub hover: f32,
     /// Preview panel background opacity (default: 0.0)
@@ -59,11 +59,11 @@ pub struct BackgroundOpacity {
 }
 
 fn default_selected_opacity() -> f32 {
-    0.15
+    0.95 // More visible selection background
 }
 
 fn default_hover_opacity() -> f32 {
-    0.08
+    0.85 // Visible hover background
 }
 
 fn default_preview_opacity() -> f32 {

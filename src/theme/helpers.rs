@@ -53,8 +53,8 @@ impl ListItemColors {
 
         ListItemColors {
             background: rgba(TRANSPARENT), // Fully transparent
-            background_hover: rgba((selected_subtle << 8) | 0x40), // 25% opacity
-            background_selected: rgba((selected_subtle << 8) | 0x80), // 50% opacity
+            background_hover: rgba((selected_subtle << 8) | 0x40), // 25% opacity (0.25 * 255 ≈ 64)
+            background_selected: rgba((selected_subtle << 8) | 0x59), // 35% opacity (0.35 * 255 ≈ 89)
             text: rgb(colors.text.primary),
             text_secondary: rgb(colors.text.secondary),
             text_dimmed: rgb(colors.text.dimmed),

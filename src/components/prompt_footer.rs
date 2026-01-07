@@ -45,6 +45,8 @@ pub struct PromptFooterColors {
     pub text_muted: u32,
     /// Border color for top border and divider
     pub border: u32,
+    /// Background color for footer (matches selected item background)
+    pub background: u32,
 }
 
 impl PromptFooterColors {
@@ -54,6 +56,7 @@ impl PromptFooterColors {
             accent: theme.colors.accent.selected,
             text_muted: theme.colors.text.muted,
             border: theme.colors.ui.border,
+            background: theme.colors.accent.selected_subtle, // Match selected item bg
         }
     }
 
@@ -63,6 +66,7 @@ impl PromptFooterColors {
             accent: colors.accent,
             text_muted: colors.text_muted,
             border: colors.border,
+            background: colors.background_selected, // Match selected item bg
         }
     }
 }
@@ -73,6 +77,7 @@ impl Default for PromptFooterColors {
             accent: 0xfbbf24, // Script Kit yellow/gold
             text_muted: 0x808080,
             border: 0x464647,
+            background: 0x2a2a2a, // Match default selected_subtle
         }
     }
 }
@@ -337,7 +342,7 @@ impl RenderOnce for PromptFooter {
             .justify_between()
             .border_t_1()
             .border_color(colors.border.rgba8(0x30)) // Top border with 19% opacity
-            .bg(gpui::rgba(0x00000040)); // Semi-transparent dark background for vibrancy
+            .bg(rgb(colors.background)); // 100% opacity - matches selected item background color
 
         // Left side: Logo + helper text
         let mut left_side = hstack().gap(px(8.)).items_center();

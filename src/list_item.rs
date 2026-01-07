@@ -262,8 +262,8 @@ impl ListItemColors {
             accent_selected_subtle: colors.background_selected,
             background: colors.background,
             background_selected: colors.background_selected,
-            selected_opacity: 0.20, // Default
-            hover_opacity: 0.10,    // Default
+            selected_opacity: 0.95, // Default - visible selection
+            hover_opacity: 0.85,    // Default - visible hover
         }
     }
 }
@@ -423,11 +423,11 @@ impl ListItem {
         self
     }
 
-    /// Set whether this item is hovered (subtle visual feedback)
+    /// Set whether this item is hovered (visual feedback)
     ///
-    /// Hovered items show a subtle background tint (25% opacity).
+    /// Hovered items show a visible background tint (25% opacity).
     /// This is separate from `selected` which shows full focus styling
-    /// (50% opacity background + accent bar).
+    /// (35% opacity background + accent bar).
     pub fn hovered(mut self, hovered: bool) -> Self {
         self.hovered = hovered;
         self
@@ -582,9 +582,9 @@ impl RenderOnce for ListItem {
         // Priority: selected (full focus styling) > hovered (subtle feedback) > transparent
         // Note: For non-selected items, we ALSO apply GPUI's .hover() modifier for instant feedback
         let bg_color = if self.selected {
-            selected_bg // 50% opacity - full focus styling
+            selected_bg // 35% opacity - visible selection
         } else if self.hovered {
-            hover_bg // 25% opacity - subtle hover feedback (state-based)
+            hover_bg // 25% opacity - visible hover feedback (state-based)
         } else {
             rgba(0x00000000) // transparent
         };

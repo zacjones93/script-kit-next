@@ -228,8 +228,8 @@ impl Default for UnifiedListItemColors {
             accent: 0x4A90D9,
             accent_subtle: 0x4A90D9,
             background: 0x1E1E1E,
-            selected_opacity: 0.20,
-            hover_opacity: 0.10,
+            selected_opacity: 0.35, // Visible selection
+            hover_opacity: 0.25,    // Visible hover
         }
     }
 }

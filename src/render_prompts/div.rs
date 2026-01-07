@@ -79,6 +79,7 @@ impl ScriptListApp {
             accent: design_colors.accent,
             text_muted: design_colors.text_muted,
             border: design_colors.border,
+            background: design_colors.background_selected, // Match selected item bg
         };
 
         // Footer config with Submit as primary action

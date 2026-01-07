@@ -810,6 +810,11 @@ impl ScriptListApp {
         } else {
             design_colors.border
         };
+        let footer_background = if is_default_design {
+            theme.colors.accent.selected_subtle // Match selected item bg
+        } else {
+            design_colors.background_selected
+        };
 
         // VIBRANCY: Remove background from content div - let gpui-component Root's
         // semi-transparent background handle vibrancy effect. Content areas should NOT
@@ -999,6 +1004,7 @@ impl ScriptListApp {
                 accent: footer_accent,
                 text_muted: footer_text_muted,
                 border: footer_border,
+                background: footer_background,
             };
 
             // Get the primary action label from the selected item
