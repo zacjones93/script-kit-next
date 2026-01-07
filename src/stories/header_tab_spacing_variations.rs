@@ -205,17 +205,25 @@ fn logo_box() -> impl IntoElement {
         )
 }
 
-/// Ask AI hint with configurable Tab opacity
-fn ask_ai_hint(colors: PromptHeaderColors, tab_opacity: f32) -> impl IntoElement {
+/// Ask AI button with hover state and configurable Tab opacity
+fn ask_ai_button(colors: PromptHeaderColors, tab_opacity: f32) -> impl IntoElement {
     // Convert opacity to alpha hex value (0-255)
     let alpha = (tab_opacity * 255.0) as u32;
     let tab_bg = (colors.search_box_bg << 8) | alpha;
+    // Hover background: accent color at 15% opacity
+    let hover_bg = (colors.accent << 8) | 0x26; // ~15% opacity
 
     div()
+        .id("ask-ai-button")
         .flex()
         .flex_row()
         .items_center()
         .gap_1()
+        .px(px(6.))
+        .py(px(4.))
+        .rounded(px(4.))
+        .cursor_pointer()
+        .hover(move |s| s.bg(rgba(hover_bg)))
         .child(
             div()
                 .text_sm()
@@ -234,13 +242,22 @@ fn ask_ai_hint(colors: PromptHeaderColors, tab_opacity: f32) -> impl IntoElement
         )
 }
 
-/// Run button
+/// Run button with hover state
 fn run_button(colors: PromptHeaderColors) -> impl IntoElement {
+    // Hover background: accent color at 15% opacity
+    let hover_bg = (colors.accent << 8) | 0x26; // ~15% opacity
+
     div()
+        .id("run-button")
         .flex()
         .flex_row()
         .items_center()
         .gap_1()
+        .px(px(6.))
+        .py(px(4.))
+        .rounded(px(4.))
+        .cursor_pointer()
+        .hover(move |s| s.bg(rgba(hover_bg)))
         .child(
             div()
                 .text_sm()
@@ -256,13 +273,22 @@ fn run_button(colors: PromptHeaderColors) -> impl IntoElement {
         )
 }
 
-/// Actions button
+/// Actions button with hover state
 fn actions_button(colors: PromptHeaderColors) -> impl IntoElement {
+    // Hover background: accent color at 15% opacity
+    let hover_bg = (colors.accent << 8) | 0x26; // ~15% opacity
+
     div()
+        .id("actions-button")
         .flex()
         .flex_row()
         .items_center()
         .gap_1()
+        .px(px(6.))
+        .py(px(4.))
+        .rounded(px(4.))
+        .cursor_pointer()
+        .hover(move |s| s.bg(rgba(hover_bg)))
         .child(
             div()
                 .text_sm()
@@ -290,10 +316,10 @@ fn render_tab_opacity(
     header_container(colors)
         .child(script_kit_label(colors))
         .child(div().flex_1())
-        .child(ask_ai_hint(colors, tab_opacity))
-        .child(div().w(px(16.)))
+        .child(ask_ai_button(colors, tab_opacity))
+        .child(div().w(px(8.))) // Smaller gaps since buttons have padding
         .child(run_button(colors))
-        .child(div().w(px(16.)))
+        .child(div().w(px(8.)))
         .child(actions_button(colors))
         .child(div().w(px(logo_margin)))
         .child(logo_box())

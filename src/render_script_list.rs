@@ -911,16 +911,25 @@ impl ScriptListApp {
                                     .flex_row()
                                     .items_center()
                                     .justify_end()
-                                    .gap(px(16.)) // 16px gap between all elements
+                                    .gap(px(4.)) // Smaller gap since buttons have padding
                                     // Visibility: hidden when actions popup is shown
                                     .when(show_actions, |d| d.opacity(0.).invisible())
-                                    // "Ask AI [Tab]" hint - yellow text, grey badge
-                                    .child(
+                                    // "Ask AI [Tab]" button - yellow text, grey badge, hover state
+                                    .child({
+                                        // Hover background: accent color at 15% opacity
+                                        let hover_bg = (accent_color << 8) | 0x26;
+                                        let tab_bg = (search_box_bg << 8) | 0x4D; // 30% opacity
                                         div()
+                                            .id("ask-ai-button")
                                             .flex()
                                             .flex_row()
                                             .items_center()
                                             .gap(px(6.))
+                                            .px(px(6.))
+                                            .py(px(4.))
+                                            .rounded(px(4.))
+                                            .cursor_pointer()
+                                            .hover(move |s| s.bg(rgba(hover_bg)))
                                             // "Ask AI" text - YELLOW (accent)
                                             .child(
                                                 div()
@@ -934,21 +943,26 @@ impl ScriptListApp {
                                                     .px(px(6.))
                                                     .py(px(2.))
                                                     .rounded(px(4.))
-                                                    .bg(rgba((search_box_bg << 8) | 0x4D)) // 30% opacity (0x4D = 77)
+                                                    .bg(rgba(tab_bg))
                                                     .text_xs()
                                                     .text_color(rgb(text_muted))
                                                     .child("Tab"),
-                                            ),
-                                    )
-                                    // Run button - yellow label, grey shortcut
-                                    .child(
+                                            )
+                                    })
+                                    // Run button - yellow label, grey shortcut, hover state
+                                    .child({
+                                        let hover_bg = (accent_color << 8) | 0x26;
                                         div()
                                             .id("run-button")
                                             .flex()
                                             .flex_row()
                                             .items_center()
                                             .gap(px(4.))
+                                            .px(px(6.))
+                                            .py(px(4.))
+                                            .rounded(px(4.))
                                             .cursor_pointer()
+                                            .hover(move |s| s.bg(rgba(hover_bg)))
                                             .on_click({
                                                 let handle = handle_run.clone();
                                                 move |_, _window, cx| {
@@ -970,17 +984,22 @@ impl ScriptListApp {
                                                     .text_sm()
                                                     .text_color(rgb(text_muted))
                                                     .child("↵"),
-                                            ),
-                                    )
-                                    // Actions button - yellow label, grey shortcut
-                                    .child(
+                                            )
+                                    })
+                                    // Actions button - yellow label, grey shortcut, hover state
+                                    .child({
+                                        let hover_bg = (accent_color << 8) | 0x26;
                                         div()
                                             .id("actions-button")
                                             .flex()
                                             .flex_row()
                                             .items_center()
                                             .gap(px(4.))
+                                            .px(px(6.))
+                                            .py(px(4.))
+                                            .rounded(px(4.))
                                             .cursor_pointer()
+                                            .hover(move |s| s.bg(rgba(hover_bg)))
                                             .on_click({
                                                 let handle = handle_actions.clone();
                                                 move |_, window, cx| {
@@ -1002,8 +1021,8 @@ impl ScriptListApp {
                                                     .text_xs()
                                                     .text_color(rgb(text_dimmed))
                                                     .child("⌘K"),
-                                            ),
-                                    ),
+                                            )
+                                    }),
                             )
                             // Actions search input - absolute positioned, visible when actions shown
                             .child(
