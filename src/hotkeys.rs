@@ -592,6 +592,128 @@ pub fn get_registered_hotkeys() -> Vec<(String, u32)> {
 }
 
 // =============================================================================
+// Dynamic shortcut registration (for shortcuts.json overrides)
+// =============================================================================
+
+/// Register a shortcut dynamically for a command (scriptlet, builtin, app).
+/// This adds the shortcut to the unified routing table and registers with the OS.
+///
+/// # Arguments
+/// * `command_id` - Unique identifier (e.g., "scriptlet/my-scriptlet", "builtin/ai-chat")
+/// * `shortcut` - Shortcut string (e.g., "cmd+shift+k")
+/// * `display_name` - Human-readable name for logging
+///
+/// # Returns
+/// The hotkey ID on success, or an error if registration fails.
+pub fn register_dynamic_shortcut(
+    command_id: &str,
+    shortcut: &str,
+    display_name: &str,
+) -> anyhow::Result<u32> {
+    let manager = MAIN_MANAGER
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("Hotkey manager not initialized"))?;
+
+    let manager_guard = manager
+        .lock()
+        .map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+
+    let (mods, code) = shortcuts::parse_shortcut(shortcut)
+        .ok_or_else(|| anyhow::anyhow!("Failed to parse shortcut: {}", shortcut))?;
+
+    let hotkey = HotKey::new(Some(mods), code);
+    let id = hotkey.id();
+
+    // Check if already registered
+    {
+        let routes_guard = routes().read().unwrap();
+        if routes_guard.get_action(id).is_some() {
+            return Err(anyhow::anyhow!(
+                "Shortcut '{}' is already registered",
+                shortcut
+            ));
+        }
+    }
+
+    // Register with OS
+    manager_guard
+        .register(hotkey)
+        .map_err(|e| anyhow::anyhow!("Failed to register hotkey '{}': {}", shortcut, e))?;
+
+    // Add to routing table
+    {
+        let mut routes_guard = routes().write().unwrap();
+        routes_guard.add_route(
+            id,
+            RegisteredHotkey {
+                hotkey,
+                action: HotkeyAction::Script(command_id.to_string()),
+                display: shortcut.to_string(),
+            },
+        );
+    }
+
+    logging::log(
+        "HOTKEY",
+        &format!(
+            "Registered dynamic shortcut '{}' for {} (id: {})",
+            shortcut, display_name, id
+        ),
+    );
+
+    Ok(id)
+}
+
+/// Unregister a dynamic shortcut by command_id.
+/// Returns Ok(()) even if the shortcut wasn't registered (no-op).
+#[allow(dead_code)]
+pub fn unregister_dynamic_shortcut(command_id: &str) -> anyhow::Result<()> {
+    let manager = MAIN_MANAGER
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("Hotkey manager not initialized"))?;
+
+    let manager_guard = manager
+        .lock()
+        .map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+
+    // Find the hotkey ID for this command
+    let (id, hotkey) = {
+        let routes_guard = routes().read().unwrap();
+        routes_guard
+            .get_script_id(command_id)
+            .and_then(|id| routes_guard.routes.get(&id).map(|entry| (id, entry.hotkey)))
+    }
+    .ok_or_else(|| anyhow::anyhow!("No shortcut registered for {}", command_id))?;
+
+    // Unregister from OS
+    if let Err(e) = manager_guard.unregister(hotkey) {
+        logging::log(
+            "HOTKEY",
+            &format!(
+                "Warning: Failed to unregister hotkey for {}: {}",
+                command_id, e
+            ),
+        );
+    }
+
+    // Remove from routing table
+    {
+        let mut routes_guard = routes().write().unwrap();
+        routes_guard.remove_route(id);
+    }
+
+    logging::log(
+        "HOTKEY",
+        &format!(
+            "Unregistered dynamic shortcut for {} (id: {})",
+            command_id, id
+        ),
+    );
+
+    Ok(())
+}
+
+// =============================================================================
 // GCD dispatch for immediate main-thread execution (bypasses async runtime)
 // =============================================================================
 
@@ -992,6 +1114,38 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
             "HOTKEY",
             &format!("Registered {} script/scriptlet shortcuts", script_count),
         );
+
+        // Load and register user shortcut overrides from shortcuts.json
+        let mut override_count = 0;
+        match crate::shortcuts::load_shortcut_overrides() {
+            Ok(overrides) => {
+                for (command_id, shortcut) in overrides {
+                    let shortcut_str = shortcut.to_canonical_string();
+                    if register_script_hotkey_internal(
+                        &manager_guard,
+                        &command_id,
+                        &shortcut_str,
+                        &command_id,
+                    )
+                    .is_some()
+                    {
+                        override_count += 1;
+                    }
+                }
+                if override_count > 0 {
+                    logging::log(
+                        "HOTKEY",
+                        &format!(
+                            "Registered {} user shortcut overrides from shortcuts.json",
+                            override_count
+                        ),
+                    );
+                }
+            }
+            Err(e) => {
+                logging::log("HOTKEY", &format!("Failed to load shortcuts.json: {}", e));
+            }
+        }
 
         // Log routing table summary
         {

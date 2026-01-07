@@ -236,21 +236,21 @@ impl ScriptHotkeyPoller {
         cx.spawn(async move |_this, cx: &mut AsyncApp| {
             logging::log("HOTKEY", "Script hotkey listener started");
 
-            while let Ok(script_path) = hotkeys::script_hotkey_channel().1.recv().await {
+            while let Ok(command_id) = hotkeys::script_hotkey_channel().1.recv().await {
                 logging::log(
                     "HOTKEY",
-                    &format!("Script shortcut received: {}", script_path),
+                    &format!("Script shortcut received: {}", command_id),
                 );
 
-                let path_clone = script_path.clone();
+                let id_clone = command_id.clone();
                 let _ = cx.update(move |cx: &mut App| {
                     let _ = window.update(
                         cx,
                         |view: &mut ScriptListApp,
                          _win: &mut Window,
                          ctx: &mut Context<ScriptListApp>| {
-                            // Find and execute the script by path
-                            view.execute_script_by_path(&path_clone, ctx);
+                            // Handle both file paths (legacy) and command IDs (new format)
+                            view.execute_by_command_id_or_path(&id_clone, ctx);
                         },
                     );
                 });

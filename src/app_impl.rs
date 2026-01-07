@@ -2622,15 +2622,39 @@ export default {
         // Save to persistence
         match crate::shortcuts::save_shortcut_override(&command_id, &shortcut) {
             Ok(()) => {
-                logging::log("SHORTCUT", "Shortcut saved successfully");
-                self.show_hud(
-                    format!("Shortcut set: {}", shortcut.display()),
-                    Some(2000),
-                    cx,
-                );
+                logging::log("SHORTCUT", "Shortcut saved to shortcuts.json");
 
-                // TODO: Update global hotkey registry when implemented
-                // For now, shortcuts take effect on app restart
+                // Register the hotkey immediately so it works without restart
+                let shortcut_str = shortcut.to_canonical_string();
+                match crate::hotkeys::register_dynamic_shortcut(
+                    &command_id,
+                    &shortcut_str,
+                    &command_name,
+                ) {
+                    Ok(id) => {
+                        logging::log(
+                            "SHORTCUT",
+                            &format!("Registered hotkey immediately (id: {})", id),
+                        );
+                        self.show_hud(
+                            format!("Shortcut set: {} (active now)", shortcut.display()),
+                            Some(2000),
+                            cx,
+                        );
+                    }
+                    Err(e) => {
+                        // Shortcut saved but couldn't register - will work after restart
+                        logging::log(
+                            "SHORTCUT",
+                            &format!("Shortcut saved but registration failed: {} - will work after restart", e),
+                        );
+                        self.show_hud(
+                            format!("Shortcut set: {} (restart to activate)", shortcut.display()),
+                            Some(3000),
+                            cx,
+                        );
+                    }
+                }
             }
             Err(e) => {
                 logging::log("ERROR", &format!("Failed to save shortcut: {}", e));
@@ -3160,6 +3184,80 @@ export default {
         } else {
             logging::log("ERROR", &format!("Script file not found: {}", path));
         }
+    }
+
+    /// Execute by command ID or legacy file path.
+    ///
+    /// Command IDs have formats like:
+    /// - "scriptlet/my-scriptlet" - execute a scriptlet
+    /// - "builtin/ai-chat" - execute a builtin
+    /// - "app/com.apple.Finder" - launch an app
+    /// - Otherwise: treated as a file path (legacy behavior)
+    pub fn execute_by_command_id_or_path(&mut self, command_id: &str, cx: &mut Context<Self>) {
+        logging::log(
+            "EXEC",
+            &format!("Executing by command ID or path: {}", command_id),
+        );
+
+        // Parse command ID format: "type/identifier"
+        if let Some((cmd_type, identifier)) = command_id.split_once('/') {
+            match cmd_type {
+                "scriptlet" => {
+                    // Find scriptlet by name
+                    if let Some(scriptlet) = self.scriptlets.iter().find(|s| s.name == identifier) {
+                        let scriptlet_clone = scriptlet.clone();
+                        logging::log("EXEC", &format!("Executing scriptlet: {}", identifier));
+                        self.execute_scriptlet(&scriptlet_clone, cx);
+                        return;
+                    }
+                    logging::log("ERROR", &format!("Scriptlet not found: {}", identifier));
+                    return;
+                }
+                "builtin" => {
+                    // Execute builtin by ID
+                    let config = crate::config::BuiltInConfig::default();
+                    if let Some(entry) = builtins::get_builtin_entries(&config)
+                        .iter()
+                        .find(|e| e.id == identifier)
+                    {
+                        logging::log("EXEC", &format!("Executing builtin: {}", identifier));
+                        self.execute_builtin(entry, cx);
+                        return;
+                    }
+                    logging::log("ERROR", &format!("Builtin not found: {}", identifier));
+                    return;
+                }
+                "app" => {
+                    // Launch app by bundle ID - find app in cached apps and launch
+                    logging::log(
+                        "EXEC",
+                        &format!("Launching app by bundle ID: {}", identifier),
+                    );
+                    let apps = crate::app_launcher::get_cached_apps();
+                    if let Some(app) = apps
+                        .iter()
+                        .find(|a| a.bundle_id.as_deref() == Some(identifier))
+                    {
+                        if let Err(e) = crate::app_launcher::launch_application(app) {
+                            logging::log("ERROR", &format!("Failed to launch app: {}", e));
+                        }
+                    } else {
+                        logging::log("ERROR", &format!("App not found: {}", identifier));
+                    }
+                    return;
+                }
+                _ => {
+                    // Unknown type - fall through to path-based execution
+                    logging::log(
+                        "EXEC",
+                        &format!("Unknown command type '{}', trying as path", cmd_type),
+                    );
+                }
+            }
+        }
+
+        // Fall back to path-based execution (legacy behavior)
+        self.execute_script_by_path(command_id, cx);
     }
 
     /// Cancel the currently running script and clean up all state
