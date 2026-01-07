@@ -219,6 +219,8 @@ impl ScriptListApp {
             window_list_scroll_handle: UniformListScrollHandle::new(),
             design_gallery_scroll_handle: UniformListScrollHandle::new(),
             file_search_scroll_handle: UniformListScrollHandle::new(),
+            file_search_loading: false,
+            file_search_debounce_task: None,
             show_actions_popup: false,
             actions_dialog: None,
             cursor_visible: true,
@@ -1475,26 +1477,74 @@ impl ScriptListApp {
                 selected_index,
             } => {
                 if *query != new_text {
-                    // Re-run mdfind search with new query
-                    let results = crate::file_search::search_files(
-                        &new_text,
-                        None,
-                        crate::file_search::DEFAULT_LIMIT,
-                    );
-                    logging::log(
-                        "EXEC",
-                        &format!(
-                            "File search for '{}' found {} results",
-                            new_text,
-                            results.len()
-                        ),
-                    );
-                    self.cached_file_results = results;
+                    // Update query immediately for responsive UI
                     *query = new_text.clone();
                     *selected_index = 0;
-                    self.file_search_scroll_handle
-                        .scroll_to_item(0, ScrollStrategy::Top);
+
+                    // Cancel existing debounce task
+                    self.file_search_debounce_task = None;
+
+                    // Set loading state
+                    self.file_search_loading = true;
                     cx.notify();
+
+                    // Debounce: wait 200ms before searching
+                    let search_query = new_text.clone();
+                    let task = cx.spawn(async move |this, cx| {
+                        // Wait for debounce period
+                        Timer::after(std::time::Duration::from_millis(200)).await;
+
+                        // Run mdfind in background thread
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        let query_for_thread = search_query.clone();
+                        std::thread::spawn(move || {
+                            let results = crate::file_search::search_files(
+                                &query_for_thread,
+                                None,
+                                crate::file_search::DEFAULT_LIMIT,
+                            );
+                            let _ = tx.send(results);
+                        });
+
+                        // Poll for results
+                        loop {
+                            Timer::after(std::time::Duration::from_millis(10)).await;
+                            match rx.try_recv() {
+                                Ok(results) => {
+                                    let result_count = results.len();
+                                    let _ = cx.update(|cx| {
+                                        this.update(cx, |app, cx| {
+                                            // Only update if query still matches (user hasn't typed more)
+                                            if let AppView::FileSearchView { query, .. } =
+                                                &app.current_view
+                                            {
+                                                if *query == search_query {
+                                                    logging::log(
+                                                        "EXEC",
+                                                        &format!(
+                                                            "File search for '{}' found {} results",
+                                                            search_query, result_count
+                                                        ),
+                                                    );
+                                                    app.cached_file_results = results;
+                                                    app.file_search_loading = false;
+                                                    app.file_search_scroll_handle
+                                                        .scroll_to_item(0, ScrollStrategy::Top);
+                                                    cx.notify();
+                                                }
+                                            }
+                                        })
+                                    });
+                                    break;
+                                }
+                                Err(std::sync::mpsc::TryRecvError::Empty) => continue,
+                                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                            }
+                        }
+                    });
+
+                    // Store task so it can be cancelled if user types more
+                    self.file_search_debounce_task = Some(task);
                 }
                 return; // Don't run main menu filter logic
             }
@@ -1892,18 +1942,15 @@ impl ScriptListApp {
 
             // Create the dialog entity HERE in main app (for keyboard routing)
             let theme_arc = std::sync::Arc::new(self.theme.clone());
+            // Create the dialog entity (search input shown at bottom, Raycast-style)
             let dialog = cx.new(|cx| {
                 let focus_handle = cx.focus_handle();
-                let mut d = ActionsDialog::with_script(
+                ActionsDialog::with_script(
                     focus_handle,
                     std::sync::Arc::new(|_action_id| {}), // Callback handled via main app
                     script_info.clone(),
                     theme_arc,
-                );
-                // Hide the search input - main header already has the search box
-                // Text input routes to dialog.handle_char() for filtering
-                d.set_hide_search(true);
-                d
+                )
             });
 
             // Store the dialog entity for keyboard routing
@@ -1997,8 +2044,7 @@ impl ScriptListApp {
                         dialog
                     });
 
-                    // Hide the dialog's built-in search input since header already has search
-                    dialog.update(cx, |d, _| d.set_hide_search(true));
+                    // Show search input at bottom (Raycast-style)
 
                     // Focus the dialog's internal focus handle
                     self.actions_dialog = Some(dialog.clone());

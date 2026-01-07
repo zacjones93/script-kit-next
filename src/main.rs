@@ -1001,6 +1001,10 @@ struct ScriptListApp {
     design_gallery_scroll_handle: UniformListScrollHandle,
     // Scroll handle for file search list
     file_search_scroll_handle: UniformListScrollHandle,
+    // File search loading state (true while mdfind is running)
+    file_search_loading: bool,
+    // Debounce task for file search (cancelled when new input arrives)
+    file_search_debounce_task: Option<gpui::Task<()>>,
     // Actions popup overlay
     show_actions_popup: bool,
     // ActionsDialog entity for focus management

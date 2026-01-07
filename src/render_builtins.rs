@@ -1904,15 +1904,38 @@ impl ScriptListApp {
         let handle_key = cx.listener(
             move |this: &mut Self,
                   event: &gpui::KeyDownEvent,
-                  _window: &mut Window,
+                  window: &mut Window,
                   cx: &mut Context<Self>| {
-                // Global shortcuts (Cmd+W, ESC for dismissable views)
-                if this.handle_global_shortcut_with_options(event, true, cx) {
+                let key_str = event.keystroke.key.to_lowercase();
+                let has_cmd = event.keystroke.modifiers.platform;
+
+                // ESC goes back to main menu (not close window)
+                if key_str == "escape" {
+                    logging::log("KEY", "ESC in FileSearch - returning to main menu");
+                    // Cancel any pending search
+                    this.file_search_debounce_task = None;
+                    this.file_search_loading = false;
+                    // Clear cached results
+                    this.cached_file_results.clear();
+                    // Return to main menu
+                    this.current_view = AppView::ScriptList;
+                    this.filter_text.clear();
+                    this.selected_index = 0;
+                    // Sync input
+                    this.gpui_input_state.update(cx, |state, cx| {
+                        state.set_value("", window, cx);
+                    });
+                    this.update_window_size();
+                    cx.notify();
                     return;
                 }
 
-                let key_str = event.keystroke.key.to_lowercase();
-                logging::log("KEY", &format!("FileSearch key: '{}'", key_str));
+                // Cmd+W closes window
+                if has_cmd && key_str == "w" {
+                    logging::log("KEY", "Cmd+W - closing window");
+                    this.close_and_reset_window(cx);
+                    return;
+                }
 
                 if let AppView::FileSearchView {
                     query,
@@ -1953,11 +1976,13 @@ impl ScriptListApp {
                             // Open file with default app
                             if let Some((_, file)) = filtered_results.get(*selected_index) {
                                 let _ = file_search::open_file(&file.path);
+                                // Close window after opening file
+                                this.close_and_reset_window(cx);
                             }
                         }
                         _ => {
                             // Check for Cmd+Enter (reveal in finder)
-                            if event.keystroke.modifiers.platform && key_str == "enter" {
+                            if has_cmd && key_str == "enter" {
                                 if let Some((_, file)) = filtered_results.get(*selected_index) {
                                     let _ = file_search::reveal_in_finder(&file.path);
                                 }
@@ -1974,15 +1999,38 @@ impl ScriptListApp {
             .map(|(_, file)| (*file).clone())
             .collect();
         let current_selected = selected_index;
+        let is_loading = self.file_search_loading;
 
         // Use uniform_list for virtualized scrolling
-        let list_element = if filtered_len == 0 {
+        let list_element = if is_loading {
+            // Show loading indicator
+            div()
+                .w_full()
+                .h_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(8.))
+                .child(div().text_lg().text_color(rgb(text_muted)).child("⏳"))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(text_dimmed))
+                        .child("Searching..."),
+                )
+                .into_any_element()
+        } else if filtered_len == 0 {
             div()
                 .w_full()
                 .py(px(design_spacing.padding_xl))
                 .text_center()
                 .text_color(rgb(text_dimmed))
-                .child("No files found")
+                .child(if query.is_empty() {
+                    "Type to search files"
+                } else {
+                    "No files found"
+                })
                 .into_any_element()
         } else {
             uniform_list(
@@ -2198,7 +2246,11 @@ impl ScriptListApp {
                         div()
                             .text_sm()
                             .text_color(rgb(text_dimmed))
-                            .child(format!("{} files", filtered_len)),
+                            .child(if is_loading {
+                                "Searching...".to_string()
+                            } else {
+                                format!("{} files", filtered_len)
+                            }),
                     ),
             )
             // Divider
