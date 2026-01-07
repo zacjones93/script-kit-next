@@ -293,6 +293,25 @@ impl ShortcutRegistry {
             .count()
     }
 
+    /// Get all user overrides as a map of binding_id -> Option<Shortcut>.
+    ///
+    /// Returns None for disabled shortcuts, Some(shortcut) for overridden shortcuts.
+    pub fn get_overrides(&self) -> &HashMap<String, Option<Shortcut>> {
+        &self.user_overrides
+    }
+
+    /// Export user overrides as canonical strings for persistence.
+    ///
+    /// Returns a map of binding_id -> Option<String> where:
+    /// - Some(string) = override shortcut as canonical string
+    /// - None = shortcut is disabled
+    pub fn export_overrides(&self) -> HashMap<String, Option<String>> {
+        self.user_overrides
+            .iter()
+            .map(|(id, opt)| (id.clone(), opt.as_ref().map(|s| s.to_canonical_string())))
+            .collect()
+    }
+
     /// Find all conflicts in the registry.
     ///
     /// Returns a list of conflicts, each containing:

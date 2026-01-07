@@ -29,6 +29,7 @@
 
 mod context;
 mod hotkey_compat;
+mod persistence;
 mod registry;
 mod types;
 
@@ -59,3 +60,7 @@ pub use registry::{
 
 // Re-export hotkey compatibility functions (used by hotkeys.rs, prompt_handler.rs, etc.)
 pub use hotkey_compat::{keystroke_to_shortcut, normalize_shortcut, parse_shortcut};
+
+// Re-export persistence types
+#[allow(unused_imports)]
+pub use persistence::{default_overrides_path, PersistenceError, ShortcutOverrides};
