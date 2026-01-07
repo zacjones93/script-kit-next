@@ -343,6 +343,14 @@ impl ScriptListApp {
                             .child(preview_panel),
                     ),
             )
+            // Footer
+            .child(PromptFooter::new(
+                PromptFooterConfig::new()
+                    .primary_label("Paste")
+                    .primary_shortcut("↵")
+                    .show_secondary(false),
+                PromptFooterColors::from_design(&design_colors),
+            ))
             .into_any_element()
     }
 
@@ -886,6 +894,14 @@ impl ScriptListApp {
                     .py(px(design_spacing.padding_xs))
                     .child(list_element),
             )
+            // Footer
+            .child(PromptFooter::new(
+                PromptFooterConfig::new()
+                    .primary_label("Launch")
+                    .primary_shortcut("↵")
+                    .show_secondary(false),
+                PromptFooterColors::from_design(&design_colors),
+            ))
             .into_any_element()
     }
 
@@ -1181,6 +1197,14 @@ impl ScriptListApp {
                             .child(actions_panel),
                     ),
             )
+            // Footer
+            .child(PromptFooter::new(
+                PromptFooterConfig::new()
+                    .primary_label("Switch")
+                    .primary_shortcut("↵")
+                    .show_secondary(false),
+                PromptFooterColors::from_design(&design_colors),
+            ))
             .into_any_element()
     }
 
@@ -1817,6 +1841,14 @@ impl ScriptListApp {
                     .py(px(design_spacing.padding_xs))
                     .child(list_element),
             )
+            // Footer
+            .child(PromptFooter::new(
+                PromptFooterConfig::new()
+                    .primary_label("Select")
+                    .primary_shortcut("↵")
+                    .show_secondary(false),
+                PromptFooterColors::from_design(&design_colors),
+            ))
             .into_any_element()
     }
 
@@ -2204,6 +2236,14 @@ impl ScriptListApp {
                             .child(preview_content),
                     ),
             )
+            // Footer
+            .child(PromptFooter::new(
+                PromptFooterConfig::new()
+                    .primary_label("Open")
+                    .primary_shortcut("↵")
+                    .show_secondary(false),
+                PromptFooterColors::from_design(&design_colors),
+            ))
             .into_any_element()
     }
 }

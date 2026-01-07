@@ -19,7 +19,7 @@ impl ScriptListApp {
         // Use design tokens for GLOBAL theming
         let tokens = get_tokens(self.current_design);
         let design_colors = tokens.colors();
-        let design_spacing = tokens.spacing();
+        let _design_spacing = tokens.spacing(); // Unused but kept for consistency with other prompts
 
         // Use design tokens for global theming
         let box_shadows = self.create_box_shadows();
@@ -93,6 +93,20 @@ impl ScriptListApp {
             },
         );
 
+        // Footer colors for the terminal prompt
+        let footer_colors = PromptFooterColors::from_design(&design_colors);
+
+        // Footer configuration - Terminal uses "Close" as primary action (Cmd+W)
+        // and Actions as secondary (Cmd+K) when actions are available
+        let footer_config = PromptFooterConfig::new()
+            .primary_label("Close")
+            .primary_shortcut("⌘W")
+            .show_secondary(has_actions);
+
+        // Handlers for footer buttons
+        let handle_close = cx.entity().downgrade();
+        let handle_actions = cx.entity().downgrade();
+
         // Container with explicit height. We wrap the entity in a sized div because
         // GPUI entities don't automatically inherit parent flex sizing.
         // NOTE: No rounded corners for terminal - it should fill edge-to-edge
@@ -106,145 +120,26 @@ impl ScriptListApp {
             .h(content_height)
             .overflow_hidden()
             .on_key_down(handle_key)
-            .child(div().size_full().child(entity))
-            // CLS-FREE ACTIONS AREA in top-right corner
-            .when(has_actions, |d| {
-                let button_colors = ButtonColors::from_theme(&self.theme);
-                let handle_actions = cx.entity().downgrade();
-                let show_actions_state = self.show_actions_popup;
-
-                // Get actions search text from the dialog
-                let search_text = self
-                    .actions_dialog
-                    .as_ref()
-                    .map(|dialog| dialog.read(cx).search_text.clone())
-                    .unwrap_or_default();
-                let search_is_empty = search_text.is_empty();
-                let search_display: SharedString = if search_is_empty {
-                    "Search actions...".into()
-                } else {
-                    search_text.into()
-                };
-                let accent_color = design_colors.accent;
-                let text_primary = design_colors.text_primary;
-                let text_muted = design_colors.text_muted;
-                let text_dimmed = design_colors.text_dimmed;
-                let search_box_bg = self.theme.colors.background.search_box;
-                let cursor_visible_for_search =
-                    self.focused_input == FocusedInput::ActionsSearch && self.cursor_visible;
-
-                d.child(
-                    div()
-                        .absolute()
-                        .top(px(design_spacing.padding_md))
-                        .right(px(design_spacing.padding_md))
-                        .child(
-                            div()
-                                .relative()
-                                .h(px(28.))
-                                .flex()
-                                .items_center()
-                                // Layer 1: Actions button
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .inset_0()
-                                        .flex()
-                                        .flex_row()
-                                        .items_center()
-                                        .justify_end()
-                                        .when(show_actions_state, |d| d.opacity(0.).invisible())
-                                        .child(
-                                            Button::new("Actions", button_colors)
-                                                .variant(ButtonVariant::Ghost)
-                                                .shortcut("⌘ K")
-                                                .on_click(Box::new(move |_, window, cx| {
-                                                    if let Some(app) = handle_actions.upgrade() {
-                                                        app.update(cx, |this, cx| {
-                                                            this.toggle_arg_actions(cx, window);
-                                                        });
-                                                    }
-                                                })),
-                                        ),
-                                )
-                                // Layer 2: Actions search input
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .inset_0()
-                                        .flex()
-                                        .flex_row()
-                                        .items_center()
-                                        .justify_end()
-                                        .gap(px(8.))
-                                        .when(!show_actions_state, |d| d.opacity(0.).invisible())
-                                        .child(
-                                            div()
-                                                .text_color(rgb(text_dimmed))
-                                                .text_xs()
-                                                .child("⌘K"),
-                                        )
-                                        .child(
-                                            div()
-                                                .id("term-actions-search")
-                                                .flex_shrink_0()
-                                                .w(px(130.))
-                                                .min_w(px(130.))
-                                                .max_w(px(130.))
-                                                .h(px(24.))
-                                                .min_h(px(24.))
-                                                .max_h(px(24.))
-                                                .overflow_hidden()
-                                                .flex()
-                                                .flex_row()
-                                                .items_center()
-                                                .px(px(8.))
-                                                .rounded(px(4.))
-                                                .bg(rgba(
-                                                    (search_box_bg << 8)
-                                                        | if search_is_empty { 0x40 } else { 0x80 },
-                                                ))
-                                                .border_1()
-                                                .border_color(rgba(
-                                                    (accent_color << 8)
-                                                        | if search_is_empty { 0x20 } else { 0x40 },
-                                                ))
-                                                .text_sm()
-                                                .text_color(if search_is_empty {
-                                                    rgb(text_muted)
-                                                } else {
-                                                    rgb(text_primary)
-                                                })
-                                                .when(search_is_empty, |d| {
-                                                    d.child(
-                                                        div()
-                                                            .w(px(2.))
-                                                            .h(px(14.))
-                                                            .mr(px(2.))
-                                                            .rounded(px(1.))
-                                                            .when(cursor_visible_for_search, |d| {
-                                                                d.bg(rgb(accent_color))
-                                                            }),
-                                                    )
-                                                })
-                                                .child(search_display)
-                                                .when(!search_is_empty, |d| {
-                                                    d.child(
-                                                        div()
-                                                            .w(px(2.))
-                                                            .h(px(14.))
-                                                            .ml(px(2.))
-                                                            .rounded(px(1.))
-                                                            .when(cursor_visible_for_search, |d| {
-                                                                d.bg(rgb(accent_color))
-                                                            }),
-                                                    )
-                                                }),
-                                        ),
-                                ),
-                        ),
-                )
-            })
+            // Terminal content takes remaining space
+            .child(div().flex_1().min_h(px(0.)).overflow_hidden().child(entity))
+            // Footer at the bottom
+            .child(
+                PromptFooter::new(footer_config, footer_colors)
+                    .on_primary_click(Box::new(move |_, _window, cx| {
+                        if let Some(app) = handle_close.upgrade() {
+                            app.update(cx, |this, cx| {
+                                this.close_and_reset_window(cx);
+                            });
+                        }
+                    }))
+                    .on_secondary_click(Box::new(move |_, window, cx| {
+                        if let Some(app) = handle_actions.upgrade() {
+                            app.update(cx, |this, cx| {
+                                this.toggle_arg_actions(cx, window);
+                            });
+                        }
+                    })),
+            )
             // Actions dialog overlay
             .when_some(
                 if self.show_actions_popup {
