@@ -22,6 +22,9 @@ pub struct ScriptInfo {
     /// Whether this is a real script file (true) or a built-in command (false)
     /// Built-in commands (like Clipboard History, App Launcher) have limited actions
     pub is_script: bool,
+    /// The verb to use for the primary action (e.g., "Run", "Launch", "Switch to")
+    /// Defaults to "Run" for scripts
+    pub action_verb: String,
 }
 
 impl ScriptInfo {
@@ -31,6 +34,7 @@ impl ScriptInfo {
             name: name.into(),
             path: path.into(),
             is_script: true,
+            action_verb: "Run".to_string(),
         }
     }
 
@@ -42,10 +46,11 @@ impl ScriptInfo {
             name: name.into(),
             path: String::new(),
             is_script: false,
+            action_verb: "Run".to_string(),
         }
     }
 
-    /// Create a ScriptInfo with explicit is_script flag
+    /// Create a ScriptInfo with explicit is_script flag and custom action verb
     #[allow(dead_code)]
     pub fn with_is_script(
         name: impl Into<String>,
@@ -56,6 +61,22 @@ impl ScriptInfo {
             name: name.into(),
             path: path.into(),
             is_script,
+            action_verb: "Run".to_string(),
+        }
+    }
+
+    /// Create a ScriptInfo with all options including custom action verb
+    pub fn with_action_verb(
+        name: impl Into<String>,
+        path: impl Into<String>,
+        is_script: bool,
+        action_verb: impl Into<String>,
+    ) -> Self {
+        ScriptInfo {
+            name: name.into(),
+            path: path.into(),
+            is_script,
+            action_verb: action_verb.into(),
         }
     }
 }

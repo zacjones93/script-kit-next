@@ -953,23 +953,32 @@ impl ScriptListApp {
                     }
                     scripts::SearchResult::BuiltIn(m) => {
                         // Built-ins use their id as identifier
-                        Some(ScriptInfo::new(
+                        // is_script=false: no editable file, hide "Edit Script" etc.
+                        Some(ScriptInfo::with_action_verb(
                             &m.entry.name,
                             format!("builtin:{}", &m.entry.id),
+                            false,
+                            "Run",
                         ))
                     }
                     scripts::SearchResult::App(m) => {
                         // Apps use their path as identifier
-                        Some(ScriptInfo::new(
+                        // is_script=false: apps aren't editable scripts
+                        Some(ScriptInfo::with_action_verb(
                             &m.app.name,
                             m.app.path.to_string_lossy().to_string(),
+                            false,
+                            "Launch",
                         ))
                     }
                     scripts::SearchResult::Window(m) => {
                         // Windows use their id as identifier
-                        Some(ScriptInfo::new(
+                        // is_script=false: windows aren't editable scripts
+                        Some(ScriptInfo::with_action_verb(
                             &m.window.title,
                             format!("window:{}", m.window.id),
+                            false,
+                            "Switch to",
                         ))
                     }
                     scripts::SearchResult::Agent(m) => {
@@ -981,9 +990,12 @@ impl ScriptListApp {
                     }
                     scripts::SearchResult::Fallback(m) => {
                         // Fallbacks use their name as identifier
-                        Some(ScriptInfo::new(
+                        // is_script depends on whether it's a built-in fallback or script-based
+                        Some(ScriptInfo::with_action_verb(
                             m.fallback.name(),
                             format!("fallback:{}", m.fallback.name()),
+                            !m.fallback.is_builtin(),
+                            "Run",
                         ))
                     }
                 }

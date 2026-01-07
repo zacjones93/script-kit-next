@@ -99,12 +99,13 @@ fn to_deeplink_name(name: &str) -> String {
 pub fn get_script_context_actions(script: &ScriptInfo) -> Vec<Action> {
     let mut actions = Vec::new();
 
-    // Run action - always available for both scripts and built-ins
+    // Primary action - always available for both scripts and built-ins
+    // Uses the action_verb from ScriptInfo (e.g., "Run", "Launch", "Switch to")
     actions.push(
         Action::new(
             "run_script",
-            format!("Run \"{}\"", script.name),
-            Some("Execute this script".to_string()),
+            format!("{} \"{}\"", script.action_verb, script.name),
+            Some(format!("{} this item", script.action_verb)),
             ActionCategory::ScriptContext,
         )
         .with_shortcut("↵"),
