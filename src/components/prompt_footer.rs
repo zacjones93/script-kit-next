@@ -216,22 +216,13 @@ impl PromptFooter {
         self
     }
 
-    /// Render the Script Kit logo (20x20 yellow box with black icon)
+    /// Render the Script Kit logo (accent-colored icon, no background)
     fn render_logo(&self) -> impl IntoElement {
-        div()
-            .w(px(20.))
-            .h(px(20.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(self.colors.accent.rgba8(0xD9)) // 85% opacity
-            .rounded(px(4.))
-            .child(
-                svg()
-                    .external_path(utils::get_logo_path())
-                    .size(px(13.))
-                    .text_color(rgb(0x000000)), // Black logo inside yellow
-            )
+        svg()
+            .external_path(utils::get_logo_path())
+            .size(px(16.))
+            .ml(px(2.)) // Nudge right
+            .text_color(rgb(self.colors.accent)) // Accent color (yellow/gold)
     }
 
     /// Render a footer button with label and shortcut
