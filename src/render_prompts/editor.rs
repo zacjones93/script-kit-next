@@ -136,8 +136,12 @@ impl ScriptListApp {
         // NOTE: The EditorPrompt entity has its own track_focus and on_key_down in its render method.
         // We do NOT add track_focus here to avoid duplicate focus tracking on the same handle.
         //
-        // Container with explicit height. We wrap the entity in a sized div because
-        // GPUI entities don't automatically inherit parent flex sizing.
+        // Container with explicit height. Use flex layout with:
+        // - Editor wrapper using flex_1 to fill remaining space
+        // - Footer as normal child at bottom (not absolute positioned)
+        // Editor height: 700px total - 40px footer = 660px
+        let editor_height = px(660.0);
+
         div()
             .relative() // Needed for absolute positioned actions dialog overlay
             .flex()
@@ -145,17 +149,15 @@ impl ScriptListApp {
             .when_some(vibrancy_bg, |d, bg| d.bg(bg)) // VIBRANCY: Only apply bg when vibrancy disabled
             .shadow(box_shadows)
             .w_full()
-            .h(content_height)
-            .overflow_hidden()
+            .h(content_height) // Explicit 700px height (window height for editor view)
+            .overflow_hidden() // Clip content to rounded corners
             .rounded(px(design_visual.radius_lg))
             .on_key_down(handle_key)
-            // Main content area with editor - use flex_1 to fill space above footer
-            // NOTE: Use w_full() not size_full() - size_full() includes h_full() which conflicts with flex
+            // Editor entity with explicit height (700 - 40 = 660px)
             .child(
                 div()
-                    .flex_1()
                     .w_full()
-                    .min_h(px(0.))
+                    .h(editor_height) // Explicit height instead of flex_1
                     .overflow_hidden()
                     .child(entity),
             )
@@ -215,6 +217,8 @@ impl ScriptListApp {
                     }));
                 }
 
+                // Footer as normal flex child (not absolute positioned)
+                // The flex_1 editor wrapper above takes remaining space
                 footer
             })
             // Actions dialog overlay

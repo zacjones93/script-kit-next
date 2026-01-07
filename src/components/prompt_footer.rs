@@ -326,6 +326,7 @@ impl RenderOnce for PromptFooter {
         right_side = right_side.child(buttons);
 
         // Main footer container (40px height)
+        // Use semi-transparent background for vibrancy support
         let mut footer = div()
             .w_full()
             .h(px(40.))
@@ -335,7 +336,8 @@ impl RenderOnce for PromptFooter {
             .items_center()
             .justify_between()
             .border_t_1()
-            .border_color(colors.border.rgba8(0x30)); // Top border with 19% opacity
+            .border_color(colors.border.rgba8(0x30)) // Top border with 19% opacity
+            .bg(gpui::rgba(0x00000040)); // Semi-transparent dark background for vibrancy
 
         // Left side: Logo + helper text
         let mut left_side = hstack().gap(px(8.)).items_center();

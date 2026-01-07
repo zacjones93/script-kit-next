@@ -357,6 +357,10 @@ impl EditorPrompt {
         self.editor_state = Some(editor_state);
 
         logging::log("EDITOR", "Editor initialized, focus pending");
+
+        // CRITICAL: Notify to trigger re-render after initialization
+        // Without this, the layout may not be computed correctly until a focus change
+        cx.notify();
     }
 
     /// Get the current content as a String
@@ -1152,7 +1156,7 @@ impl Render for EditorPrompt {
             }
         });
 
-        // Calculate height (kept for reference, now using flex_1() for layout)
+        // Calculate height - use the height passed from parent
         let _height = self.content_height.unwrap_or_else(|| px(500.)); // Default height if not specified
 
         // Get mono font family for code editor
@@ -1204,15 +1208,14 @@ impl Render for EditorPrompt {
         // Build the main container - code editor fills the space completely
         // Note: We don't track focus on the container because the InputState
         // has its own focus handle. Key events will be handled by the Input.
-        // NOTE: Use flex_1() instead of explicit height to allow parent flex container
-        // to control sizing (enables unified footer below editor)
+        //
+        // Use size_full() to fill the parent container (which controls the actual size).
+        // The parent wrapper in render_prompts/editor.rs uses flex_1 to allocate space.
         let mut container = div()
             .id("editor-v2")
             .flex()
             .flex_col()
-            .w_full()
-            .flex_1()
-            .bg(rgb(colors.background.main))
+            .size_full() // Fill parent container instead of explicit height
             .text_color(rgb(colors.text.primary))
             .font_family(mono_font.clone()) // Use monospace font for code
             .text_size(px(font_size)) // Apply configured font size
@@ -1224,9 +1227,7 @@ impl Render for EditorPrompt {
         if let Some(ref editor_state) = self.editor_state {
             container = container.child(
                 div()
-                    .flex_1()
-                    .w_full()
-                    .min_h(px(0.))
+                    .size_full() // Fill the entire container
                     .overflow_hidden()
                     .text_size(px(font_size)) // Apply font size to inner container for inheritance
                     .font_family(mono_font.clone()) // Also apply mono font
@@ -1239,8 +1240,7 @@ impl Render for EditorPrompt {
             // Show loading placeholder while initializing
             container = container.child(
                 div()
-                    .flex_1()
-                    .w_full()
+                    .size_full()
                     .flex()
                     .items_center()
                     .justify_center()
@@ -1251,17 +1251,15 @@ impl Render for EditorPrompt {
         // NOTE: Footer rendering has been moved to the unified PromptFooter component
         // in render_prompts/editor.rs. The snippet state and language are passed to that footer.
 
-        // Wrap in a relative container to support absolute positioning for the choices popup
-        // NOTE: Use flex_1() instead of h_full() to allow parent flex container to control sizing
-        // This enables the unified footer to be placed below the editor
-        let mut wrapper = div().relative().w_full().flex_1().child(container);
+        // Add relative positioning to container for choices popup overlay
+        container = container.relative();
 
         // Add the choices popup overlay if visible
         if let Some(popup_element) = self.render_choices_popup(cx) {
-            wrapper = wrapper.child(popup_element);
+            container = container.child(popup_element);
         }
 
-        wrapper
+        container
     }
 }
 

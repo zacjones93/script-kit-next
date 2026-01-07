@@ -226,7 +226,13 @@ impl ScriptListApp {
                         self.current_view = AppView::TermPrompt { id, entity };
                         self.focused_input = FocusedInput::None; // Terminal handles its own cursor
                         self.pending_focus = Some(FocusTarget::TermPrompt);
-                        resize_to_view_sync(ViewType::TermPrompt, 0);
+                        // DEFERRED RESIZE: Avoid RefCell borrow error by deferring window resize
+                        // to after the current GPUI update cycle completes. Synchronous Cocoa
+                        // setFrame: calls during render can trigger events that re-borrow GPUI state.
+                        cx.spawn(async move |_this, _cx| {
+                            resize_to_view_sync(ViewType::TermPrompt, 0);
+                        })
+                        .detach();
                         cx.notify();
                     }
                     Err(e) => {
@@ -286,8 +292,8 @@ impl ScriptListApp {
                 // and child would be tracking the same handle.
                 let editor_focus_handle = cx.focus_handle();
 
-                // Get the target height for editor view
-                let editor_height = window_resize::layout::MAX_HEIGHT;
+                // Get the target height for editor view (subtract footer height for unified footer)
+                let editor_height = px(700.0 - window_resize::layout::FOOTER_HEIGHT);
 
                 // Create editor v2 (gpui-component based with Find/Replace)
                 // Default to markdown for all editor content
@@ -350,7 +356,12 @@ impl ScriptListApp {
                 self.focused_input = FocusedInput::None; // Editor handles its own focus
                 self.pending_focus = Some(FocusTarget::EditorPrompt);
 
-                resize_to_view_sync(ViewType::EditorPrompt, 0);
+                // DEFERRED RESIZE: Avoid RefCell borrow error by deferring window resize
+                // to after the current GPUI update cycle completes.
+                cx.spawn(async move |_this, _cx| {
+                    resize_to_view_sync(ViewType::EditorPrompt, 0);
+                })
+                .detach();
                 cx.notify();
             }
             PromptMessage::ScriptExit => {
