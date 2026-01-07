@@ -485,7 +485,14 @@ impl Render for StoryBrowser {
                             ),
                     )
                     .child(self.render_search_bar(cx))
-                    .child(self.render_story_list(&filtered, cx)),
+                    // Scrollable story list
+                    .child(
+                        div()
+                            .id("story-list-scroll")
+                            .flex_1()
+                            .overflow_y_scroll()
+                            .child(self.render_story_list(&filtered, cx)),
+                    ),
             )
             // Right panel: story preview
             .child(
