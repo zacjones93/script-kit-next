@@ -8,6 +8,8 @@ mod button_stories;
 mod design_token_stories;
 mod drop_prompt_stories;
 mod env_prompt_stories;
+mod footer_action_variations;
+mod footer_layout_variations;
 mod form_field_stories;
 mod header_button_variations;
 mod header_design_variations;
@@ -33,6 +35,8 @@ pub use button_stories::ButtonStory;
 pub use design_token_stories::DesignTokenStory;
 pub use drop_prompt_stories::DropPromptStory;
 pub use env_prompt_stories::EnvPromptStory;
+pub use footer_action_variations::FooterActionVariationsStory;
+pub use footer_layout_variations::FooterLayoutVariationsStory;
 pub use form_field_stories::FormFieldStory;
 pub use header_button_variations::HeaderButtonVariationsStory;
 pub use header_design_variations::HeaderDesignVariationsStory;
@@ -74,6 +78,8 @@ pub fn get_all_stories() -> &'static Vec<StoryEntry> {
             StoryEntry::new(Box::new(ListItemStateVariationsStory)),
             StoryEntry::new(Box::new(RunButtonExplorationStory)),
             StoryEntry::new(Box::new(LogoCenteringStory)),
+            StoryEntry::new(Box::new(FooterLayoutVariationsStory)),
+            StoryEntry::new(Box::new(FooterActionVariationsStory)),
             // Prompts
             StoryEntry::new(Box::new(ArgPromptStory)),
             StoryEntry::new(Box::new(DropPromptStory)),
