@@ -178,8 +178,8 @@ use window_resize::{
 };
 
 use components::{
-    Button, ButtonColors, ButtonVariant, FormFieldColors, PromptFooter, PromptFooterColors,
-    PromptFooterConfig, Scrollbar, ScrollbarColors,
+    FormFieldColors, PromptFooter, PromptFooterColors, PromptFooterConfig, Scrollbar,
+    ScrollbarColors,
 };
 use designs::{get_tokens, render_design_item, DesignVariant};
 use frecency::FrecencyStore;
@@ -1214,8 +1214,8 @@ impl Render for ScriptListApp {
             } => self
                 .render_arg_prompt(id, placeholder, choices, actions, cx)
                 .into_any_element(),
-            AppView::DivPrompt { entity, .. } => {
-                self.render_div_prompt(entity, cx).into_any_element()
+            AppView::DivPrompt { id, entity } => {
+                self.render_div_prompt(id, entity, cx).into_any_element()
             }
             AppView::FormPrompt { entity, .. } => {
                 self.render_form_prompt(entity, cx).into_any_element()
