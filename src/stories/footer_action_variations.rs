@@ -315,15 +315,15 @@ fn list_preview(colors: FooterColors) -> impl IntoElement {
 }
 
 /// Logo component using actual SVG
-fn logo_component(colors: FooterColors, size: f32) -> impl IntoElement {
+fn logo_component(_colors: FooterColors, size: f32) -> impl IntoElement {
     div()
         .w(px(size))
         .h(px(size))
         .flex()
         .items_center()
         .justify_center()
-        .bg(rgba((colors.accent << 8) | 0xD9)) // 85% opacity
-        .rounded(px(4.))
+        // .bg(rgba((colors.accent << 8) | 0xD9)) // 85% opacity
+        // .rounded(px(4.))
         .child(
             svg()
                 .external_path(utils::get_logo_path())

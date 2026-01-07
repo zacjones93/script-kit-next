@@ -54,6 +54,7 @@ impl ScriptListApp {
             AppView::DesignGalleryView { .. } => "DesignGallery",
             AppView::ScratchPadView { .. } => "ScratchPad",
             AppView::QuickTerminalView { .. } => "QuickTerminal",
+            AppView::FileSearchView { .. } => "FileSearch",
             AppView::ActionsDialog => "ActionsDialog",
         };
 
@@ -517,6 +518,7 @@ impl ScriptListApp {
             AppView::DesignGalleryView { .. } => "designGallery",
             AppView::ScratchPadView { .. } => "scratchPad",
             AppView::QuickTerminalView { .. } => "quickTerminal",
+            AppView::FileSearchView { .. } => "fileSearch",
             AppView::ActionsDialog => "actionsDialog",
         };
 

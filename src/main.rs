@@ -417,6 +417,7 @@ fn hide_main_window_helper(app_entity: Entity<ScriptListApp>, cx: &mut App) {
 /// - calculate: Evaluate math expression (basic)
 /// - open-file: Open file/folder with default app
 fn execute_fallback_action(
+    app: &mut ScriptListApp,
     fallback_id: &str,
     input: &str,
     _window: &mut Window,
@@ -541,13 +542,7 @@ fn execute_fallback_action(
 
                 FallbackResult::SearchFiles { query } => {
                     logging::log("FALLBACK", &format!("SearchFiles: {}", query));
-                    // TODO: Implement file search functionality
-                    // For now, show a HUD message that this is coming soon
-                    hud_manager::show_hud(
-                        format!("File search coming soon: {}", query),
-                        Some(2000),
-                        cx,
-                    );
+                    app.open_file_search(query, cx);
                 }
             }
         }
@@ -708,6 +703,11 @@ enum AppView {
     /// Showing quick terminal
     QuickTerminalView {
         entity: Entity<term_prompt::TermPrompt>,
+    },
+    /// Showing file search results
+    FileSearchView {
+        query: String,
+        selected_index: usize,
     },
 }
 
@@ -947,6 +947,8 @@ struct ScriptListApp {
     cached_clipboard_entries: Vec<clipboard_history::ClipboardEntryMeta>,
     /// P0 FIX: Cached windows for WindowSwitcherView (avoids cloning per frame)
     cached_windows: Vec<window_control::WindowInfo>,
+    /// Cached file results for FileSearchView (avoids cloning per frame)
+    cached_file_results: Vec<file_search::FileResult>,
     selected_index: usize,
     /// Main menu filter text (mirrors gpui-component input state)
     filter_text: String,
@@ -996,6 +998,8 @@ struct ScriptListApp {
     window_list_scroll_handle: UniformListScrollHandle,
     // Scroll handle for design gallery list
     design_gallery_scroll_handle: UniformListScrollHandle,
+    // Scroll handle for file search list
+    file_search_scroll_handle: UniformListScrollHandle,
     // Actions popup overlay
     show_actions_popup: bool,
     // ActionsDialog entity for focus management
@@ -1269,6 +1273,12 @@ impl Render for ScriptListApp {
             AppView::QuickTerminalView { entity, .. } => {
                 self.render_term_prompt(entity, cx).into_any_element()
             }
+            AppView::FileSearchView {
+                ref query,
+                selected_index,
+            } => self
+                .render_file_search(query, selected_index, cx)
+                .into_any_element(),
         };
 
         // Wrap content in a container that can have the debug grid overlay
@@ -2280,6 +2290,9 @@ fn main() {
                                         };
                                         view.update_window_size();
                                     }
+                                    "file-search" | "filesearch" | "files" | "searchfiles" => {
+                                        view.open_file_search(String::new(), ctx);
+                                    }
                                     _ => {
                                         logging::log("ERROR", &format!("Unknown built-in: '{}'", name));
                                     }
@@ -2619,7 +2632,7 @@ fn main() {
                             }
                             ExternalCommand::ExecuteFallback { ref fallback_id, ref input } => {
                                 logging::log("STDIN", &format!("ExecuteFallback: id='{}', input='{}'", fallback_id, input));
-                                execute_fallback_action(fallback_id, input, window, ctx);
+                                execute_fallback_action(view, fallback_id, input, window, ctx);
                             }
                         }
                         ctx.notify();

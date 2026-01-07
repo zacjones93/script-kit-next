@@ -186,6 +186,7 @@ impl ScriptListApp {
             // P0 FIX: Cached data for builtin views (avoids cloning per frame)
             cached_clipboard_entries: Vec::new(),
             cached_windows: Vec::new(),
+            cached_file_results: Vec::new(),
             selected_index: 0,
             filter_text: String::new(),
             gpui_input_state,
@@ -217,6 +218,7 @@ impl ScriptListApp {
             clipboard_list_scroll_handle: UniformListScrollHandle::new(),
             window_list_scroll_handle: UniformListScrollHandle::new(),
             design_gallery_scroll_handle: UniformListScrollHandle::new(),
+            file_search_scroll_handle: UniformListScrollHandle::new(),
             show_actions_popup: false,
             actions_dialog: None,
             cursor_visible: true,
@@ -1260,26 +1262,21 @@ impl ScriptListApp {
         );
 
         // Check if this is a "stay open" action (like run-in-terminal which opens a view)
+        // Check if this is a "stay open" action (opens its own view)
         let should_close = match fallback {
             crate::fallbacks::FallbackItem::Builtin(builtin) => {
-                // run-in-terminal opens the built-in terminal, so don't close
-                builtin.id != "run-in-terminal"
+                !matches!(builtin.id, "run-in-terminal" | "search-files")
             }
-            crate::fallbacks::FallbackItem::Script(_) => {
-                // Script execution handles its own window state
-                false
-            }
+            crate::fallbacks::FallbackItem::Script(_) => false,
         };
 
         // Execute the fallback action
         match fallback {
             crate::fallbacks::FallbackItem::Builtin(builtin) => {
-                // Execute built-in fallback action inline (no window needed for most)
                 let fallback_id = builtin.id.to_string();
                 self.execute_builtin_fallback_inline(&fallback_id, &input, cx);
             }
             crate::fallbacks::FallbackItem::Script(config) => {
-                // Execute user script with input as argument
                 self.execute_interactive(&config.script, cx);
             }
         }
@@ -1303,36 +1300,23 @@ impl ScriptListApp {
             .get(self.fallback_selected_index)
             .cloned()
         {
-            logging::log(
-                "EXEC",
-                &format!(
-                    "Executing fallback: {} with input: '{}'",
-                    fallback.name(),
-                    input
-                ),
-            );
+            logging::log("EXEC", &format!("Executing fallback: {}", fallback.name()));
 
-            // Check if this is a "stay open" action (like run-in-terminal which opens a view)
+            // Check if this is a "stay open" action (opens its own view)
             let should_close = match &fallback {
                 crate::fallbacks::FallbackItem::Builtin(builtin) => {
-                    // run-in-terminal opens the built-in terminal, so don't close
-                    builtin.id != "run-in-terminal"
+                    !matches!(builtin.id, "run-in-terminal" | "search-files")
                 }
-                crate::fallbacks::FallbackItem::Script(_) => {
-                    // Script execution handles its own window state
-                    false
-                }
+                crate::fallbacks::FallbackItem::Script(_) => false,
             };
 
             // Execute the fallback action
             match &fallback {
                 crate::fallbacks::FallbackItem::Builtin(builtin) => {
-                    // Execute built-in fallback action inline (no window needed for most)
                     let fallback_id = builtin.id.to_string();
                     self.execute_builtin_fallback_inline(&fallback_id, &input, cx);
                 }
                 crate::fallbacks::FallbackItem::Script(config) => {
-                    // Execute user script with input as argument
                     self.execute_interactive(&config.script, cx);
                 }
             }
@@ -1427,12 +1411,7 @@ impl ScriptListApp {
                 }
                 FallbackResult::SearchFiles { query } => {
                     logging::log("FALLBACK", &format!("SearchFiles: {}", query));
-                    // TODO: Implement file search functionality
-                    crate::hud_manager::show_hud(
-                        format!("File search coming soon: {}", query),
-                        Some(2000),
-                        cx,
-                    );
+                    self.open_file_search(query, cx);
                 }
             },
             Err(e) => {
@@ -1487,6 +1466,34 @@ impl ScriptListApp {
                 if *filter != new_text {
                     *filter = new_text.clone();
                     *selected_index = 0;
+                    cx.notify();
+                }
+                return; // Don't run main menu filter logic
+            }
+            AppView::FileSearchView {
+                query,
+                selected_index,
+            } => {
+                if *query != new_text {
+                    // Re-run mdfind search with new query
+                    let results = crate::file_search::search_files(
+                        &new_text,
+                        None,
+                        crate::file_search::DEFAULT_LIMIT,
+                    );
+                    logging::log(
+                        "EXEC",
+                        &format!(
+                            "File search for '{}' found {} results",
+                            new_text,
+                            results.len()
+                        ),
+                    );
+                    self.cached_file_results = results;
+                    *query = new_text.clone();
+                    *selected_index = 0;
+                    self.file_search_scroll_handle
+                        .scroll_to_item(0, ScrollStrategy::Top);
                     cx.notify();
                 }
                 return; // Don't run main menu filter logic
@@ -1752,6 +1759,19 @@ impl ScriptListApp {
             }
             AppView::ScratchPadView { .. } => (ViewType::EditorPrompt, 0),
             AppView::QuickTerminalView { .. } => (ViewType::TermPrompt, 0),
+            AppView::FileSearchView { ref query, .. } => {
+                let results = &self.cached_file_results;
+                let filtered_count = if query.is_empty() {
+                    results.len()
+                } else {
+                    let query_lower = query.to_lowercase();
+                    results
+                        .iter()
+                        .filter(|r| r.name.to_lowercase().contains(&query_lower))
+                        .count()
+                };
+                (ViewType::ScriptList, filtered_count)
+            }
         };
 
         let target_height = height_for_view(view_type, item_count);
@@ -1782,6 +1802,34 @@ impl ScriptListApp {
             }
             AppView::FormPrompt { entity, .. } => {
                 entity.update(cx, |prompt, cx| prompt.set_input(text, cx));
+            }
+            AppView::FileSearchView {
+                query,
+                selected_index,
+            } => {
+                // Re-run mdfind search with new query
+                let results = crate::file_search::search_files(
+                    &text,
+                    None,
+                    crate::file_search::DEFAULT_LIMIT,
+                );
+                logging::log(
+                    "EXEC",
+                    &format!(
+                        "File search setInput '{}' found {} results",
+                        text,
+                        results.len()
+                    ),
+                );
+                self.cached_file_results = results;
+                *query = text.clone();
+                *selected_index = 0;
+                self.file_search_scroll_handle
+                    .scroll_to_item(0, ScrollStrategy::Top);
+                // Mark that we need to sync the input text on next render
+                self.filter_text = text;
+                self.pending_filter_sync = true;
+                cx.notify();
             }
             _ => {}
         }
@@ -3073,6 +3121,7 @@ impl ScriptListApp {
             AppView::DesignGalleryView { .. } => "DesignGalleryView",
             AppView::ScratchPadView { .. } => "ScratchPadView",
             AppView::QuickTerminalView { .. } => "QuickTerminalView",
+            AppView::FileSearchView { .. } => "FileSearchView",
         };
 
         let old_focused_input = self.focused_input;

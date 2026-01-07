@@ -3,6 +3,7 @@
 //! This module contains all the story definitions for the storybook.
 //! Stories are manually registered in get_all_stories().
 
+mod actions_window_stories;
 mod arg_prompt_stories;
 mod button_stories;
 mod design_token_stories;
@@ -30,6 +31,7 @@ use crate::storybook::StoryEntry;
 use std::sync::OnceLock;
 
 // Re-export story types
+pub use actions_window_stories::ActionsWindowStory;
 pub use arg_prompt_stories::ArgPromptStory;
 pub use button_stories::ButtonStory;
 pub use design_token_stories::DesignTokenStory;
@@ -80,6 +82,7 @@ pub fn get_all_stories() -> &'static Vec<StoryEntry> {
             StoryEntry::new(Box::new(LogoCenteringStory)),
             StoryEntry::new(Box::new(FooterLayoutVariationsStory)),
             StoryEntry::new(Box::new(FooterActionVariationsStory)),
+            StoryEntry::new(Box::new(ActionsWindowStory)),
             // Prompts
             StoryEntry::new(Box::new(ArgPromptStory)),
             StoryEntry::new(Box::new(DropPromptStory)),

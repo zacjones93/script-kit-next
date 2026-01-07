@@ -1819,4 +1819,391 @@ impl ScriptListApp {
             )
             .into_any_element()
     }
+
+    /// Render file search view with 50/50 split (list + preview)
+    pub(crate) fn render_file_search(
+        &mut self,
+        query: &str,
+        selected_index: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use crate::file_search::{self, FileType};
+
+        // Use design tokens for theming
+        let tokens = get_tokens(self.current_design);
+        let design_colors = tokens.colors();
+        let design_spacing = tokens.spacing();
+        let _design_typography = tokens.typography();
+        let design_visual = tokens.visual();
+
+        let opacity = self.theme.get_opacity();
+        let bg_hex = design_colors.background;
+        let bg_with_alpha = crate::ui_foundation::hex_to_rgba_with_opacity(bg_hex, opacity.main);
+        let box_shadows = self.create_box_shadows();
+
+        // Color values for use in closures
+        let text_primary = design_colors.text_primary;
+        let text_muted = design_colors.text_muted;
+        let text_dimmed = design_colors.text_dimmed;
+        let ui_border = design_colors.border;
+        let _accent_color = design_colors.accent;
+        let list_hover = design_colors.background_hover;
+        let list_selected = design_colors.background_selected;
+
+        // Filter results based on query
+        let filtered_results: Vec<_> = if query.is_empty() {
+            self.cached_file_results.iter().enumerate().collect()
+        } else {
+            let query_lower = query.to_lowercase();
+            self.cached_file_results
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.name.to_lowercase().contains(&query_lower))
+                .collect()
+        };
+        let filtered_len = filtered_results.len();
+
+        // Get selected file for preview (if any)
+        let selected_file = filtered_results
+            .get(selected_index)
+            .map(|(_, r)| (*r).clone());
+
+        // Key handler for file search
+        let handle_key = cx.listener(
+            move |this: &mut Self,
+                  event: &gpui::KeyDownEvent,
+                  _window: &mut Window,
+                  cx: &mut Context<Self>| {
+                // Global shortcuts (Cmd+W, ESC for dismissable views)
+                if this.handle_global_shortcut_with_options(event, true, cx) {
+                    return;
+                }
+
+                let key_str = event.keystroke.key.to_lowercase();
+                logging::log("KEY", &format!("FileSearch key: '{}'", key_str));
+
+                if let AppView::FileSearchView {
+                    query,
+                    selected_index,
+                } = &mut this.current_view
+                {
+                    // Apply filter to get current filtered list
+                    let filtered_results: Vec<_> = if query.is_empty() {
+                        this.cached_file_results.iter().enumerate().collect()
+                    } else {
+                        let query_lower = query.to_lowercase();
+                        this.cached_file_results
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, r)| r.name.to_lowercase().contains(&query_lower))
+                            .collect()
+                    };
+                    let filtered_len = filtered_results.len();
+
+                    match key_str.as_str() {
+                        "up" | "arrowup" => {
+                            if *selected_index > 0 {
+                                *selected_index -= 1;
+                                this.file_search_scroll_handle
+                                    .scroll_to_item(*selected_index, ScrollStrategy::Nearest);
+                                cx.notify();
+                            }
+                        }
+                        "down" | "arrowdown" => {
+                            if *selected_index + 1 < filtered_len {
+                                *selected_index += 1;
+                                this.file_search_scroll_handle
+                                    .scroll_to_item(*selected_index, ScrollStrategy::Nearest);
+                                cx.notify();
+                            }
+                        }
+                        "enter" => {
+                            // Open file with default app
+                            if let Some((_, file)) = filtered_results.get(*selected_index) {
+                                let _ = file_search::open_file(&file.path);
+                            }
+                        }
+                        _ => {
+                            // Check for Cmd+Enter (reveal in finder)
+                            if event.keystroke.modifiers.platform && key_str == "enter" {
+                                if let Some((_, file)) = filtered_results.get(*selected_index) {
+                                    let _ = file_search::reveal_in_finder(&file.path);
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        );
+
+        // Clone data for the uniform_list closure
+        let files_for_closure: Vec<_> = filtered_results
+            .iter()
+            .map(|(_, file)| (*file).clone())
+            .collect();
+        let current_selected = selected_index;
+
+        // Use uniform_list for virtualized scrolling
+        let list_element = if filtered_len == 0 {
+            div()
+                .w_full()
+                .py(px(design_spacing.padding_xl))
+                .text_center()
+                .text_color(rgb(text_dimmed))
+                .child("No files found")
+                .into_any_element()
+        } else {
+            uniform_list(
+                "file-search-list",
+                filtered_len,
+                move |visible_range, _window, _cx| {
+                    visible_range
+                        .map(|ix| {
+                            if let Some(file) = files_for_closure.get(ix) {
+                                let is_selected = ix == current_selected;
+                                let bg = if is_selected {
+                                    rgba((list_selected << 8) | 0xFF)
+                                } else {
+                                    rgba(0x00000000)
+                                };
+                                let hover_bg = rgba((list_hover << 8) | 0x80);
+
+                                div()
+                                    .id(ix)
+                                    .w_full()
+                                    .h(px(52.))
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .px(px(12.))
+                                    .gap(px(12.))
+                                    .bg(bg)
+                                    .hover(move |s| s.bg(hover_bg))
+                                    .child(
+                                        div()
+                                            .text_lg()
+                                            .text_color(rgb(text_muted))
+                                            .child(file_search::file_type_icon(file.file_type)),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(2.))
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(rgb(text_primary))
+                                                    .child(file.name.clone()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(text_dimmed))
+                                                    .child(file_search::shorten_path(&file.path)),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .items_end()
+                                            .gap(px(2.))
+                                            .child(
+                                                div().text_xs().text_color(rgb(text_dimmed)).child(
+                                                    file_search::format_file_size(file.size),
+                                                ),
+                                            )
+                                            .child(
+                                                div().text_xs().text_color(rgb(text_dimmed)).child(
+                                                    file_search::format_relative_time(
+                                                        file.modified,
+                                                    ),
+                                                ),
+                                            ),
+                                    )
+                            } else {
+                                div().id(ix).h(px(52.))
+                            }
+                        })
+                        .collect()
+                },
+            )
+            .h_full()
+            .track_scroll(&self.file_search_scroll_handle)
+            .into_any_element()
+        };
+
+        // Build preview panel content
+        let preview_content = if let Some(file) = &selected_file {
+            let file_type_str = match file.file_type {
+                FileType::Directory => "Folder",
+                FileType::Image => "Image",
+                FileType::Audio => "Audio",
+                FileType::Video => "Video",
+                FileType::Document => "Document",
+                FileType::Application => "Application",
+                FileType::File => "File",
+                FileType::Other => "File",
+            };
+
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .p(px(16.))
+                .gap(px(12.))
+                // Header with file name
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .text_lg()
+                                .text_color(rgb(text_primary))
+                                .child(file.name.clone()),
+                        )
+                        .child(
+                            div()
+                                .px(px(8.))
+                                .py(px(2.))
+                                .rounded(px(4.))
+                                .bg(rgba((ui_border << 8) | 0x40))
+                                .text_xs()
+                                .text_color(rgb(text_muted))
+                                .child(file_type_str),
+                        ),
+                )
+                // Path
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(text_dimmed))
+                        .child(file.path.clone()),
+                )
+                // Metadata
+                .child(
+                    div()
+                        .flex_1()
+                        .w_full()
+                        .overflow_hidden()
+                        .rounded(px(8.))
+                        .bg(rgba((ui_border << 8) | 0x20))
+                        .p(px(12.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .child(div().text_sm().text_color(rgb(text_muted)).child(format!(
+                            "Size: {}",
+                            file_search::format_file_size(file.size)
+                        )))
+                        .child(div().text_sm().text_color(rgb(text_muted)).child(format!(
+                            "Modified: {}",
+                            file_search::format_relative_time(file.modified)
+                        )))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(text_muted))
+                                .child(format!("Type: {}", file_type_str)),
+                        ),
+                )
+                // Footer with hints
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(px(16.))
+                        .text_xs()
+                        .text_color(rgb(text_dimmed))
+                        .child("↵ Open")
+                        .child("⌘↵ Reveal in Finder"),
+                )
+        } else {
+            div().flex_1().flex().items_center().justify_center().child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(text_dimmed))
+                    .child("No file selected"),
+            )
+        };
+
+        // Main container
+        div()
+            .key_context("FileSearchView")
+            .track_focus(&self.focus_handle)
+            .on_key_down(handle_key)
+            .w_full()
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(rgba(bg_with_alpha))
+            .shadow(box_shadows)
+            .rounded(px(design_visual.radius_lg))
+            .border(px(design_visual.border_thin))
+            .border_color(rgba((ui_border << 8) | 0x60))
+            // Header with search input
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .px(px(design_spacing.padding_lg))
+                    .py(px(design_spacing.padding_sm))
+                    .gap(px(design_spacing.gap_md))
+                    .child(div().text_lg().text_color(rgb(text_muted)).child("🔍"))
+                    .child(
+                        Input::new(&self.gpui_input_state)
+                            .appearance(false)
+                            .cleanable(false)
+                            .focus_bordered(false),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(text_dimmed))
+                            .child(format!("{} files", filtered_len)),
+                    ),
+            )
+            // Divider
+            .child(
+                div()
+                    .mx(px(design_spacing.padding_lg))
+                    .h(px(design_visual.border_thin))
+                    .bg(rgba((ui_border << 8) | 0x60)),
+            )
+            // Main content: 50/50 split
+            .child(
+                div()
+                    .flex_1()
+                    .w_full()
+                    .flex()
+                    .flex_row()
+                    .min_h(px(0.))
+                    .overflow_hidden()
+                    // Left panel: file list (50%)
+                    .child(
+                        div()
+                            .flex_1()
+                            .h_full()
+                            .overflow_hidden()
+                            .border_r(px(design_visual.border_thin))
+                            .border_color(rgba((ui_border << 8) | 0x40))
+                            .child(list_element),
+                    )
+                    // Right panel: preview (50%)
+                    .child(
+                        div()
+                            .flex_1()
+                            .h_full()
+                            .overflow_hidden()
+                            .child(preview_content),
+                    ),
+            )
+            .into_any_element()
+    }
 }

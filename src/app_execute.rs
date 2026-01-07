@@ -1016,7 +1016,6 @@ impl ScriptListApp {
     // Once those are added, uncomment the method below.
     // =========================================================================
 
-    /* BLOCKED - Uncomment when main.rs changes are made:
     /// Open file search with the given query
     ///
     /// This performs an mdfind-based file search and displays results in a Raycast-like UI.
@@ -1033,7 +1032,10 @@ impl ScriptListApp {
     /// - Enter: Open file in default application
     /// - Cmd+Enter: Reveal in Finder
     pub fn open_file_search(&mut self, query: String, cx: &mut Context<Self>) {
-        logging::log("EXEC", &format!("Opening File Search with query: {}", query));
+        logging::log(
+            "EXEC",
+            &format!("Opening File Search with query: {}", query),
+        );
 
         // Perform initial search
         let results = file_search::search_files(&query, None, file_search::DEFAULT_LIMIT);
@@ -1065,7 +1067,6 @@ impl ScriptListApp {
 
         cx.notify();
     }
-    */
 
     /// Open the quick terminal
     fn open_quick_terminal(&mut self, cx: &mut Context<Self>) {

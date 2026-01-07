@@ -875,6 +875,21 @@ impl ScriptListApp {
                         -1,
                         None,
                     ),
+                    AppView::FileSearchView {
+                        ref query,
+                        selected_index,
+                    } => (
+                        "fileSearch".to_string(),
+                        Some("file-search".to_string()),
+                        None,
+                        query.clone(),
+                        self.cached_file_results.len(),
+                        self.cached_file_results.len(),
+                        *selected_index as i32,
+                        self.cached_file_results
+                            .get(*selected_index)
+                            .map(|f| f.name.clone()),
+                    ),
                 };
 
                 // Focus state: we use focused_input as a proxy since we don't have Window access here.
