@@ -868,7 +868,117 @@ Then bulk-edit call sites (automation > manual).
 
 ---
 
-## 28. References
+## 28. Hard-won learnings (frustration-extracted)
+
+These patterns emerged from painful debugging sessions. They're non-obvious and easy to forget.
+
+### 28.1 GPUI/Rust technical
+
+**RefCell borrow conflicts during resize:**
+Window resize/move callbacks can trigger while a RefCell is already borrowed. Fix: use `Window::defer()` to schedule the operation at the end of the current effect cycle:
+```rust
+// Don't call platform APIs directly during render:
+// platform::resize_first_window_to_height(height); // WRONG - can panic
+
+// Use Window::defer to run after borrows are unwound:
+window.defer(cx, |_window, _cx| {
+    platform::resize_first_window_to_height(height);
+});
+```
+See `src/window_ops.rs` for a coalescing queue pattern that also prevents jitter from rapid updates.
+
+**async_channel vs std::sync::mpsc:**
+Use `async_channel` for event-driven behavior. `mpsc::try_recv()` polling wastes CPU; `async_channel` integrates with async runtimes and wakes only when messages arrive.
+
+**Multi-monitor bounds accuracy:**
+`cx.displays()` can return stale or incorrect bounds. For accurate multi-monitor positioning, use native NSScreen APIs directly:
+```rust
+#[cfg(target_os = "macos")]
+fn get_mouse_display_bounds() -> Option<Bounds<Pixels>> {
+    // Use CGMainDisplayID, NSScreen.screens, mouseLocation
+    // Don't rely solely on cx.displays()
+}
+```
+
+**Key event handling completeness:**
+Beyond arrow keys, also match both variants for Enter (`"enter"|"Enter"`), Escape (`"escape"|"Escape"`), Tab (`"tab"|"Tab"`). GPUI normalization varies by platform and version.
+
+### 28.2 Theming + vibrancy
+
+**Vibrancy requires two things:**
+1. `WindowBackgroundAppearance::Blurred` in window options
+2. Semi-transparent background colors (70-85% alpha)
+
+Missing either = no vibrancy effect. The window options enable the blur; the alpha lets it show through.
+
+**Consistent opacity levels:**
+- Selection highlight: ~50% alpha (`0x80` suffix, e.g., `0x3B82F680`)
+- Hover highlight: ~25% alpha (`0x40` suffix, e.g., `0x3B82F640`)
+- Disabled state: ~30% opacity via `.opacity(0.3)`
+
+Using consistent levels prevents jarring visual transitions.
+
+**SVG icon theming:**
+Always use `stroke='currentColor'` (not hardcoded colors) so icons inherit the theme's text color. For fill-based icons, use `fill='currentColor'`.
+
+**Focus-aware color extraction for closures:**
+When passing colors to closures (e.g., in `uniform_list` renderers), extract a `Copy` struct first:
+```rust
+let item_colors = theme.colors.list_item_colors(); // Returns Copy struct
+uniform_list(..., move |...| {
+    div().bg(item_colors.background) // Works in closure
+})
+```
+
+### 28.3 Agent workflow
+
+**Autonomous testing is mandatory:**
+Never say "the user should test this" or "please verify manually." Agents must:
+1. Write a test script
+2. Run it via stdin JSON protocol
+3. Analyze logs/screenshots
+4. Iterate until correct
+
+**Visual verification requires reading the file:**
+Capturing a screenshot is not enough. You must:
+```ts
+const shot = await captureScreenshot();
+writeFileSync(path, Buffer.from(shot.data, 'base64'));
+// THEN: Use Read tool to actually examine the PNG
+```
+"I captured a screenshot" without reading it = incomplete verification.
+
+**Bead completion protocol:**
+Use `swarm_complete()`, never `hive_close()`. The swarm_complete function:
+- Releases file reservations
+- Records metrics for implicit feedback scoring
+- Properly closes the bead
+
+`hive_close()` skips reservation cleanup → causes conflicts in subsequent work.
+
+**Mass test failure triage:**
+When a refactor causes 100+ test failures:
+1. **Stop** - don't fix tests one by one
+2. **Count error types:**
+   ```bash
+   cargo test 2>&1 | grep "error\[E" | sort | uniq -c
+   ```
+3. Find the single root cause (usually one type dominates)
+4. Create systematic helpers for bulk fixes
+5. Verify incrementally: `cargo check` before `cargo test`
+
+**Feature-gated system tests:**
+Tests that use clipboard, accessibility APIs, or other system resources must be behind `--features system-tests`:
+```rust
+#[cfg(feature = "system-tests")]
+#[test]
+fn test_clipboard_integration() { ... }
+```
+Run with: `cargo test --features system-tests`
+
+---
+
+## 29. References
 - GPUI docs: https://docs.rs/gpui/latest/gpui/
 - Zed source (GPUI): https://github.com/zed-industries/zed/tree/main/crates/gpui
 - Project research: `GPUI_RESEARCH.md`, `GPUI_IMPROVEMENTS_REPORT.md`
@@ -878,7 +988,7 @@ Then bulk-edit call sites (automation > manual).
 
 ---
 
-## 29. Landing the plane (session completion)
+## 30. Landing the plane (session completion)
 
 Work is not done until `git push` succeeds.
 
