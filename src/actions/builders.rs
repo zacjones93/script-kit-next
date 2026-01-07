@@ -186,20 +186,6 @@ pub fn get_script_context_actions(script: &ScriptInfo) -> Vec<Action> {
 pub fn get_global_actions() -> Vec<Action> {
     vec![
         Action::new(
-            "create_script",
-            "Create New Script",
-            Some("Create a new TypeScript script".to_string()),
-            ActionCategory::ScriptOps,
-        )
-        .with_shortcut("⌘N"),
-        Action::new(
-            "reload_scripts",
-            "Reload Scripts",
-            Some("Refresh the scripts list".to_string()),
-            ActionCategory::GlobalOps,
-        )
-        .with_shortcut("⌘R"),
-        Action::new(
             "settings",
             "Settings",
             Some("Configure preferences".to_string()),
@@ -273,8 +259,6 @@ mod tests {
         let actions = get_global_actions();
 
         assert!(!actions.is_empty());
-        assert!(actions.iter().any(|a| a.id == "create_script"));
-        assert!(actions.iter().any(|a| a.id == "reload_scripts"));
         assert!(actions.iter().any(|a| a.id == "settings"));
         assert!(actions.iter().any(|a| a.id == "quit"));
     }

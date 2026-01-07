@@ -222,13 +222,11 @@ pub fn trigger_sdk_action(
 
 /// Reserved built-in action IDs that SDK actions cannot shadow.
 pub const RESERVED_ACTION_IDS: &[&str] = &[
-    "create_script",
     "run_script",
     "view_logs",
     "reveal_in_finder",
     "copy_path",
     "edit_script",
-    "reload_scripts",
     "settings",
     "quit",
     "__cancel__",

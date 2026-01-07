@@ -106,7 +106,8 @@ pub struct Action {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ActionCategory {
     ScriptContext, // Actions specific to the focused script
-    ScriptOps,     // Edit, Create, Delete script operations
+    #[allow(dead_code)]
+    ScriptOps, // Edit, Create, Delete script operations (reserved for future use)
     GlobalOps,     // Settings, Quit, etc.
 }
 
