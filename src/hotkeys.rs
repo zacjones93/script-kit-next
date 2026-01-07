@@ -1115,11 +1115,58 @@ pub(crate) fn start_hotkey_listener(config: config::Config) {
             &format!("Registered {} script/scriptlet shortcuts", script_count),
         );
 
-        // Load and register user shortcut overrides from shortcuts.json
+        // Track which command IDs have been registered to avoid duplicates
+        let mut registered_commands: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
+        // Priority 1: Load shortcuts from config.ts commands field (highest priority)
+        let mut config_count = 0;
+        if let Some(commands) = &config.commands {
+            for (command_id, cmd_config) in commands {
+                if let Some(hotkey_config) = &cmd_config.shortcut {
+                    let shortcut_str = hotkey_config.to_shortcut_string();
+                    if register_script_hotkey_internal(
+                        &manager_guard,
+                        command_id,
+                        &shortcut_str,
+                        command_id,
+                    )
+                    .is_some()
+                    {
+                        registered_commands.insert(command_id.clone());
+                        config_count += 1;
+                    }
+                }
+            }
+            if config_count > 0 {
+                logging::log(
+                    "HOTKEY",
+                    &format!(
+                        "Registered {} command shortcuts from config.ts",
+                        config_count
+                    ),
+                );
+            }
+        }
+
+        // Priority 2: Load user shortcut overrides from shortcuts.json
+        // (skips commands already registered from config.ts)
         let mut override_count = 0;
         match crate::shortcuts::load_shortcut_overrides() {
             Ok(overrides) => {
                 for (command_id, shortcut) in overrides {
+                    // Skip if already registered from config.ts
+                    if registered_commands.contains(&command_id) {
+                        logging::log(
+                            "HOTKEY",
+                            &format!(
+                                "Skipping shortcuts.json entry for '{}' (config.ts takes priority)",
+                                command_id
+                            ),
+                        );
+                        continue;
+                    }
+
                     let shortcut_str = shortcut.to_canonical_string();
                     if register_script_hotkey_internal(
                         &manager_guard,

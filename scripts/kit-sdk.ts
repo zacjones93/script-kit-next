@@ -488,6 +488,59 @@ export interface HotkeyConfig {
 }
 
 /**
+ * Per-command configuration for shortcuts and visibility.
+ * 
+ * Commands are identified by category-prefixed IDs:
+ * - `builtin/` - Built-in features (clipboard-history, app-launcher, etc.)
+ * - `app/` - macOS apps by bundle ID (com.apple.Safari, etc.)
+ * - `script/` - User scripts by filename without .ts (my-script, etc.)
+ * - `scriptlet/` - Inline scriptlets by UUID or name
+ * 
+ * @example
+ * ```typescript
+ * commands: {
+ *   "builtin/clipboard-history": {
+ *     shortcut: { modifiers: ["meta", "shift"], key: "KeyV" }
+ *   },
+ *   "app/com.apple.Safari": {
+ *     shortcut: { modifiers: ["meta", "shift"], key: "KeyS" }
+ *   },
+ *   "script/my-workflow": {
+ *     hidden: true // Hide from menu, still accessible via shortcut/deeplink
+ *   }
+ * }
+ * ```
+ */
+export interface CommandConfig {
+  /**
+   * Optional keyboard shortcut to invoke this command directly.
+   * When set, the command can be triggered globally without opening Script Kit.
+   * 
+   * @example { modifiers: ["meta", "shift"], key: "KeyV" } // Cmd+Shift+V
+   * @example { modifiers: ["meta", "ctrl"], key: "KeyI" } // Cmd+Ctrl+I
+   */
+  shortcut?: HotkeyConfig;
+  
+  /**
+   * Whether this command should be hidden from the main menu.
+   * Hidden commands are still accessible via keyboard shortcut or deeplink.
+   * 
+   * @default false
+   * @example true // Hide from main menu
+   */
+  hidden?: boolean;
+  
+  /**
+   * Whether this command requires confirmation before execution.
+   * Use this for potentially destructive operations.
+   * 
+   * @default false
+   * @example true // Require confirmation dialog
+   */
+  confirmationRequired?: boolean;
+}
+
+/**
  * Content padding configuration for prompts (terminal, editor, etc.)
  * All values are in pixels.
  * 
@@ -763,6 +816,33 @@ export interface Config {
    * @example { maxMemoryMb: 256, maxRuntimeSeconds: 30, healthCheckIntervalMs: 1000 }
    */
   processLimits?: ProcessLimits;
+  
+  /**
+   * Per-command configuration for shortcuts and visibility.
+   * Override default shortcuts or hide commands from the main menu.
+   * 
+   * Commands are identified by category-prefixed IDs:
+   * - `builtin/` - Built-in features (clipboard-history, app-launcher, etc.)
+   * - `app/` - macOS apps by bundle ID (com.apple.Safari, etc.)
+   * - `script/` - User scripts by filename without .ts (my-script, etc.)
+   * - `scriptlet/` - Inline scriptlets by UUID or name
+   * 
+   * Each command also has a deeplink: `kit://commands/{id}`
+   * 
+   * @default undefined (no overrides)
+   * @example
+   * ```typescript
+   * commands: {
+   *   "builtin/clipboard-history": {
+   *     shortcut: { modifiers: ["meta", "shift"], key: "KeyV" }
+   *   },
+   *   "app/com.apple.Safari": {
+   *     shortcut: { modifiers: ["meta", "shift"], key: "KeyS" }
+   *   }
+   * }
+   * ```
+   */
+  commands?: Record<string, CommandConfig>;
 }
 
 // =============================================================================
