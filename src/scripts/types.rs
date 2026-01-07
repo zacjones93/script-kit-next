@@ -195,6 +195,55 @@ impl SearchResult {
             SearchResult::Fallback(_) => "Fallback",
         }
     }
+
+    /// Get the default action text for the primary button.
+    ///
+    /// Priority:
+    /// 1. If the item has a custom `enter` text in typed metadata, use that
+    /// 2. Otherwise, return type-based fallback text:
+    ///    - Scripts → "Run Script"
+    ///    - Commands/Built-ins → "Run Command"
+    ///    - Scriptlets/Snippets → "Paste Snippet"
+    ///    - Apps → "Launch App"
+    ///    - Windows → "Switch to Window"
+    ///    - Agents → "Run Agent"
+    ///    - Fallbacks → "Run"
+    ///
+    /// This method is used by both the footer button text and execute_selected().
+    pub fn get_default_action_text(&self) -> &str {
+        match self {
+            SearchResult::Script(sm) => {
+                // Check for custom enter text in typed metadata
+                if let Some(ref typed_meta) = sm.script.typed_metadata {
+                    if let Some(ref enter) = typed_meta.enter {
+                        return enter.as_str();
+                    }
+                }
+                "Run Script"
+            }
+            SearchResult::Scriptlet(sm) => {
+                // Scriptlets can also have typed metadata with custom enter text
+                // For now, use tool-based fallback
+                match sm.scriptlet.tool.as_str() {
+                    "paste" | "snippet" => "Paste Snippet",
+                    "bash" | "sh" | "zsh" => "Run Command",
+                    _ => "Run Snippet",
+                }
+            }
+            SearchResult::BuiltIn(_) => "Run Command",
+            SearchResult::App(_) => "Launch App",
+            SearchResult::Window(_) => "Switch to Window",
+            SearchResult::Agent(_) => "Run Agent",
+            SearchResult::Fallback(fm) => {
+                // Fallbacks use their action type
+                if fm.fallback.is_builtin() {
+                    "Run"
+                } else {
+                    "Run Script"
+                }
+            }
+        }
+    }
 }
 
 /// Metadata extracted from script file comments

@@ -1001,21 +1001,35 @@ impl ScriptListApp {
                 border: footer_border,
             };
 
-            PromptFooter::new(PromptFooterConfig::default(), footer_colors)
-                .on_primary_click(Box::new(move |_, _window, cx| {
-                    if let Some(app) = handle_run.upgrade() {
-                        app.update(cx, |this, cx| {
-                            this.execute_selected(cx);
-                        });
-                    }
-                }))
-                .on_secondary_click(Box::new(move |_, window, cx| {
-                    if let Some(app) = handle_actions.upgrade() {
-                        app.update(cx, |this, cx| {
-                            this.toggle_actions(cx, window);
-                        });
-                    }
-                }))
+            // Get the primary action label from the selected item
+            // Falls back to "Run" if no item selected or not a regular item
+            let primary_label = grouped_items
+                .get(self.selected_index)
+                .and_then(|item| match item {
+                    GroupedListItem::Item(idx) => flat_results.get(*idx),
+                    GroupedListItem::SectionHeader(_) => None,
+                })
+                .map(|result| result.get_default_action_text())
+                .unwrap_or("Run");
+
+            PromptFooter::new(
+                PromptFooterConfig::default().primary_label(primary_label),
+                footer_colors,
+            )
+            .on_primary_click(Box::new(move |_, _window, cx| {
+                if let Some(app) = handle_run.upgrade() {
+                    app.update(cx, |this, cx| {
+                        this.execute_selected(cx);
+                    });
+                }
+            }))
+            .on_secondary_click(Box::new(move |_, window, cx| {
+                if let Some(app) = handle_actions.upgrade() {
+                    app.update(cx, |this, cx| {
+                        this.toggle_actions(cx, window);
+                    });
+                }
+            }))
         });
 
         if let Some(panel) = log_panel {

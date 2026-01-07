@@ -1188,44 +1188,35 @@ impl ScriptListApp {
                     self.invalidate_grouped_cache(); // Invalidate cache so next show reflects frecency
                 }
 
+                // Log the action being performed (matches button text from get_default_action_text())
+                let action_text = result.get_default_action_text();
+                logging::log(
+                    "EXEC",
+                    &format!(
+                        "Action: '{}' on '{}' (type: {})",
+                        action_text,
+                        result.name(),
+                        result.type_label()
+                    ),
+                );
+
                 match result {
                     scripts::SearchResult::Script(script_match) => {
-                        logging::log(
-                            "EXEC",
-                            &format!("Executing script: {}", script_match.script.name),
-                        );
                         self.execute_interactive(&script_match.script, cx);
                     }
                     scripts::SearchResult::Scriptlet(scriptlet_match) => {
-                        logging::log(
-                            "EXEC",
-                            &format!("Executing scriptlet: {}", scriptlet_match.scriptlet.name),
-                        );
                         self.execute_scriptlet(&scriptlet_match.scriptlet, cx);
                     }
                     scripts::SearchResult::BuiltIn(builtin_match) => {
-                        logging::log(
-                            "EXEC",
-                            &format!("Executing built-in: {}", builtin_match.entry.name),
-                        );
                         self.execute_builtin(&builtin_match.entry, cx);
                     }
                     scripts::SearchResult::App(app_match) => {
-                        logging::log("EXEC", &format!("Launching app: {}", app_match.app.name));
                         self.execute_app(&app_match.app, cx);
                     }
                     scripts::SearchResult::Window(window_match) => {
-                        logging::log(
-                            "EXEC",
-                            &format!("Focusing window: {}", window_match.window.title),
-                        );
                         self.execute_window_focus(&window_match.window, cx);
                     }
                     scripts::SearchResult::Agent(agent_match) => {
-                        logging::log(
-                            "EXEC",
-                            &format!("Agent selected: {}", agent_match.agent.name),
-                        );
                         // TODO: Implement agent execution via mdflow
                         self.last_output = Some(SharedString::from(format!(
                             "Agent execution not yet implemented: {}",
@@ -1233,10 +1224,6 @@ impl ScriptListApp {
                         )));
                     }
                     scripts::SearchResult::Fallback(fallback_match) => {
-                        logging::log(
-                            "EXEC",
-                            &format!("Executing fallback: {}", fallback_match.fallback.name()),
-                        );
                         // Execute the fallback with the current filter text as input
                         self.execute_fallback_item(&fallback_match.fallback, cx);
                     }
