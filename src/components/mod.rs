@@ -12,6 +12,7 @@
 //! - [`FormTextArea`] - Multi-line text input
 //! - [`FormCheckbox`] - Checkbox with label
 //! - [`PromptHeader`] - Header component with search input, buttons, and logo
+//! - [`PromptFooter`] - Footer component with logo, primary/secondary action buttons
 //! - [`PromptContainer`] - Container component for consistent prompt window layout
 //!
 //!
@@ -28,6 +29,7 @@ pub mod form_fields;
 #[cfg(test)]
 mod form_fields_tests;
 pub mod prompt_container;
+pub mod prompt_footer;
 pub mod prompt_header;
 pub mod scrollbar;
 pub mod text_input;
@@ -44,6 +46,8 @@ pub use scrollbar::{
 // These re-exports form the public API - allow unused since not all are used in every crate
 #[allow(unused_imports)]
 pub use prompt_container::{PromptContainer, PromptContainerColors, PromptContainerConfig};
+#[allow(unused_imports)]
+pub use prompt_footer::{PromptFooter, PromptFooterColors, PromptFooterConfig};
 #[allow(unused_imports)]
 pub use prompt_header::{PromptHeader, PromptHeaderColors, PromptHeaderConfig};
 #[allow(unused_imports)]

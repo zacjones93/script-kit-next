@@ -178,7 +178,8 @@ use window_resize::{
 };
 
 use components::{
-    Button, ButtonColors, ButtonVariant, FormFieldColors, Scrollbar, ScrollbarColors,
+    Button, ButtonColors, ButtonVariant, FormFieldColors, PromptFooter, PromptFooterColors,
+    PromptFooterConfig, Scrollbar, ScrollbarColors,
 };
 use designs::{get_tokens, render_design_item, DesignVariant};
 use frecency::FrecencyStore;

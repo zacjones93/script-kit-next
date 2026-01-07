@@ -989,129 +989,33 @@ impl ScriptListApp {
             );
 
         // Footer: Logo left | Run Script ↵ | divider | Actions ⌘K right
-        // Raycast-style footer with Script Kit branding
+        // Raycast-style footer with Script Kit branding using reusable PromptFooter component
         // Note: footer colors extracted earlier to avoid borrow conflict with render_preview_panel
         main_div = main_div.child({
-            let hover_bg = (footer_accent << 8) | 0x26; // 15% opacity
-
             let handle_run = cx.entity().downgrade();
             let handle_actions = cx.entity().downgrade();
 
-            div()
-                .w_full()
-                .h(px(40.))
-                .px(px(12.))
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .border_t_1()
-                .border_color(rgba((footer_border << 8) | 0x30))
-                // Left: Script Kit Logo
-                .child(
-                    div()
-                        .w(px(20.))
-                        .h(px(20.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .bg(rgba((footer_accent << 8) | 0xD9)) // 85% opacity
-                        .rounded(px(4.))
-                        .child(
-                            svg()
-                                .external_path(utils::get_logo_path())
-                                .size(px(13.))
-                                .text_color(rgb(0x000000)),
-                        ),
-                )
-                // Right: Run Script + divider + Actions
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(4.))
-                        // Run Script button
-                        .child(
-                            div()
-                                .id("footer-run-button")
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(6.))
-                                .px(px(8.))
-                                .py(px(4.))
-                                .rounded(px(4.))
-                                .cursor_pointer()
-                                .hover(move |s| s.bg(rgba(hover_bg)))
-                                .on_click({
-                                    let handle = handle_run.clone();
-                                    move |_, _window, cx| {
-                                        if let Some(app) = handle.upgrade() {
-                                            app.update(cx, |this, cx| {
-                                                this.execute_selected(cx);
-                                            });
-                                        }
-                                    }
-                                })
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(rgb(footer_accent))
-                                        .child("Run Script"),
-                                )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(rgb(footer_text_muted))
-                                        .child("↵"),
-                                ),
-                        )
-                        // Divider
-                        .child(
-                            div()
-                                .w(px(1.))
-                                .h(px(16.))
-                                .mx(px(4.))
-                                .bg(rgba((footer_border << 8) | 0x40)),
-                        )
-                        // Actions button
-                        .child(
-                            div()
-                                .id("footer-actions-button")
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(6.))
-                                .px(px(8.))
-                                .py(px(4.))
-                                .rounded(px(4.))
-                                .cursor_pointer()
-                                .hover(move |s| s.bg(rgba(hover_bg)))
-                                .on_click({
-                                    let handle = handle_actions.clone();
-                                    move |_, window, cx| {
-                                        if let Some(app) = handle.upgrade() {
-                                            app.update(cx, |this, cx| {
-                                                this.toggle_actions(cx, window);
-                                            });
-                                        }
-                                    }
-                                })
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(rgb(footer_accent))
-                                        .child("Actions"),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(footer_text_muted))
-                                        .child("⌘K"),
-                                ),
-                        ),
-                )
+            let footer_colors = PromptFooterColors {
+                accent: footer_accent,
+                text_muted: footer_text_muted,
+                border: footer_border,
+            };
+
+            PromptFooter::new(PromptFooterConfig::default(), footer_colors)
+                .on_primary_click(Box::new(move |_, _window, cx| {
+                    if let Some(app) = handle_run.upgrade() {
+                        app.update(cx, |this, cx| {
+                            this.execute_selected(cx);
+                        });
+                    }
+                }))
+                .on_secondary_click(Box::new(move |_, window, cx| {
+                    if let Some(app) = handle_actions.upgrade() {
+                        app.update(cx, |this, cx| {
+                            this.toggle_actions(cx, window);
+                        });
+                    }
+                }))
         });
 
         if let Some(panel) = log_panel {
