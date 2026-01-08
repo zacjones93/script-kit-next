@@ -94,11 +94,20 @@ impl ScriptListApp {
         let font_family = typography.font_family;
 
         // Get shortcut display string for the selected item (if any)
+        // Check BOTH config.ts commands AND shortcut overrides file
         let shortcut_display: Option<String> = selected_result.as_ref().and_then(|result| {
             Self::get_command_id_for_result(result).and_then(|command_id| {
-                self.config
-                    .get_command_shortcut(&command_id)
-                    .map(|hotkey| hotkey.to_display_string())
+                // First check config.ts commands
+                if let Some(hotkey) = self.config.get_command_shortcut(&command_id) {
+                    return Some(hotkey.to_display_string());
+                }
+                // Then check shortcut overrides file (where ShortcutRecorder saves)
+                if let Ok(overrides) = crate::shortcuts::load_shortcut_overrides() {
+                    if let Some(shortcut) = overrides.get(&command_id) {
+                        return Some(shortcut.to_string());
+                    }
+                }
+                None
             })
         });
 
@@ -1104,21 +1113,37 @@ impl ScriptListApp {
                     scripts::SearchResult::BuiltIn(m) => {
                         // Built-ins use their id as identifier
                         // is_script=false: no editable file, hide "Edit Script" etc.
-                        Some(ScriptInfo::with_action_verb(
+                        // Look up shortcut from overrides for dynamic action menu
+                        let command_id = format!("builtin/{}", &m.entry.id);
+                        let shortcut = crate::shortcuts::load_shortcut_overrides()
+                            .ok()
+                            .and_then(|o| o.get(&command_id).map(|s| s.to_string()));
+                        Some(ScriptInfo::with_action_verb_and_shortcut(
                             &m.entry.name,
                             format!("builtin:{}", &m.entry.id),
                             false,
                             "Run",
+                            shortcut,
                         ))
                     }
                     scripts::SearchResult::App(m) => {
                         // Apps use their path as identifier
                         // is_script=false: apps aren't editable scripts
-                        Some(ScriptInfo::with_action_verb(
+                        // Look up shortcut from overrides for dynamic action menu
+                        let command_id = if let Some(ref bundle_id) = m.app.bundle_id {
+                            format!("app/{}", bundle_id)
+                        } else {
+                            format!("app/{}", m.app.name.to_lowercase().replace(' ', "-"))
+                        };
+                        let shortcut = crate::shortcuts::load_shortcut_overrides()
+                            .ok()
+                            .and_then(|o| o.get(&command_id).map(|s| s.to_string()));
+                        Some(ScriptInfo::with_action_verb_and_shortcut(
                             &m.app.name,
                             m.app.path.to_string_lossy().to_string(),
                             false,
                             "Launch",
+                            shortcut,
                         ))
                     }
                     scripts::SearchResult::Window(m) => {
